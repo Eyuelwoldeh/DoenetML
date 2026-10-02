@@ -3,6 +3,10 @@ import InlineComponent from "./abstract/InlineComponent";
 import Group from "./Group";
 import { textFromChildren } from "../utils/text";
 import { isParsonsSolutionCorrect } from "../utils/parsons";
+import { codedDiagnostic } from "../utils/diagnostics";
+
+// In a horizontal layout, blocks longer than this are flagged to the author.
+const MAX_HORIZONTAL_BLOCK_LENGTH = 40;
 
 /**
  * <parsons> — a Parsons problem: students drag shuffled <block>s into a
@@ -57,6 +61,51 @@ export default class Parsons extends Input {
             public: true,
             description:
                 "Whether to shuffle the blocks in the starting column (seeded by the document variant).",
+        };
+        attributes.layout = {
+            createComponentOfType: "text",
+            createStateVariable: "layout",
+            validValues: [
+                {
+                    value: "vertical",
+                    description:
+                        "Blocks are stacked in two columns; indentation can be graded.",
+                },
+                {
+                    value: "horizontal",
+                    description:
+                        "Blocks are arranged left to right in rows; indentation is not used. Best for short blocks.",
+                },
+            ],
+            defaultValue: "vertical",
+            toLowerCase: true,
+            forRenderer: true,
+            public: true,
+            description: "How the blocks are laid out.",
+        };
+        attributes.horizontalAlign = {
+            createComponentOfType: "text",
+            createStateVariable: "horizontalAlign",
+            validValues: [
+                {
+                    value: "left",
+                    description: "Align the content of each block to the left.",
+                },
+                {
+                    value: "center",
+                    description: "Center the content of each block.",
+                },
+                {
+                    value: "right",
+                    description:
+                        "Align the content of each block to the right.",
+                },
+            ],
+            defaultValue: "left",
+            toLowerCase: true,
+            forRenderer: true,
+            public: true,
+            description: "Horizontal alignment of the content of each block.",
         };
         attributes.maxIndent = {
             createComponentOfType: "integer",
@@ -114,7 +163,29 @@ export default class Parsons extends Input {
                     group: child.stateValues.anyOrderGroup,
                     text: child.stateValues.text,
                 }));
-                return { setValue: { blocks } };
+                const diagnostics = [];
+                if (!blocks.some((block) => !block.distractor)) {
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0168",
+                        }),
+                    );
+                }
+                if (
+                    blocks.some(
+                        (block) => block.distractor && block.group !== null,
+                    )
+                ) {
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0169",
+                        }),
+                    );
+                }
+
+                return { setValue: { blocks }, sendDiagnostics: diagnostics };
             },
         };
 
@@ -144,20 +215,55 @@ export default class Parsons extends Input {
                 createComponentOfType: "boolean",
             },
             description:
-                "Whether indentation is part of the answer (true if any block specifies `indent`).",
+                "Whether indentation is part of the answer (true if any block specifies `indent` and the layout is vertical).",
             returnDependencies: () => ({
                 blocks: {
                     dependencyType: "stateVariable",
                     variableName: "blocks",
                 },
+                layout: {
+                    dependencyType: "stateVariable",
+                    variableName: "layout",
+                },
             }),
             definition({ dependencyValues }) {
+                const indentSpecified = dependencyValues.blocks.some(
+                    (block) => block.indentSpecified,
+                );
+                const horizontal = dependencyValues.layout === "horizontal";
+
+                const diagnostics = [];
+                if (horizontal) {
+                    if (indentSpecified) {
+                        diagnostics.push(
+                            codedDiagnostic({
+                                type: "warning",
+                                code: "doenet-w0173",
+                            }),
+                        );
+                    }
+                    for (const block of dependencyValues.blocks) {
+                        const length = block.text.length;
+                        if (length > MAX_HORIZONTAL_BLOCK_LENGTH) {
+                            diagnostics.push(
+                                codedDiagnostic({
+                                    type: "warning",
+                                    code: "doenet-w0174",
+                                    args: {
+                                        length,
+                                        max: MAX_HORIZONTAL_BLOCK_LENGTH,
+                                    },
+                                }),
+                            );
+                        }
+                    }
+                }
+
                 return {
                     setValue: {
-                        indentationGraded: dependencyValues.blocks.some(
-                            (block) => block.indentSpecified,
-                        ),
+                        indentationGraded: indentSpecified && !horizontal,
                     },
+                    sendDiagnostics: diagnostics,
                 };
             },
         };
@@ -179,6 +285,10 @@ export default class Parsons extends Input {
                     dependencyType: "stateVariable",
                     variableName: "blocks",
                 },
+                layout: {
+                    dependencyType: "stateVariable",
+                    variableName: "layout",
+                },
             }),
             definition({ dependencyValues }) {
                 let maxIndent;
@@ -195,7 +305,31 @@ export default class Parsons extends Input {
                 if (!Number.isInteger(maxIndent) || maxIndent < 1) {
                     maxIndent = 1;
                 }
-                return { setValue: { maxIndent } };
+
+                // A solution block a student cannot indent far enough (or
+                // that has a negative indent) makes the problem unsolvable.
+                const diagnostics = [];
+                if (dependencyValues.layout !== "horizontal") {
+                    for (const block of dependencyValues.blocks) {
+                        if (
+                            !block.distractor &&
+                            (block.indent < 0 || block.indent > maxIndent)
+                        ) {
+                            diagnostics.push(
+                                codedDiagnostic({
+                                    type: "warning",
+                                    code: "doenet-w0170",
+                                    args: { indent: block.indent, maxIndent },
+                                }),
+                            );
+                        }
+                    }
+                }
+
+                return {
+                    setValue: { maxIndent },
+                    sendDiagnostics: diagnostics,
+                };
             },
         };
 
@@ -315,6 +449,96 @@ export default class Parsons extends Input {
                         values[key] = globalDependencyValues[allVarName][key];
                     }
                     return { setValue: { [varName]: values } };
+                },
+            };
+        }
+
+        stateVariableDefinitions.numBlocksNeeded = {
+            public: true,
+            shadowingInstructions: {
+                createComponentOfType: "integer",
+            },
+            description:
+                "The number of blocks in a correct solution (blocks that are not distractors).",
+            returnDependencies: () => ({
+                blocks: {
+                    dependencyType: "stateVariable",
+                    variableName: "blocks",
+                },
+            }),
+            definition({ dependencyValues }) {
+                return {
+                    setValue: {
+                        numBlocksNeeded: dependencyValues.blocks.filter(
+                            (block) => !block.distractor,
+                        ).length,
+                    },
+                };
+            },
+        };
+
+        stateVariableDefinitions.numBlocksInSolution = {
+            public: true,
+            shadowingInstructions: {
+                createComponentOfType: "integer",
+            },
+            description:
+                "The number of blocks currently in the solution column.",
+            returnDependencies: () => ({
+                allSolutionOrder: {
+                    dependencyType: "stateVariable",
+                    variableName: "allSolutionOrder",
+                },
+            }),
+            definition({ dependencyValues }) {
+                return {
+                    setValue: {
+                        numBlocksInSolution:
+                            dependencyValues.allSolutionOrder.length,
+                    },
+                };
+            },
+        };
+
+        // For length feedback, e.g.
+        // <feedback condition="$p.solutionTooShort" updateWith="$ans">...</feedback>
+        for (const [varName, compare, description] of [
+            [
+                "solutionTooShort",
+                (inSolution, needed) => inSolution < needed,
+                "Whether the solution column holds fewer blocks than a correct solution.",
+            ],
+            [
+                "solutionTooLong",
+                (inSolution, needed) => inSolution > needed,
+                "Whether the solution column holds more blocks than a correct solution.",
+            ],
+        ]) {
+            stateVariableDefinitions[varName] = {
+                public: true,
+                shadowingInstructions: {
+                    createComponentOfType: "boolean",
+                },
+                description,
+                returnDependencies: () => ({
+                    numBlocksInSolution: {
+                        dependencyType: "stateVariable",
+                        variableName: "numBlocksInSolution",
+                    },
+                    numBlocksNeeded: {
+                        dependencyType: "stateVariable",
+                        variableName: "numBlocksNeeded",
+                    },
+                }),
+                definition({ dependencyValues }) {
+                    return {
+                        setValue: {
+                            [varName]: compare(
+                                dependencyValues.numBlocksInSolution,
+                                dependencyValues.numBlocksNeeded,
+                            ),
+                        },
+                    };
                 },
             };
         }
@@ -536,6 +760,31 @@ export class Block extends InlineComponent {
             },
         };
 
+        // Evaluated for every block (forRenderer) so a misplaced one is flagged.
+        stateVariableDefinitions.inParsons = {
+            forRenderer: true,
+            returnDependencies: () => ({
+                parsonsParent: {
+                    dependencyType: "parentIdentity",
+                    parentComponentType: "parsons",
+                },
+            }),
+            definition({ dependencyValues }) {
+                const inParsons = dependencyValues.parsonsParent !== null;
+                return {
+                    setValue: { inParsons },
+                    sendDiagnostics: inParsons
+                        ? []
+                        : [
+                              codedDiagnostic({
+                                  type: "warning",
+                                  code: "doenet-w0172",
+                              }),
+                          ],
+                };
+            },
+        };
+
         stateVariableDefinitions.text = {
             public: true,
             shadowingInstructions: {
@@ -579,6 +828,15 @@ export class AnyOrder extends Group {
     static async createSerializedReplacements(args) {
         const result = await super.createSerializedReplacements(args);
         tagBlocksWithGroup(result.replacements, args.component.componentIdx);
+        if (
+            result.replacements.some(
+                (repl) => repl?.componentType === "anyOrder",
+            )
+        ) {
+            result.diagnostics.push(
+                codedDiagnostic({ type: "warning", code: "doenet-w0171" }),
+            );
+        }
         return result;
     }
 }

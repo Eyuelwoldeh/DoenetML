@@ -256,6 +256,13 @@ export const DIAGNOSTIC_CODES = {
     "doenet-w0165": "sample-lognormal-parameters-invalid",
     "doenet-w0166": "sample-normal-mixture-parameters-invalid",
     "doenet-w0167": "cascade-title-not-shown",
+    "doenet-w0168": "parsons-no-solution-blocks",
+    "doenet-w0169": "parsons-distractor-in-any-order",
+    "doenet-w0170": "parsons-indent-out-of-range",
+    "doenet-w0171": "parsons-nested-any-order",
+    "doenet-w0172": "parsons-block-outside-parsons",
+    "doenet-w0173": "parsons-horizontal-ignores-indent",
+    "doenet-w0174": "parsons-horizontal-block-too-long",
 
     "doenet-e0001": "pretzel-circuit-first-problem-distractor",
     "doenet-e0002": "component-type-invalid",

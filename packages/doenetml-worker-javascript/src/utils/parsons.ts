@@ -42,7 +42,13 @@ export function isParsonsSolutionCorrect({
     });
 
     const numExpected = segments.reduce((n, s) => n + s.length, 0);
-    if (order.length !== numExpected || indents.length !== order.length) {
+    // A problem with no solution blocks is an authoring error, not a problem
+    // that an empty arrangement solves.
+    if (
+        numExpected === 0 ||
+        order.length !== numExpected ||
+        indents.length !== order.length
+    ) {
         return false;
     }
 

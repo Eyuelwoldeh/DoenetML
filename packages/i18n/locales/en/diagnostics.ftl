@@ -1372,3 +1372,32 @@ chart-histogram-categories-ignored =
 # so there is no slot for a width to be a fraction of.
 chart-histogram-bar-width-ignored =
     A histogram's bars are adjacent, with no gap between them, so `barWidth` was not used. Give `bins` fewer cut points to draw wider bars.
+
+## `<parsons>`
+
+# Translators: `<parsons>`, `<block>` and `<anyOrder>` are DoenetML tags, and
+# `indent`, `maxIndent`, `layout` and `horizontal` are attribute names and
+# values; all stay in English.
+parsons-no-solution-blocks =
+    This `<parsons>` has no `<block>` that belongs in the solution, so it can never be marked correct. Add at least one `<block>` that is not a distractor.
+
+parsons-distractor-in-any-order =
+    A distractor `<block>` inside `<anyOrder>` is treated as an ordinary distractor; `<anyOrder>` only groups blocks that belong in the solution.
+
+# $indent is the indent the author gave a block; $maxIndent is the largest
+# indent a student can apply.
+parsons-indent-out-of-range =
+    A `<block>` has indent { $indent }, but a student can only indent from 0 to { $maxIndent }, so this problem cannot be solved. Change the block's `indent` or the `maxIndent` of the `<parsons>`.
+
+parsons-nested-any-order = An `<anyOrder>` cannot be nested inside another `<anyOrder>`.
+
+parsons-block-outside-parsons =
+    A `<block>` must be a child of `<parsons>`, or of an `<anyOrder>` inside one.
+
+parsons-horizontal-ignores-indent =
+    Indentation is not used when `layout` is `horizontal`, so the `indent` of the blocks was ignored.
+
+# $length is the number of characters in a block's text; $max is the
+# recommended limit.
+parsons-horizontal-block-too-long =
+    A `<block>` has { $length } characters. Blocks longer than { $max } characters are hard to arrange when `layout` is `horizontal`; shorten it or use the vertical layout.

@@ -76,6 +76,16 @@ export type MessageKey =
     | "core-start-retry"
     | "saved-state-unavailable"
     | "saved-state-from-older-version"
+    | "parsons-source-heading"
+    | "parsons-solution-heading"
+    | "parsons-reset"
+    | "parsons-instructions"
+    | "parsons-instructions-indent"
+    | "parsons-moved-to-solution"
+    | "parsons-moved-to-solution-indent"
+    | "parsons-moved-to-source"
+    | "parsons-block-indent"
+    | "parsons-reset-done"
     | "color.black"
     | "color.white"
     | "color.gray"
@@ -570,6 +580,13 @@ export type MessageKey =
     | "chart-histogram-cut-points-invalid"
     | "chart-histogram-categories-ignored"
     | "chart-histogram-bar-width-ignored"
+    | "parsons-no-solution-blocks"
+    | "parsons-distractor-in-any-order"
+    | "parsons-indent-out-of-range"
+    | "parsons-nested-any-order"
+    | "parsons-block-outside-parsons"
+    | "parsons-horizontal-ignores-indent"
+    | "parsons-horizontal-block-too-long"
     | "editor-update-viewer"
     | "editor-update-viewer-title"
     | "editor-variant"
@@ -712,6 +729,16 @@ export const MESSAGE_KEYS: readonly MessageKey[] = [
     "core-start-retry",
     "saved-state-unavailable",
     "saved-state-from-older-version",
+    "parsons-source-heading",
+    "parsons-solution-heading",
+    "parsons-reset",
+    "parsons-instructions",
+    "parsons-instructions-indent",
+    "parsons-moved-to-solution",
+    "parsons-moved-to-solution-indent",
+    "parsons-moved-to-source",
+    "parsons-block-indent",
+    "parsons-reset-done",
     "color.black",
     "color.white",
     "color.gray",
@@ -1206,6 +1233,13 @@ export const MESSAGE_KEYS: readonly MessageKey[] = [
     "chart-histogram-cut-points-invalid",
     "chart-histogram-categories-ignored",
     "chart-histogram-bar-width-ignored",
+    "parsons-no-solution-blocks",
+    "parsons-distractor-in-any-order",
+    "parsons-indent-out-of-range",
+    "parsons-nested-any-order",
+    "parsons-block-outside-parsons",
+    "parsons-horizontal-ignores-indent",
+    "parsons-horizontal-block-too-long",
     "editor-update-viewer",
     "editor-update-viewer-title",
     "editor-variant",

@@ -251,3 +251,26 @@ saved-state-unavailable = Your saved work could not be loaded.
 # cannot read (#1944). The document starts fresh; credit already recorded is
 # unaffected, since it is stored separately from the work itself.
 saved-state-from-older-version = It was saved by an earlier version of Doenet, so this activity has started fresh.
+
+## Parsons problems — `<parsons>`, where blocks are dragged into order.
+
+# Headings of the two lists: the shuffled blocks not yet used, and the
+# student's arrangement.
+parsons-source-heading = Drag from here
+parsons-solution-heading = Your solution
+
+# Button that returns every block to the unused list.
+parsons-reset = Reset
+
+# Read by a screen reader when a block takes focus.
+parsons-instructions =
+    Drag blocks into the solution, or press Enter or Space to move a block between the lists. Use the arrow keys to reorder.
+parsons-instructions-indent = Use the Left and Right arrow keys to change indentation.
+
+# Announced to a screen reader after a move. $block is the block's own text,
+# which is never translated; $position and $indent are numbers.
+parsons-moved-to-solution = Moved { $block } to solution position { $position }
+parsons-moved-to-solution-indent = Moved { $block } to solution position { $position }, indent { $indent }
+parsons-moved-to-source = Moved { $block } back to the unused blocks
+parsons-block-indent = { $block } indent { $indent }
+parsons-reset-done = All blocks returned to the unused blocks

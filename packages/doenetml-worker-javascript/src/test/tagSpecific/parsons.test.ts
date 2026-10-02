@@ -3,6 +3,7 @@ import { createTestCore } from "../utils/test-core";
 import { submitAnswer } from "../utils/actions";
 import { isParsonsSolutionCorrect, ParsonsBlock } from "../../utils/parsons";
 import { PublicDoenetMLCore } from "../../CoreWorker";
+import { getDiagnosticsByType } from "../utils/diagnostics";
 
 const Mock = vi.fn();
 vi.stubGlobal("postMessage", Mock);
@@ -53,6 +54,16 @@ describe("isParsonsSolutionCorrect @group4", () => {
     });
     it("ignores indentation when not graded", () => {
         expect(check([1, 2, 3, 4, 5, 6], [0, 0, 0, 0, 0, 0], false)).eq(true);
+    });
+    it("is never correct when no block belongs in the solution", () => {
+        expect(
+            isParsonsSolutionCorrect({
+                blocks: [{ indent: 0, distractor: true, group: null }],
+                order: [],
+                indents: [],
+                indentationGraded: false,
+            }),
+        ).eq(false);
     });
     it("rejects duplicates and out-of-range indices", () => {
         expect(check([1, 1, 3, 4, 5, 6], [0, 0, 1, 1, 1, 0])).eq(false);
@@ -273,5 +284,163 @@ describe("Parsons tag tests @group4", async () => {
         ].stateValues;
         expect(sv.solutionOrder).eqls([2, 1]);
         expect(sv.solutionIndents).eqls([0, 1]);
+    });
+
+    it("math and code blocks", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+<parsons name="p" shuffle="false">
+  <block><m>\frac{x^2 \cdot x^3}{x^4}</m></block>
+  <block><m>\frac{x^5}{x^4}</m></block>
+  <block><m>x</m></block>
+  <block distractor><c>x = x ** 6</c></block>
+</parsons>`,
+        });
+        const idx = await resolvePathToNodeIdx("p");
+        await updateArrangement({
+            core,
+            componentIdx: idx,
+            order: [1, 2, 3],
+            indents: [0, 0, 0],
+        });
+        const sv = (await core.returnAllStateVariables(false, true))[idx]
+            .stateValues;
+        expect(sv.numBlocks).eq(4);
+        expect(sv.correct).eq(true);
+        expect(getDiagnosticsByType(core).errors.length).eq(0);
+        expect(getDiagnosticsByType(core).warnings.length).eq(0);
+    });
+
+    it("length state variables drive feedback on submit", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML:
+                selectionSortDoenetML +
+                `
+<feedback name="short" condition="$sel.solutionTooShort" updateWith="$ans">Too short</feedback>
+<feedback name="long" condition="$sel.solutionTooLong" updateWith="$ans">Too long</feedback>`,
+        });
+        const selIdx = await resolvePathToNodeIdx("sel");
+        const ansIdx = await resolvePathToNodeIdx("ans");
+        const shortIdx = await resolvePathToNodeIdx("short");
+        const longIdx = await resolvePathToNodeIdx("long");
+
+        async function hidden(idx: number) {
+            return (await core.returnAllStateVariables(false, true))[idx]
+                .stateValues.hidden;
+        }
+
+        let sv = (await core.returnAllStateVariables(false, true))[selIdx]
+            .stateValues;
+        expect(sv.numBlocksNeeded).eq(6);
+        expect(sv.numBlocksInSolution).eq(0);
+        expect(sv.solutionTooShort).eq(true);
+        expect(sv.solutionTooLong).eq(false);
+        // feedback waits for a submission
+        expect(await hidden(shortIdx)).eq(true);
+
+        await updateArrangement({
+            core,
+            componentIdx: selIdx,
+            order: [1, 2],
+            indents: [0, 0],
+        });
+        expect(await hidden(shortIdx)).eq(true);
+        await submitAnswer({ componentIdx: ansIdx, core });
+        expect(await hidden(shortIdx)).eq(false);
+        expect(await hidden(longIdx)).eq(true);
+
+        await updateArrangement({
+            core,
+            componentIdx: selIdx,
+            order: [1, 2, 3, 4, 5, 6, 7],
+            indents: [0, 0, 1, 1, 1, 0, 0],
+        });
+        sv = (await core.returnAllStateVariables(false, true))[selIdx]
+            .stateValues;
+        expect(sv.numBlocksInSolution).eq(7);
+        expect(sv.solutionTooShort).eq(false);
+        expect(sv.solutionTooLong).eq(true);
+        await submitAnswer({ componentIdx: ansIdx, core });
+        expect(await hidden(shortIdx)).eq(true);
+        expect(await hidden(longIdx)).eq(false);
+    });
+
+    it("horizontal layout ignores indentation", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+<parsons name="h" layout="horizontal" horizontalAlign="CENTER">
+  <block>a</block>
+  <block indent="1">b</block>
+</parsons>
+<parsons name="v"><block>a</block></parsons>`,
+        });
+        const idx = await resolvePathToNodeIdx("h");
+        await updateArrangement({
+            core,
+            componentIdx: idx,
+            order: [1, 2],
+            indents: [0, 0],
+        });
+        const all = await core.returnAllStateVariables(false, true);
+        const sv = all[idx].stateValues;
+        expect(sv.layout).eq("horizontal");
+        expect(sv.horizontalAlign).eq("center");
+        expect(sv.indentationGraded).eq(false);
+        expect(sv.correct).eq(true);
+        const v = all[await resolvePathToNodeIdx("v")].stateValues;
+        expect(v.layout).eq("vertical");
+        expect(v.horizontalAlign).eq("left");
+
+        const warnings = getDiagnosticsByType(core).warnings;
+        expect(warnings.length).eq(1);
+        expect(warnings[0].message).contain("Indentation is not used");
+    });
+
+    it("authoring diagnostics", async () => {
+        async function warningsFor(doenetML: string) {
+            const { core } = await createTestCore({ doenetML });
+            await core.returnAllStateVariables(false, true);
+            return getDiagnosticsByType(core).warnings.map((w) => w.message);
+        }
+
+        let warnings = await warningsFor(
+            `<parsons><block distractor>a</block></parsons>`,
+        );
+        expect(warnings.length).eq(1);
+        expect(warnings[0]).contain(
+            "no `<block>` that belongs in the solution",
+        );
+
+        warnings = await warningsFor(
+            `<parsons><block>a</block><anyOrder><block>b</block><block distractor>c</block></anyOrder></parsons>`,
+        );
+        expect(warnings.length).eq(1);
+        expect(warnings[0]).contain("distractor `<block>` inside `<anyOrder>`");
+
+        warnings = await warningsFor(
+            `<parsons maxIndent="1"><block indent="0">a</block><block indent="3">b</block></parsons>`,
+        );
+        expect(warnings.length).eq(1);
+        expect(warnings[0]).contain("indent 3");
+
+        warnings = await warningsFor(
+            `<parsons><block>a</block><anyOrder><block>b</block><anyOrder><block>c</block><block>d</block></anyOrder></anyOrder></parsons>`,
+        );
+        expect(warnings.length).eq(1);
+        expect(warnings[0]).contain("cannot be nested");
+
+        warnings = await warningsFor(`<p><block>a</block></p>`);
+        expect(warnings.length).eq(1);
+        expect(warnings[0]).contain("must be a child of `<parsons>`");
+
+        warnings = await warningsFor(
+            `<parsons layout="horizontal"><block>short</block><block>${"x".repeat(60)}</block></parsons>`,
+        );
+        expect(warnings.length).eq(1);
+        expect(warnings[0]).contain("60 characters");
+
+        // a well-formed problem is silent
+        warnings = await warningsFor(selectionSortDoenetML);
+        expect(warnings.length).eq(0);
     });
 });

@@ -7,6 +7,11 @@
     margin: 12px 0;
 }
 
+/* horizontal layout: the two lists are stacked, and blocks flow in rows */
+.parsons.parsons-horizontal {
+    grid-template-columns: 1fr;
+}
+
 .parsons-column-wrapper {
     display: flex;
     flex-direction: column;
@@ -19,10 +24,21 @@
     flex-direction: column;
     gap: 6px;
     min-height: 160px;
+    margin: 0;
     padding: 8px 8px 48px 8px; /* extra bottom room to drop below the last block */
+    list-style: none;
     border: 2px dashed var(--mainGray);
     border-radius: var(--mainBorderRadius);
     background: var(--canvas);
+}
+
+.parsons-horizontal .parsons-column {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    align-content: flex-start;
+    min-height: 64px;
+    padding: 8px;
 }
 
 .parsons-column.parsons-solution {
@@ -63,6 +79,21 @@
     user-select: none;
 }
 
+/* a long block wraps inside the row instead of overflowing it */
+.parsons-horizontal .parsons-block {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+}
+
+/* the space a block leaves in the source list once it is in the solution */
+.parsons-gap {
+    box-sizing: border-box;
+    min-height: 2em;
+    border: 1px dashed var(--mainGray);
+    border-radius: var(--mainBorderRadius);
+    opacity: 0.5;
+}
+
 .parsons-block:focus-visible {
     outline: 3px solid var(--mainBlue);
     outline-offset: 2px;
@@ -79,6 +110,13 @@
 .parsons.parsons-disabled .parsons-block {
     cursor: not-allowed;
     opacity: 0.6;
+}
+
+.parsons-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
 }
 
 .parsons-sr-only {
