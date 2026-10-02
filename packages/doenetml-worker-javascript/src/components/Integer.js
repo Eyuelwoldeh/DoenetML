@@ -5,8 +5,8 @@ import {
     returnAnchorStateVariableDefinition,
 } from "../utils/graphical";
 import {
-    returnRoundingAttributeComponentShadowing,
-} from "../utils/rounding";
+    returnNumberDisplayAttributeComponentShadowing,
+} from "../utils/numberDisplay";
 import me from "math-expressions";
 import { renameStateVariable } from "../utils/stateVariables";
 import { textToAst } from "../utils/math";
@@ -55,7 +55,7 @@ export default class Integer extends NumberComponent {
             shadowingInstructions: {
                 createComponentOfType: "integer",
                 addAttributeComponentsShadowingStateVariables:
-                    returnRoundingAttributeComponentShadowing(),
+                    returnNumberDisplayAttributeComponentShadowing(),
             },
             hasEssential: true,
             defaultValue: NaN,
@@ -141,7 +141,7 @@ export default class Integer extends NumberComponent {
                 ) {
                     let stringValue;
                     if (dependencyValues.stringChildren.length === 1) {
-                        // String children are raw strings in DoenetML
+                        // String children from childGroups:["strings"] are raw string values
                         stringValue = dependencyValues.stringChildren[0];
                     } else {
                         // Text children are component objects with stateValues
