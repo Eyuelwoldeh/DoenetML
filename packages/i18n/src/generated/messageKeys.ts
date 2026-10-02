@@ -86,6 +86,8 @@ export type MessageKey =
     | "parsons-moved-to-source"
     | "parsons-block-indent"
     | "parsons-reset-done"
+    | "parsons-remove-empty-row"
+    | "parsons-empty-row-removed"
     | "color.black"
     | "color.white"
     | "color.gray"
@@ -739,6 +741,8 @@ export const MESSAGE_KEYS: readonly MessageKey[] = [
     "parsons-moved-to-source",
     "parsons-block-indent",
     "parsons-reset-done",
+    "parsons-remove-empty-row",
+    "parsons-empty-row-removed",
     "color.black",
     "color.white",
     "color.gray",

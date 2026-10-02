@@ -274,3 +274,8 @@ parsons-moved-to-solution-indent = Moved { $block } to solution position { $posi
 parsons-moved-to-source = Moved { $block } back to the unused blocks
 parsons-block-indent = { $block } indent { $indent }
 parsons-reset-done = All blocks returned to the unused blocks
+
+# A student can leave rows of the solution empty, as spacing. This is the
+# tooltip on such a row, and the announcement after clicking it.
+parsons-remove-empty-row = Empty row (click to remove)
+parsons-empty-row-removed = Empty row removed

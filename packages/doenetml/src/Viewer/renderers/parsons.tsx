@@ -14,6 +14,11 @@ import "./parsons.css";
 const INDENT_PX = 32;
 const DRAG_THRESHOLD_PX = 4;
 const COLUMN_PADDING_PX = 8;
+// Height of an empty row in the solution (matches `.parsons-blank` plus the
+// gap between rows), used to turn a drop below the last block into empty rows.
+const BLANK_ROW_PX = 42;
+// Mirrors the worker's limit on rows (blocks plus empty rows) per block.
+const MAX_ROWS_PER_BLOCK = 3;
 
 interface ParsonsSVs {
     [key: string]: any;
@@ -135,6 +140,7 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
     const horizontal = SVs.layout === "horizontal";
     const { order, indents } = arrangement;
     const sourceOrder = SVs.initialOrder.filter((i) => !order.includes(i));
+    const maxRows = MAX_ROWS_PER_BLOCK * SVs.blocks.length;
 
     // `children` has a null placeholder for each unrendered child (e.g.
     // <shortDescription>), so drop those: what remains is the blocks in
@@ -166,30 +172,71 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
         return Math.min(Math.max(indent, 0), SVs.maxIndent);
     }
 
-    /** Remove `blockIdx` from the solution (if present) and insert it at `position`. */
+    // The solution is a list of rows: `order[i]` is a block index, or 0 for a
+    // row the student left empty as spacing. Empty rows below the last block
+    // are never kept.
+    function trimEmptyRows(a: Arrangement): Arrangement {
+        let numRows = a.order.length;
+        while (numRows > 0 && a.order[numRows - 1] === 0) {
+            numRows--;
+        }
+        return {
+            order: a.order.slice(0, numRows),
+            indents: a.indents.slice(0, numRows),
+        };
+    }
+
+    function removeRow(a: Arrangement, row: number): Arrangement {
+        return {
+            order: a.order.filter((_, i) => i !== row),
+            indents: a.indents.filter((_, i) => i !== row),
+        };
+    }
+
+    /**
+     * Remove `blockIdx` from the solution (if present), then put it at row
+     * `position` of what remains: in place of the empty row there
+     * (`replaceEmptyRow`), or inserted after `emptyRowsBefore` new empty rows.
+     */
     function placeInSolution(
         blockIdx: number,
         position: number,
         indent: number,
+        { replaceEmptyRow = false, emptyRowsBefore = 0 } = {},
     ): Arrangement {
-        const newOrder = [...order];
-        const newIndents = [...indents];
-        const oldPos = newOrder.indexOf(blockIdx);
-        if (oldPos !== -1) {
-            newOrder.splice(oldPos, 1);
-            newIndents.splice(oldPos, 1);
-        }
-        newOrder.splice(position, 0, blockIdx);
-        newIndents.splice(position, 0, clampIndent(indent));
-        return { order: newOrder, indents: newIndents };
+        const oldPos = order.indexOf(blockIdx);
+        const rest =
+            oldPos === -1
+                ? { order: [...order], indents: [...indents] }
+                : removeRow(arrangement, oldPos);
+        const emptyRows = Array(emptyRowsBefore).fill(0);
+        rest.order.splice(
+            position,
+            replaceEmptyRow ? 1 : 0,
+            ...emptyRows,
+            blockIdx,
+        );
+        rest.indents.splice(
+            position,
+            replaceEmptyRow ? 1 : 0,
+            ...emptyRows,
+            clampIndent(indent),
+        );
+        return trimEmptyRows(rest);
     }
 
     function removeFromSolution(blockIdx: number): Arrangement {
-        const pos = order.indexOf(blockIdx);
-        return {
-            order: order.filter((_, i) => i !== pos),
-            indents: indents.filter((_, i) => i !== pos),
-        };
+        return trimEmptyRows(removeRow(arrangement, order.indexOf(blockIdx)));
+    }
+
+    function removeEmptyRow(row: number) {
+        if (disabled) {
+            return;
+        }
+        commit(
+            trimEmptyRows(removeRow(arrangement, row)),
+            t("parsons-empty-row-removed", undefined, "Empty row removed"),
+        );
     }
 
     function movedToSolutionMessage(
@@ -292,32 +339,59 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
             // order (horizontal).
             // ponytail: horizontal reading order assumes left-to-right; mirror
             // the x comparison if RTL documents need horizontal problems.
-            const others = order.filter((i) => i !== blockIdx);
-            let position = others.findIndex((i) => {
-                const r = blockElements.current[i]?.getBoundingClientRect();
-                if (r === undefined) {
-                    return false;
+            // An empty row is taken over when the pointer is on it. Dropping
+            // below every row leaves empty rows above the block, one per
+            // row-height of distance (vertical layout only).
+            const colRect = solutionColumn.current!.getBoundingClientRect();
+            const rowElements = Array.from(solutionColumn.current!.children);
+            const others = order
+                .map((rowBlock, i) => ({
+                    rowBlock,
+                    r: rowElements[i].getBoundingClientRect(),
+                }))
+                .filter(({ rowBlock }) => rowBlock !== blockIdx);
+            let position = others.findIndex(({ rowBlock, r }) => {
+                if (horizontal) {
+                    return (
+                        y < r.top || (y <= r.bottom && x < r.left + r.width / 2)
+                    );
                 }
-                return horizontal
-                    ? y < r.top || (y <= r.bottom && x < r.left + r.width / 2)
+                return rowBlock === 0
+                    ? y <= r.bottom
                     : y < r.top + r.height / 2;
             });
-            if (position === -1) {
+            let replaceEmptyRow = false;
+            let emptyRowsBefore = 0;
+            if (position !== -1) {
+                const { rowBlock, r } = others[position];
+                replaceEmptyRow = rowBlock === 0 && y >= r.top;
+            } else {
                 position = others.length;
+                if (!horizontal) {
+                    const lastBottom =
+                        others.length > 0
+                            ? others[others.length - 1].r.bottom
+                            : colRect.top + COLUMN_PADDING_PX;
+                    emptyRowsBefore = Math.min(
+                        Math.max(
+                            0,
+                            Math.floor((y - lastBottom) / BLANK_ROW_PX),
+                        ),
+                        Math.max(0, maxRows - others.length - 1),
+                    );
+                }
             }
-            const colLeft =
-                solutionColumn.current!.getBoundingClientRect().left +
-                COLUMN_PADDING_PX;
+            const colLeft = colRect.left + COLUMN_PADDING_PX;
             const blockLeft = info.startLeft + (x - info.startX);
             const indent = Math.round((blockLeft - colLeft) / INDENT_PX);
-            const result = placeInSolution(blockIdx, position, indent);
+            const result = placeInSolution(blockIdx, position, indent, {
+                replaceEmptyRow,
+                emptyRowsBefore,
+            });
+            const row = result.order.indexOf(blockIdx);
             commit(
                 result,
-                movedToSolutionMessage(
-                    blockIdx,
-                    position,
-                    result.indents[position],
-                ),
+                movedToSolutionMessage(blockIdx, row, result.indents[row]),
             );
         } else if (contains(sourceColumn.current) && order.includes(blockIdx)) {
             commit(
@@ -355,13 +429,26 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
             // Reorder: Up/Down always; Left/Right too in a horizontal layout.
             const step = e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 1;
             if (inSolution) {
+                // Swap with the neighbouring row (a block or an empty row).
+                // Moving the last block down leaves an empty row above it.
                 const newPos = pos + step;
                 if (newPos >= 0 && newPos < order.length) {
                     result = placeInSolution(blockIdx, newPos, indents[pos]);
+                } else if (
+                    newPos === order.length &&
+                    !horizontal &&
+                    order.length < maxRows
+                ) {
+                    result = placeInSolution(blockIdx, pos, indents[pos], {
+                        emptyRowsBefore: 1,
+                    });
+                }
+                if (result) {
+                    const row = result.order.indexOf(blockIdx);
                     message = movedToSolutionMessage(
                         blockIdx,
-                        newPos,
-                        indents[pos],
+                        row,
+                        result.indents[row],
                     );
                 }
             } else {
@@ -431,6 +518,22 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
             >
                 {renderedChildren[blockIdx - 1]}
             </li>
+        );
+    }
+
+    /** A row of the solution the student left empty; clicking it removes it. */
+    function renderEmptyRow(row: number) {
+        return (
+            <li
+                key={`empty-${row}`}
+                className="parsons-blank"
+                title={t(
+                    "parsons-remove-empty-row",
+                    undefined,
+                    "Empty row (click to remove)",
+                )}
+                onClick={() => removeEmptyRow(row)}
+            />
         );
     }
 
@@ -532,7 +635,9 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
                         style={solutionStyle}
                     >
                         {order.map((blockIdx, i) =>
-                            renderBlock(blockIdx, indents[i]),
+                            blockIdx === 0
+                                ? renderEmptyRow(i)
+                                : renderBlock(blockIdx, indents[i]),
                         )}
                     </ul>
                 </div>

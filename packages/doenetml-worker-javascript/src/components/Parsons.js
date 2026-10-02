@@ -8,6 +8,10 @@ import { codedDiagnostic } from "../utils/diagnostics";
 // In a horizontal layout, blocks longer than this are flagged to the author.
 const MAX_HORIZONTAL_BLOCK_LENGTH = 40;
 
+// A solution column may have at most this many rows (blocks plus empty rows)
+// per block, so a stray action cannot store an unbounded arrangement.
+const MAX_ROWS_PER_BLOCK = 3;
+
 /**
  * <parsons> — a Parsons problem: students drag shuffled <block>s into a
  * solution column in the correct order (and, optionally, indentation).
@@ -377,7 +381,9 @@ export default class Parsons extends Input {
             },
         };
 
-        // Essential (saved) arrangement of the solution column.
+        // Essential (saved) arrangement of the solution column, row by row.
+        // An entry of 0 in allSolutionOrder is an empty row a student left as
+        // spacing; empty rows are ignored by everything but the renderer.
         for (const varName of ["allSolutionOrder", "allSolutionIndents"]) {
             stateVariableDefinitions[varName] = {
                 forRenderer: true,
@@ -401,17 +407,44 @@ export default class Parsons extends Input {
             };
         }
 
+        // The arrangement without its empty rows.
+        stateVariableDefinitions.placedOrder = {
+            additionalStateVariablesDefined: ["placedIndents"],
+            returnDependencies: () => ({
+                allSolutionOrder: {
+                    dependencyType: "stateVariable",
+                    variableName: "allSolutionOrder",
+                },
+                allSolutionIndents: {
+                    dependencyType: "stateVariable",
+                    variableName: "allSolutionIndents",
+                },
+            }),
+            definition({ dependencyValues }) {
+                const order = dependencyValues.allSolutionOrder;
+                return {
+                    setValue: {
+                        placedOrder: order.filter((ind) => ind !== 0),
+                        placedIndents:
+                            dependencyValues.allSolutionIndents.filter(
+                                (_, i) => order[i] !== 0,
+                            ),
+                    },
+                };
+            },
+        };
+
         // Public, read-only array views of the arrangement.
         for (const [varName, allVarName, prefix, description] of [
             [
                 "solutionOrder",
-                "allSolutionOrder",
+                "placedOrder",
                 "solutionIndex",
                 "Indices (1-based) of the blocks in the solution column, top to bottom.",
             ],
             [
                 "solutionIndents",
-                "allSolutionIndents",
+                "placedIndents",
                 "solutionIndent",
                 "Indentation of each block in the solution column, top to bottom.",
             ],
@@ -485,16 +518,16 @@ export default class Parsons extends Input {
             description:
                 "The number of blocks currently in the solution column.",
             returnDependencies: () => ({
-                allSolutionOrder: {
+                placedOrder: {
                     dependencyType: "stateVariable",
-                    variableName: "allSolutionOrder",
+                    variableName: "placedOrder",
                 },
             }),
             definition({ dependencyValues }) {
                 return {
                     setValue: {
                         numBlocksInSolution:
-                            dependencyValues.allSolutionOrder.length,
+                            dependencyValues.placedOrder.length,
                     },
                 };
             },
@@ -555,13 +588,13 @@ export default class Parsons extends Input {
                     dependencyType: "stateVariable",
                     variableName: "blocks",
                 },
-                allSolutionOrder: {
+                placedOrder: {
                     dependencyType: "stateVariable",
-                    variableName: "allSolutionOrder",
+                    variableName: "placedOrder",
                 },
-                allSolutionIndents: {
+                placedIndents: {
                     dependencyType: "stateVariable",
-                    variableName: "allSolutionIndents",
+                    variableName: "placedIndents",
                 },
                 indentationGraded: {
                     dependencyType: "stateVariable",
@@ -573,8 +606,8 @@ export default class Parsons extends Input {
                     setValue: {
                         correct: isParsonsSolutionCorrect({
                             blocks: dependencyValues.blocks,
-                            order: dependencyValues.allSolutionOrder,
-                            indents: dependencyValues.allSolutionIndents,
+                            order: dependencyValues.placedOrder,
+                            indents: dependencyValues.placedIndents,
                             indentationGraded:
                                 dependencyValues.indentationGraded,
                         }),
@@ -628,14 +661,18 @@ export default class Parsons extends Input {
             return;
         }
 
+        // `order` lists the rows of the solution column: a 1-based block
+        // index, or 0 for a row left empty.
         const numBlocks = await this.stateValues.numBlocks;
+        const placed = Array.isArray(order) ? order.filter((i) => i !== 0) : [];
         const valid =
             Array.isArray(order) &&
             Array.isArray(indents) &&
             order.length === indents.length &&
-            new Set(order).size === order.length &&
+            order.length <= MAX_ROWS_PER_BLOCK * numBlocks &&
+            new Set(placed).size === placed.length &&
             order.every(
-                (i) => Number.isInteger(i) && i >= 1 && i <= numBlocks,
+                (i) => Number.isInteger(i) && i >= 0 && i <= numBlocks,
             ) &&
             indents.every((x) => Number.isFinite(x));
         if (!valid) {
@@ -646,9 +683,16 @@ export default class Parsons extends Input {
             return;
         }
 
+        // Empty rows below the last block are not kept.
+        const numRows = order.findLastIndex((i) => i !== 0) + 1;
+        order = order.slice(0, numRows);
+        indents = indents.slice(0, numRows);
+
         const maxIndent = await this.stateValues.maxIndent;
-        const clampedIndents = indents.map((x) =>
-            Math.min(Math.max(Math.round(x), 0), maxIndent),
+        const clampedIndents = indents.map((x, i) =>
+            order[i] === 0
+                ? 0
+                : Math.min(Math.max(Math.round(x), 0), maxIndent),
         );
 
         let event = {

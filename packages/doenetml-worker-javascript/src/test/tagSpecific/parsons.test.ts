@@ -443,4 +443,50 @@ describe("Parsons tag tests @group4", async () => {
         warnings = await warningsFor(selectionSortDoenetML);
         expect(warnings.length).eq(0);
     });
+
+    it("blank rows are kept but ignored by grading", async () => {
+        const { core, resolvePathToNodeIdx, scoreState } = await createTestCore(
+            { doenetML: selectionSortDoenetML },
+        );
+        const selIdx = await resolvePathToNodeIdx("sel");
+
+        // 0 is an empty row; trailing empty rows are trimmed
+        await updateArrangement({
+            core,
+            componentIdx: selIdx,
+            order: [0, 1, 2, 0, 0, 3, 5, 4, 0, 6, 0, 0],
+            indents: [0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0],
+        });
+        let sv = (await core.returnAllStateVariables(false, true))[selIdx]
+            .stateValues;
+        expect(sv.allSolutionOrder).eqls([0, 1, 2, 0, 0, 3, 5, 4, 0, 6]);
+        expect(sv.allSolutionIndents).eqls([0, 0, 0, 0, 0, 1, 1, 1, 0, 0]);
+        expect(sv.solutionOrder).eqls([1, 2, 3, 5, 4, 6]);
+        expect(sv.solutionIndents).eqls([0, 0, 1, 1, 1, 0]);
+        expect(sv.numBlocksInSolution).eq(6);
+        expect(sv.correct).eq(true);
+
+        // empty rows survive a save and reload
+        await core.saveImmediately();
+        const restored = await createTestCore({
+            doenetML: selectionSortDoenetML,
+            initialState: scoreState.state,
+        });
+        sv = (await restored.core.returnAllStateVariables(false, true))[
+            await restored.resolvePathToNodeIdx("sel")
+        ].stateValues;
+        expect(sv.allSolutionOrder).eqls([0, 1, 2, 0, 0, 3, 5, 4, 0, 6]);
+        expect(sv.correct).eq(true);
+
+        // an absurd number of rows is rejected
+        await updateArrangement({
+            core,
+            componentIdx: selIdx,
+            order: [...Array(100).fill(0), 1],
+            indents: Array(101).fill(0),
+        });
+        sv = (await core.returnAllStateVariables(false, true))[selIdx]
+            .stateValues;
+        expect(sv.allSolutionOrder).eqls([0, 1, 2, 0, 0, 3, 5, 4, 0, 6]);
+    });
 });

@@ -38,11 +38,17 @@
     align-items: flex-start;
     align-content: flex-start;
     min-height: 64px;
+}
+
+.parsons-horizontal .parsons-column,
+.parsons-horizontal .parsons-column.parsons-solution {
     padding: 8px;
 }
 
 .parsons-column.parsons-solution {
     border-style: solid;
+    /* room to drop a block well below the last one, leaving empty rows */
+    padding-bottom: 130px;
     /* faint indent guides, one per indent level */
     background-image: repeating-linear-gradient(
         to right,
@@ -92,6 +98,20 @@
     border: 1px dashed var(--mainGray);
     border-radius: var(--mainBorderRadius);
     opacity: 0.5;
+}
+
+/* a row of the solution the student left empty, as spacing */
+.parsons-blank {
+    box-sizing: border-box;
+    height: 36px;
+    border: 1px dashed var(--mainGray);
+    border-radius: var(--mainBorderRadius);
+    opacity: 0.5;
+    cursor: pointer;
+}
+
+.parsons-blank:hover {
+    opacity: 1;
 }
 
 .parsons-block:focus-visible {
