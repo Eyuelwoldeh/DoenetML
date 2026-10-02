@@ -9,12 +9,16 @@ import {
     createCheckWorkComponent,
 } from "./utils/checkWork";
 import { useSubmitActionWithDelay } from "./utils/useSubmitActionWithDelay";
+import { useContentT } from "../../utils/i18n";
+import type { PProps } from "./p";
+import "./list.css";
 
 interface ListSVs {
     [key: string]: any;
     hidden: boolean;
     _compositeReplacementActiveRange?: any;
     item?: any;
+    firstChildListItemAlignment?: string;
     justSubmitted: boolean;
     level: number;
     marker: string;
@@ -24,6 +28,10 @@ interface ListSVs {
 export default React.memo(function List(props: UseDoenetRendererProps) {
     let { id, SVs, children, actions, callAction } =
         useDoenetRenderer<ListSVs>(props);
+
+    // The check-work button follows the document's language, not the
+    // reader's — see `useContentT`.
+    const tContent = useContentT();
 
     const ref = useRef(null);
 
@@ -51,6 +59,7 @@ export default React.memo(function List(props: UseDoenetRendererProps) {
             submitActionWithPending,
             true,
             isPending,
+            tContent,
         );
     }
 
@@ -67,8 +76,20 @@ export default React.memo(function List(props: UseDoenetRendererProps) {
     // TODO: incorporate label
     if (SVs.item) {
         return (
-            <li id={id} ref={ref}>
-                {children}
+            <li
+                id={id}
+                ref={ref}
+                // The class supplies a zero-height line box at the top of the
+                // item for the browser to draw the item's native marker on,
+                // which is what a lead holding no first line of text of its own
+                // needs (#1673). See `list.css`.
+                className={
+                    SVs.firstChildListItemAlignment === "flex-start"
+                        ? "list-item-marker-anchored"
+                        : undefined
+                }
+            >
+                {markLeadingParagraphOfListItem(children)}
                 {checkWorkComponent}
             </li>
         );
@@ -94,9 +115,12 @@ export default React.memo(function List(props: UseDoenetRendererProps) {
                 ];
         }
         return (
-            <ol id={id} style={{ listStyleType: list_style }} ref={ref}>
-                {children}
-            </ol>
+            <>
+                <ol id={id} style={{ listStyleType: list_style }} ref={ref}>
+                    {children}
+                </ol>
+                {checkWorkComponent}
+            </>
         );
     } else {
         let list_style;
@@ -113,12 +137,69 @@ export default React.memo(function List(props: UseDoenetRendererProps) {
                 ];
         }
         return (
-            <ul id={id} style={{ listStyleType: list_style }} ref={ref}>
-                {children}
-            </ul>
+            <>
+                <ul id={id} style={{ listStyleType: list_style }} ref={ref}>
+                    {children}
+                </ul>
+                {checkWorkComponent}
+            </>
         );
     }
 });
+
+/**
+ * Flag the leading paragraph of a list item so that it renders as
+ * presentational.
+ *
+ * A screen reader folds a list item's `::marker` into the item's own text run
+ * only when that text is a direct child of the `<li>`. A paragraph wrapper
+ * makes the marker a separate object that VoiceOver lands on and announces as
+ * a bare "list marker" instead of "1. Apples, 1 of 3" — see issue #662. The
+ * leading paragraph therefore drops out of the accessibility tree; every later
+ * paragraph keeps its own node, since a reader still wants to be told where
+ * the next paragraph starts.
+ *
+ * Only a paragraph that leads the item is worth flagging: any other leading
+ * child (a figure, a nested list, or the `<span>` that
+ * `addCommasForCompositeRanges` wraps around a composite's replacements) sits
+ * between the marker and the text no matter what role the paragraph carries.
+ * Blink folds away a semantics-free *inline* generic, so a bare `<span>` around
+ * text is harmless — but the span around a composite's replacements holds the
+ * block-level `<div class="para">`, which keeps it in the tree as a `generic`
+ * node. Making the paragraph inside it presentational would only trade
+ * `generic > paragraph > text` for `generic > text`, which is the shape that is
+ * already broken; the paragraph keeps its `paragraph` role instead.
+ *
+ * Two kinds of child are skipped when looking for the leading one, because
+ * neither reaches the accessibility tree: whitespace-only text (the
+ * indentation an author writes inside the `<li>`) and `null`, which stands for
+ * a child that is not rendered — the core sends it for a child it leaves out,
+ * most often a `<p hide>`, and `useDoenetRenderer` sends it for a child whose
+ * renderer has not finished loading yet (a later render then marks that child,
+ * since this runs on every render).
+ */
+function markLeadingParagraphOfListItem(children: React.ReactNode[]) {
+    const leadingInd = children.findIndex(
+        (child) =>
+            child != null &&
+            !(typeof child === "string" && child.trim() === ""),
+    );
+
+    const leadingChild = children[leadingInd];
+
+    if (
+        !React.isValidElement<PProps>(leadingChild) ||
+        leadingChild.props.componentInstructions?.rendererType !== "p"
+    ) {
+        return children;
+    }
+
+    const markedChildren = [...children];
+    markedChildren[leadingInd] = React.cloneElement(leadingChild, {
+        isLeadingListItemParagraph: true,
+    });
+    return markedChildren;
+}
 
 const unnumberedStyles = ["disc", "circle", "square"];
 

@@ -2,6 +2,9 @@ import { returnNumberDisplayStateVariableDefinitions } from "../utils/numberDisp
 import MathBaseOperator from "./abstract/MathBaseOperator";
 import MathBaseOperatorOneInput from "./abstract/MathBaseOperatorOneInput";
 import me from "math-expressions";
+import { codedDiagnostic } from "../utils/diagnostics";
+import { isNumericConstant } from "../utils/math";
+const { mod, median } = me.math;
 
 export class Sum extends MathBaseOperator {
     static componentType = "sum";
@@ -163,6 +166,19 @@ function clamp({ value, lowerValue, upperValue }) {
     if (numericValue instanceof me.class) {
         numericValue = numericValue.evaluate_to_constant();
     }
+    // There is nothing to clamp when the input has no numeric value — a free
+    // variable, a blank, a complex value — so the result is not a number. This
+    // is why `null` was the wrong marker for the engine to use: with it,
+    // `Math.max(lower, Math.min(upper, null))` was the lower bound when that
+    // was positive and **0** when it was negative, either way a real-looking
+    // answer for an input that has none.
+    //
+    // `±Infinity` is *not* in that class and must reach the clamp: bounding an
+    // unbounded value at the bound is exactly what a clamp is for, which is why
+    // the test is `isNumericConstant` and not `Number.isFinite`.
+    if (!isNumericConstant(numericValue)) {
+        return me.fromAst(NaN);
+    }
     return me.fromAst(Math.max(lowerValue, Math.min(upperValue, numericValue)));
 }
 
@@ -272,8 +288,7 @@ function makePeriodic({ value, lowerValue, upperValue }) {
     }
 
     return me.fromAst(
-        lowerValue +
-            me.math.mod(numericValue - lowerValue, upperValue - lowerValue),
+        lowerValue + mod(numericValue - lowerValue, upperValue - lowerValue),
     );
 }
 
@@ -330,7 +345,18 @@ export class Round extends MathBaseOperatorOneInput {
             definition: ({ dependencyValues }) => ({
                 setValue: {
                     mathOperator: function (value) {
-                        // first convert all numbers and constants (such as pi) to floating point numbers
+                        // First convert all numbers and constants (such as pi)
+                        // to floating point numbers. `max_digits: Infinity` is
+                        // what does that: it is the only setting under which an
+                        // exact rational floats, and rounding is the whole
+                        // point here — without it `<round numDecimals="3">1/3
+                        // </round>` answers `1/3`.
+                        //
+                        // The cost is that a decimal literal carrying more than
+                        // ~17 significant digits goes through an f64 on the way
+                        // in, so `35203423.02352343201` rounds to
+                        // `…523435` rather than the exact `…523432`. Accepted:
+                        // the alternative loses rounding for every fraction.
                         let valueWithNumbers = value.evaluate_numbers({
                             max_digits: Infinity,
                             evaluate_functions: true,
@@ -723,7 +749,7 @@ export class Median extends MathBaseOperator {
             definition: () => ({
                 setValue: {
                     numericOperator: function (inputs) {
-                        return me.math.median(inputs);
+                        return median(inputs);
                     },
                 },
             }),
@@ -1123,7 +1149,7 @@ export class Mod extends MathBaseOperator {
                         if (inputs.length !== 2) {
                             return NaN;
                         }
-                        return me.math.mod(inputs[0], inputs[1]);
+                        return mod(inputs[0], inputs[1]);
                     },
                 },
             }),
@@ -1318,10 +1344,10 @@ export class ExtractMath extends MathBaseOperatorOneInput {
             definition({ dependencyValues }) {
                 if (dependencyValues.type === "operand") {
                     if (dependencyValues.operandNumber === null) {
-                        let warning = {
-                            message: `Must specify a operandNumber when extracting a math operand.`,
+                        let warning = codedDiagnostic({
                             type: "warning",
-                        };
+                            code: "doenet-w0058",
+                        });
                         return {
                             setValue: {
                                 mathOperator: () => me.fromAst("\uff3f"),
@@ -1406,23 +1432,19 @@ export class ExtractMath extends MathBaseOperatorOneInput {
                                 } else if (
                                     dependencyValues.argumentNumber === 1
                                 ) {
-                                    if (
-                                        !(
-                                            Array.isArray(allArgs) &&
-                                            allArgs[0] === "tuple"
-                                        )
-                                    ) {
+                                    if (!(
+                                        Array.isArray(allArgs) &&
+                                        allArgs[0] === "tuple"
+                                    )) {
                                         return me.fromAst(allArgs);
                                     } else {
                                         return me.fromAst(allArgs[1]);
                                     }
                                 } else {
-                                    if (
-                                        !(
-                                            Array.isArray(allArgs) &&
-                                            allArgs[0] === "tuple"
-                                        )
-                                    ) {
+                                    if (!(
+                                        Array.isArray(allArgs) &&
+                                        allArgs[0] === "tuple"
+                                    )) {
                                         return me.fromAst("\uff3f");
                                     } else {
                                         let theArg =

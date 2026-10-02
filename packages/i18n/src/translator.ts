@@ -1,0 +1,217 @@
+import { FluentBundle, FluentResource } from "@fluent/bundle";
+
+import { DEFAULT_LOCALE, EN_CATALOG_SOURCE } from "./catalogs";
+import { intlLocale } from "./intl";
+
+/**
+ * Arguments substituted into a message's placeables (`{ $count }`).
+ *
+ * Fluent formats numbers and dates with `Intl`, so passing a real `number`
+ * rather than a pre-formatted string is what makes locale-aware formatting
+ * possible later (see the number-formatting policy in the package README).
+ *
+ * An argument that is *not* a quantity — a line number, a `styleNumber`, a
+ * component index, anything the reader is meant to match against something
+ * else — is passed as a `string` instead, and the catalogs say so where they
+ * take one. The hazard is grouping: line 1234 would be written "1,234". The
+ * digits are safe either way, since the bundle formats under the numbering
+ * system `intlLocale` pins.
+ */
+export type TranslationArgs = Record<string, string | number | Date>;
+
+/**
+ * Look up `key`, substituting `args`.
+ *
+ * The generalization of `ColorWordTranslator` in
+ * `@doenet/utils/style/colorWords`: a stable key plus an English fallback,
+ * where a missing key degrades rather than throwing. Resolution order is the
+ * negotiated locale chain, then the bundled English catalogs, then `fallback`,
+ * then the key itself.
+ */
+export type Translator = {
+    (key: string, args?: TranslationArgs, fallback?: string): string;
+    /**
+     * Which locale in the chain will actually render `key`, or `undefined` if
+     * none will and the caller's fallback is what renders.
+     *
+     * For the caller that has to format an argument *outside* Fluent —
+     * `Intl.ListFormat`, in `createDiagnosticFormatter` — so that a message
+     * falling back to English doesn't get its list joined in a language the
+     * rest of the sentence isn't in. Optional so that a plain function still
+     * satisfies `Translator`; {@link createTranslator} always provides it.
+     */
+    localeOf?: (key: string) => string | undefined;
+};
+
+export type CreateTranslatorOptions = {
+    /**
+     * Wrap placeables in Unicode bidi isolation marks (U+2068/U+2069).
+     *
+     * Fluent defaults this on. It is right for text a reader only ever looks
+     * at, and wrong for text anything later compares, hashes, or parses —
+     * the marks are invisible, they survive `trim()`, and they break `===`.
+     * The default here is therefore off, and the two callers decide:
+     *
+     * - `createChromeTranslator` turns it **on** for every language but
+     *   English. Chrome is rendered and discarded.
+     * - `createTranslatorFromLocaleData` leaves it **off**. Worker content
+     *   becomes state variables an author can interpolate and an answer can
+     *   compare, and it can reach the response hash.
+     *
+     * Isolation also makes output non-byte-identical to the English it
+     * replaces, which is why English is the exception rather than the rule.
+     */
+    useIsolating?: boolean;
+    /**
+     * Called for each Fluent formatting error. Errors are otherwise swallowed:
+     * a broken translation must degrade to readable text, never throw into a
+     * renderer.
+     */
+    onError?: (error: unknown, key: string, locale: string) => void;
+    /**
+     * Append the bundled English catalogs as the last link of the fallback
+     * chain. Defaults to `true`; tests that need to observe a genuine miss
+     * pass `false`.
+     */
+    includeBuiltinEnglish?: boolean;
+};
+
+/**
+ * Resolve `id` or `id.attribute` against a bundle.
+ *
+ * Fluent identifiers cannot contain `.`, so a dotted key is a message plus one
+ * attribute. Keys with more than one dot cannot name anything and always miss.
+ */
+function lookupPattern(bundle: FluentBundle, key: string) {
+    const separator = key.indexOf(".");
+    const id = separator === -1 ? key : key.slice(0, separator);
+    const attribute = separator === -1 ? null : key.slice(separator + 1);
+
+    const message = bundle.getMessage(id);
+    if (!message) {
+        return null;
+    }
+    if (attribute === null) {
+        return message.value;
+    }
+    return message.attributes[attribute] ?? null;
+}
+
+/** A locale's catalog, with the tag it was filed under. */
+type ChainLink = {
+    /**
+     * The tag as the caller wrote it, which is what {@link Translator.localeOf}
+     * reports and what an error is attributed to — never the tag the bundle
+     * formats under, which carries a pinned numbering system and may fall back
+     * to English outright. See {@link intlLocale}.
+     *
+     * Fluent builds its `Intl.PluralRules` from `bundle.locales`, and unlike
+     * its number formatting it does not degrade when that constructor throws:
+     * the `RangeError` is recorded as a formatting error and the whole message
+     * resolves to `{???}`. So a bundle formats under English whenever its tag
+     * is one `Intl` cannot parse. That loses the locale's counting and number
+     * conventions — which were never available for such a tag anyway — and
+     * keeps the host's own words, which are the part that was really asked
+     * for.
+     */
+    locale: string;
+    bundle: FluentBundle;
+};
+
+function createChainLink(
+    locale: string,
+    source: string,
+    useIsolating: boolean,
+    onError: CreateTranslatorOptions["onError"],
+): ChainLink {
+    const bundle = new FluentBundle(intlLocale(locale), {
+        useIsolating,
+    });
+    const errors = bundle.addResource(new FluentResource(source));
+    for (const error of errors) {
+        onError?.(error, "", locale);
+    }
+    return { locale, bundle };
+}
+
+/**
+ * Build a translator over a negotiated locale chain.
+ *
+ * @param locales Locale chain, most specific first — the output of
+ *   {@link negotiateLocales}. Locales with no entry in `resources` are skipped,
+ *   so a chain may be passed verbatim even when only some catalogs loaded.
+ * @param resources FTL source per locale. Use `combineCatalogs` to merge the
+ *   namespaces a context needs. English need not be included: it is bundled.
+ */
+export function createTranslator(
+    locales: string[],
+    resources: Record<string, string>,
+    options: CreateTranslatorOptions = {},
+): Translator {
+    const {
+        useIsolating = false,
+        onError,
+        includeBuiltinEnglish = true,
+    } = options;
+
+    const bundles: ChainLink[] = [];
+    for (const locale of locales) {
+        const source = resources[locale];
+        if (source !== undefined) {
+            bundles.push(
+                createChainLink(locale, source, useIsolating, onError),
+            );
+        }
+    }
+    if (includeBuiltinEnglish) {
+        bundles.push(
+            createChainLink(
+                DEFAULT_LOCALE,
+                EN_CATALOG_SOURCE,
+                useIsolating,
+                onError,
+            ),
+        );
+    }
+
+    const translate: Translator = (key, args, fallback) => {
+        for (const { locale, bundle } of bundles) {
+            const pattern = lookupPattern(bundle, key);
+            if (pattern === null) {
+                continue;
+            }
+            const errors: Error[] = [];
+            const formatted = bundle.formatPattern(pattern, args, errors);
+            for (const error of errors) {
+                onError?.(error, key, locale);
+            }
+            return formatted;
+        }
+        // Nothing in the chain, not even English: the caller's own English
+        // string is the last resort, and the key itself if there isn't one —
+        // a visible miss beats an empty label.
+        return fallback ?? key;
+    };
+
+    translate.localeOf = (key: string) =>
+        bundles.find(({ bundle }) => lookupPattern(bundle, key) !== null)
+            ?.locale;
+
+    return translate;
+}
+
+/**
+ * Adapt a {@link Translator} to the two-argument shape
+ * `resolveColorWord`'s `translate` option already expects.
+ *
+ * The signature is restated structurally rather than imported as
+ * `ColorWordTranslator` from `@doenet/utils`. This package deliberately
+ * depends on no other workspace package, so that every layer — the viewer,
+ * the worker, `@doenet/utils` itself — can consume it; importing a type back
+ * from a consumer would give that up to save one line.
+ */
+export function asFallbackTranslator(
+    translate: Translator,
+): (key: string, englishWord: string) => string {
+    return (key, englishWord) => translate(key, undefined, englishWord);
+}

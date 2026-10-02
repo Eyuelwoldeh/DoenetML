@@ -4,6 +4,11 @@ import * as MdMdnMrow from "./components/MdMdnMrow";
 import * as BooleanOperators from "./components/BooleanOperators";
 import * as BooleanOperatorsOfMath from "./components/BooleanOperatorsOfMath";
 import * as MathOperators from "./components/MathOperators";
+import * as MathListOperators from "./components/MathListOperators";
+import * as ListIndexOperators from "./components/ListIndexOperators";
+import * as CountOperators from "./components/CountOperators";
+import Chart from "./components/Chart";
+import Series from "./components/Series";
 import * as FunctionOperators from "./components/FunctionOperators";
 import * as TextOperatorsOfMath from "./components/TextOperatorsOfMath";
 import * as Extrema from "./components/Extrema";
@@ -15,6 +20,7 @@ import * as DynamicalSystems from "./components/dynamicalSystems";
 import * as Chemistry from "./components/chemistry";
 import * as FeedbackDefinitions from "./components/FeedbackDefinitions";
 import * as StyleDefinitions from "./components/StyleDefinitions";
+import * as StylePalette from "./components/StylePalette";
 import * as ComponentWithSelectableType from "./components/abstract/ComponentWithSelectableType";
 import * as SideBySide from "./components/SideBySide";
 import * as Indexing from "./components/Indexing";
@@ -22,6 +28,7 @@ import * as Divisions from "./components/Divisions";
 import * as Verbatim from "./components/Verbatim";
 import * as Paginator from "./components/Paginator";
 import * as MatrixInput from "./components/MatrixInput";
+import * as FractionInput from "./components/FractionInput";
 import * as Solution from "./components/Solution";
 
 import Document from "./components/Document";
@@ -106,6 +113,7 @@ import * as Parsons from "./components/Parsons";
 import Cell from "./components/Cell";
 import Row from "./components/Row";
 import Column from "./components/Column";
+import Col from "./components/Col";
 import CellBlock from "./components/CellBlock";
 import Tabular from "./components/Tabular";
 import Table from "./components/Table";
@@ -119,6 +127,7 @@ import AnimateFromSequence from "./components/AnimateFromSequence";
 import Evaluate from "./components/Evaluate";
 import SelectRandomNumbers from "./components/SelectRandomNumbers";
 import SampleRandomNumbers from "./components/SampleRandomNumbers";
+import SampleMultivariateRandomNumber from "./components/SampleMultivariateRandomNumber";
 import SelectPrimeNumbers from "./components/SelectPrimeNumbers";
 import SamplePrimeNumbers from "./components/SamplePrimeNumbers";
 import Substitute from "./components/Substitute";
@@ -147,6 +156,7 @@ import Caption from "./components/Caption";
 import Endpoint from "./components/Endpoint";
 import Sort from "./components/Sort";
 import Shuffle from "./components/Shuffle";
+import SortIndices from "./components/SortIndices";
 import SolveEquations from "./components/SolveEquations";
 import PostponeRenderContainer from "./components/PostponeRenderContainer";
 import SubsetOfRealsInput from "./components/SubsetOfRealsInput";
@@ -155,6 +165,8 @@ import Split from "./components/Split";
 import BestFitLine from "./components/BestFitLine";
 import RegionBetweenCurveXAxis from "./components/RegionBetweenCurveXAxis";
 import RegionBetweenCurves from "./components/RegionBetweenCurves";
+import SlopeField from "./components/SlopeField";
+import VectorField from "./components/VectorField";
 import RegionHalfPlane from "./components/RegionHalfPlane";
 import CodeEditor from "./components/CodeEditor";
 import HasSameFactoring from "./components/HasSameFactoring";
@@ -174,6 +186,7 @@ import StickyGroup from "./components/StickyGroup";
 import Pretzel from "./components/Pretzel";
 import PretzelArranger from "./components/PretzelArranger";
 import Cascade from "./components/Cascade";
+import Page from "./components/Page";
 import DynamicChildren from "./components/DynamicChildren";
 import ShortDescription from "./components/ShortDescription";
 
@@ -212,6 +225,11 @@ const componentTypeArray = [
     ...Object.values(BooleanOperators),
     ...Object.values(BooleanOperatorsOfMath),
     ...Object.values(MathOperators),
+    ...Object.values(MathListOperators),
+    ...Object.values(ListIndexOperators),
+    ...Object.values(CountOperators),
+    Chart,
+    Series,
     ...Object.values(FunctionOperators),
     ...Object.values(TextOperatorsOfMath),
     ...Object.values(Extrema),
@@ -223,6 +241,7 @@ const componentTypeArray = [
     ...Object.values(Chemistry),
     ...Object.values(FeedbackDefinitions),
     ...Object.values(StyleDefinitions),
+    ...Object.values(StylePalette),
     ...Object.values(SideBySide),
     ...Object.values(ComponentWithSelectableType),
     ...Object.values(Indexing),
@@ -230,6 +249,7 @@ const componentTypeArray = [
     ...Object.values(Verbatim),
     ...Object.values(Paginator),
     ...Object.values(MatrixInput),
+    ...Object.values(FractionInput),
     ...Object.values(Solution),
     Document,
     Text,
@@ -289,6 +309,7 @@ const componentTypeArray = [
     Cell,
     Row,
     Column,
+    Col,
     CellBlock,
     Tabular,
     Table,
@@ -322,6 +343,7 @@ const componentTypeArray = [
     Evaluate,
     SelectRandomNumbers,
     SampleRandomNumbers,
+    SampleMultivariateRandomNumber,
     SelectPrimeNumbers,
     SamplePrimeNumbers,
     Substitute,
@@ -349,6 +371,7 @@ const componentTypeArray = [
     Caption,
     Endpoint,
     Sort,
+    SortIndices,
     Shuffle,
     SolveEquations,
     PostponeRenderContainer,
@@ -358,6 +381,8 @@ const componentTypeArray = [
     BestFitLine,
     RegionBetweenCurveXAxis,
     RegionBetweenCurves,
+    SlopeField,
+    VectorField,
     RegionHalfPlane,
     CodeEditor,
     HasSameFactoring,
@@ -377,6 +402,7 @@ const componentTypeArray = [
     Pretzel,
     PretzelArranger,
     Cascade,
+    Page,
     DynamicChildren,
     ShortDescription,
 

@@ -10,6 +10,7 @@ import {
     updateMatrixInputValue,
     updateSelectedIndices,
     updateTextInputValue,
+    updateValue,
 } from "../utils/actions";
 import { latexToMathFactory, normalizeLatexString } from "../../utils/math";
 import { PublicDoenetMLCore } from "../../CoreWorker";
@@ -935,7 +936,12 @@ async function test_answer_multiple_inputs({
             if (inputs[i].type === "math") {
                 val = fromLatex(val).tree;
             } else if (inputs[i].type === "number") {
-                val = fromLatex(val).evaluate_to_constant();
+                // A number input reports "not a number" as `NaN`, and so does
+                // `evaluate_to_constant()` for the blank an empty entry parses
+                // to. The `??` is belt and braces — it was load-bearing while
+                // the engine declined with `null`. Translate it the way the
+                // component does.
+                val = fromLatex(val).evaluate_to_constant() ?? NaN;
             } else if (inputs[i].type === "boolean") {
                 val = val === "true";
             }
@@ -2833,6 +2839,258 @@ The animal is a <answer name="answer1">
         });
     });
 
+    it("award and choice credit state variables are capped to 0 to 1", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <answer>
+      <mathInput />
+      <award name="aw1" credit="2"><when>true</when></award>
+      <award name="aw2" credit="-1"><when>true</when></award>
+      <award name="aw3" credit="abc"><when>true</when></award>
+      <award name="aw4" credit="0.4"><when>true</when></award>
+      <award name="aw5"><when>true</when></award>
+    </answer>
+    <choiceInput>
+      <choice name="c1" credit="2">a</choice>
+      <choice name="c2" credit="-1">b</choice>
+      <choice name="c3" credit="0.4">c</choice>
+      <choice name="c4">d</choice>
+    </choiceInput>
+    <p name="p">$aw1.credit, $aw2.credit, $aw3.credit, $aw4.credit, $aw5.credit, $c1.credit, $c2.credit, $c3.credit, $c4.credit</p>
+    `,
+        });
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        const expected = {
+            aw1: 1,
+            aw2: 0,
+            aw3: 0,
+            aw4: 0.4,
+            aw5: 1,
+            c1: 1,
+            c2: 0,
+            c3: 0.4,
+            c4: 0,
+        };
+        for (const [name, credit] of Object.entries(expected)) {
+            expect(
+                stateVariables[await resolvePathToNodeIdx(name)].stateValues
+                    .credit,
+                name,
+            ).eq(credit);
+        }
+        expect(
+            stateVariables[await resolvePathToNodeIdx("p")].stateValues.text,
+        ).eq("1, 0, 0, 0.4, 1, 1, 0, 0.4, 0");
+    });
+
+    it("award and choice credit follow changes and writes, capped to 0 to 1", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <mathInput name="mi" prefill="0.5" />
+    <answer name="ans">
+      <mathInput name="x" />
+      <award name="aw1" credit="$mi"><when>true</when></award>
+    </answer>
+    <answer name="ans2">
+      <mathInput name="y" />
+      <award name="aw2"><when>true</when></award>
+    </answer>
+    <updateValue name="uv1" target="$aw2.credit" newValue="2" />
+    <updateValue name="uv2" target="$aw2.credit" newValue="0.3" />
+    <choiceInput><choice name="c">a</choice></choiceInput>
+    <mathInput name="bind" bindValueTo="$c.credit" />
+    <p name="p">$aw1.credit, $aw2.credit, $c.credit</p>
+    `,
+        });
+
+        async function check(text: string) {
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            expect(
+                stateVariables[await resolvePathToNodeIdx("p")].stateValues
+                    .text,
+            ).eq(text);
+        }
+
+        await check("0.5, 1, 0");
+
+        await updateMathInputValue({
+            latex: "3",
+            componentIdx: await resolvePathToNodeIdx("mi"),
+            core,
+        });
+        await check("1, 1, 0");
+
+        await updateMathInputValue({
+            latex: "0.2",
+            componentIdx: await resolvePathToNodeIdx("mi"),
+            core,
+        });
+        await check("0.2, 1, 0");
+
+        // `<updateValue>` writes a math value by default
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("uv1"),
+            core,
+        });
+        await check("0.2, 1, 0");
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("uv2"),
+            core,
+        });
+        await check("0.2, 0.3, 0");
+
+        await updateMathInputValue({
+            latex: "4",
+            componentIdx: await resolvePathToNodeIdx("bind"),
+            core,
+        });
+        await check("0.2, 0.3, 1");
+        await updateMathInputValue({
+            latex: "0.5",
+            componentIdx: await resolvePathToNodeIdx("bind"),
+            core,
+        });
+        await check("0.2, 0.3, 0.5");
+
+        for (const [input, answer, credit] of [
+            ["x", "ans", 0.2],
+            ["y", "ans2", 0.3],
+        ] as const) {
+            await updateMathInputValue({
+                latex: "1",
+                componentIdx: await resolvePathToNodeIdx(input),
+                core,
+            });
+            await submitAnswer({
+                componentIdx: await resolvePathToNodeIdx(answer),
+                core,
+            });
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            expect(
+                stateVariables[await resolvePathToNodeIdx(answer)].stateValues
+                    .creditAchieved,
+            ).eq(credit);
+        }
+    });
+
+    it("award and choice credit written as a boolean or text become numbers", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <answer name="ans">
+      <mathInput name="x" />
+      <award name="aw"><when>true</when></award>
+    </answer>
+    <updateValue name="uv0" target="$aw.credit" newValue="0" type="number" />
+    <updateValue name="uvBool" target="$aw.credit" newValue="true" type="boolean" />
+    <choiceInput><choice name="c">a</choice></choiceInput>
+    <updateValue name="uvText" target="$c.credit" newValue="0.25" type="text" />
+    <p name="p">$aw.credit, $c.credit</p>
+    `,
+        });
+
+        async function check(text: string) {
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            expect(
+                stateVariables[await resolvePathToNodeIdx("p")].stateValues
+                    .text,
+            ).eq(text);
+        }
+
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("uv0"),
+            core,
+        });
+        await check("0, 0");
+
+        // true is full credit, as with `credit="true"`
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("uvBool"),
+            core,
+        });
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("uvText"),
+            core,
+        });
+        await check("1, 0.25");
+
+        await updateMathInputValue({
+            latex: "1",
+            componentIdx: await resolvePathToNodeIdx("x"),
+            core,
+        });
+        await submitAnswer({
+            componentIdx: await resolvePathToNodeIdx("ans"),
+            core,
+        });
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("ans")].stateValues
+                .creditAchieved,
+        ).eq(1);
+    });
+
+    it("answer with choiceInput, choice credit outside 0 to 1 is capped", async () => {
+        const doenetML = `
+The animal is a <answer name="answer1">
+<choiceInput>
+    <choice credit="2">cat</choice>
+    <choice credit="-1">dog</choice>
+    <choice>monkey</choice>
+</choiceInput>
+</answer>
+  `;
+
+        await test_choice_answer({
+            doenetML,
+            answers: [
+                { choices: ["cat"], credit: 1 },
+                { choices: ["dog"], credit: 0 },
+                { choices: ["monkey"], credit: 0 },
+            ],
+            indexByName: {
+                cat: 1,
+                dog: 2,
+                monkey: 3,
+            },
+        });
+    });
+
+    it("answer with select-multiple choiceInput, choice credit above 1 counts as correct", async () => {
+        const doenetML = `
+The animal is a <answer name="answer1">
+<choiceInput selectMultiple>
+    <choice credit="2">cat</choice>
+    <choice credit="1">dog</choice>
+    <choice>monkey</choice>
+</choiceInput>
+</answer>
+  `;
+
+        await test_choice_answer({
+            doenetML,
+            answers: [
+                { choices: ["dog"], credit: 0 },
+                { choices: ["dog", "cat"], credit: 1 },
+                { choices: ["monkey", "cat", "dog"], credit: 0 },
+            ],
+            indexByName: {
+                cat: 1,
+                dog: 2,
+                monkey: 3,
+            },
+        });
+    });
+
     it("answer with select-multiple sugared choices, fixed order", async () => {
         const doenetML = `
 The animal is a <answer name="answer1" selectMultiple matchPartial>
@@ -3441,6 +3699,223 @@ Enter any letter:
         });
     });
 
+    // An index that is itself a reference — `$mis[$k]` rather than `$mis[1]` —
+    // is two separate components where the author wrote the same thing twice,
+    // once in the attribute and once in the `<when>`. Matching the attribute
+    // against the descendant it points at therefore has to compare what those
+    // two components refer to; comparing them as values says an index differs
+    // from itself, and the input is graded but never recorded.
+    it("referencesAreResponses recognizes an index that is itself a reference", async () => {
+        async function submitAndGetResponses(index: string) {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML: `
+        <mathInput name="mi1" /> <mathInput name="mi2" />
+        <setup>
+          <group name="mis">$mi1 $mi2</group>
+          <number name="k">1</number>
+          <number name="j">2</number>
+        </setup>
+        <answer name="ans">
+          <award referencesAreResponses="$mis${index}"><when>$mis${index} = 1</when></award>
+        </answer>
+        `,
+            });
+
+            await updateMathInputValue({
+                latex: "1",
+                componentIdx: await resolvePathToNodeIdx("mi1"),
+                core,
+            });
+            await submitAnswer({
+                componentIdx: await resolvePathToNodeIdx("ans"),
+                core,
+            });
+
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            const answer =
+                stateVariables[await resolvePathToNodeIdx("ans")].stateValues;
+            return {
+                credit: answer.creditAchieved,
+                current: answer.currentResponses.map((r: any) => r.tree),
+                submitted: answer.submittedResponses.map((r: any) => r.tree),
+            };
+        }
+
+        expect(await submitAndGetResponses("[$k]")).eqls({
+            credit: 1,
+            current: [1],
+            submitted: [1],
+        });
+
+        // The literal index, which worked all along, for contrast.
+        expect(await submitAndGetResponses("[1]")).eqls({
+            credit: 1,
+            current: [1],
+            submitted: [1],
+        });
+
+        // An index that is an expression rather than a bare reference — the
+        // `$i - 1` an author writes inside a `<repeat>`. Here the index is
+        // built out of children (a reference and the text after it) rather
+        // than being a reference itself, so it is the children that have to
+        // agree.
+        expect(await submitAndGetResponses("[$j - 1]")).eqls({
+            credit: 1,
+            current: [1],
+            submitted: [1],
+        });
+    });
+
+    // An index is compared by where its reference lands, not by how it was
+    // spelled. `$holder.k` and `$k` reach one number by two routes, so they
+    // name one index, and the reference *around* the index is already matched
+    // that way.
+    it("referencesAreResponses recognizes an index reference written two ways", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+        <mathInput name="mi1" /> <mathInput name="mi2" />
+        <setup>
+          <group name="mis">$mi1 $mi2</group>
+          <group name="holder"><number name="k">1</number></group>
+        </setup>
+        <answer name="ans">
+          <award referencesAreResponses="$mis[$holder.k]"><when>$mis[$k] = 1</when></award>
+        </answer>
+        `,
+        });
+
+        await updateMathInputValue({
+            latex: "1",
+            componentIdx: await resolvePathToNodeIdx("mi1"),
+            core,
+        });
+        await submitAnswer({
+            componentIdx: await resolvePathToNodeIdx("ans"),
+            core,
+        });
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        const answer =
+            stateVariables[await resolvePathToNodeIdx("ans")].stateValues;
+        expect(answer.creditAchieved).eq(1);
+        expect(answer.currentResponses.map((r: any) => r.tree)).eqls([1]);
+    });
+
+    // The comparison must still tell two different indices apart.
+    it("referencesAreResponses does not recognize a different reference index", async () => {
+        async function submitAndGetResponses(
+            attributeIndex: string,
+            whenIndex: string,
+        ) {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML: `
+        <mathInput name="mi1" /> <mathInput name="mi2" />
+        <setup>
+          <group name="mis">$mi1 $mi2</group>
+          <number name="k">1</number>
+          <number name="j">2</number>
+        </setup>
+        <answer name="ans">
+          <award referencesAreResponses="$mis${attributeIndex}"><when>$mis${whenIndex} = 1</when></award>
+        </answer>
+        `,
+            });
+
+            await updateMathInputValue({
+                latex: "1",
+                componentIdx: await resolvePathToNodeIdx("mi1"),
+                core,
+            });
+            await submitAnswer({
+                componentIdx: await resolvePathToNodeIdx("ans"),
+                core,
+            });
+
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            const answer =
+                stateVariables[await resolvePathToNodeIdx("ans")].stateValues;
+            return {
+                credit: answer.creditAchieved,
+                current: answer.currentResponses,
+            };
+        }
+
+        // `$mis[$j]` names the second input, so the first one is not its
+        // response: the two indices refer to different components.
+        expect(await submitAndGetResponses("[$j]", "[$k]")).eqls({
+            credit: 1,
+            current: [],
+        });
+
+        // A bare reference against an expression built around the same
+        // reference: `$k` alone and `$k + 1` are not even the same kind of
+        // component.
+        expect(await submitAndGetResponses("[$k + 1]", "[$k]")).eqls({
+            credit: 1,
+            current: [],
+        });
+
+        // Two expressions around the *same* reference, so neither the kind of
+        // component nor the referent tells them apart — only the text written
+        // after `$j`, which is where the children have to be compared.
+        expect(await submitAndGetResponses("[$j + 0]", "[$j - 1]")).eqls({
+            credit: 1,
+            current: [],
+        });
+    });
+
+    // The form the fix is for: the index is the `<repeat>`'s iteration value,
+    // which is the only thing an author has to write there. Each iteration
+    // gets its own copy of both references, renumbered as the body is
+    // duplicated, so the match has to hold up per iteration rather than once
+    // for the document.
+    it("referencesAreResponses recognizes a repeat's iteration value as an index", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+        <setup><group name="inputs"><mathInput name="a" /><mathInput name="b" /></group></setup>
+        <repeat name="r" for="1 2" valueName="i">
+          <answer name="ans">
+            <award referencesAreResponses="$inputs[$i]"><when>$inputs[$i] = 1</when></award>
+          </answer>
+        </repeat>
+        `,
+        });
+
+        for (const input of ["a", "b"]) {
+            await updateMathInputValue({
+                latex: "1",
+                componentIdx: await resolvePathToNodeIdx(input),
+                core,
+            });
+        }
+
+        for (const iteration of [1, 2]) {
+            await submitAnswer({
+                componentIdx: await resolvePathToNodeIdx(`r[${iteration}].ans`),
+                core,
+            });
+        }
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        for (const iteration of [1, 2]) {
+            const answer =
+                stateVariables[
+                    await resolvePathToNodeIdx(`r[${iteration}].ans`)
+                ].stateValues;
+            expect({
+                credit: answer.creditAchieved,
+                current: answer.currentResponses.map((r: any) => r.tree),
+                submitted: answer.submittedResponses.map((r: any) => r.tree),
+            }).eqls({ credit: 1, current: [1], submitted: [1] });
+        }
+    });
+
     it("isResponse from referencesAreResponses is not recursively copied", async () => {
         const doenetML = `
         <mathInput name="mi" />
@@ -3918,6 +4393,58 @@ Enter any letter:
         });
     });
 
+    it("award credits adding up to 1 give full credit despite round-off", async () => {
+        // Six additions of 1/6 come to 0.9999999999999999 in floating point.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+        <booleanInput name="bi1" /> <booleanInput name="bi2" />
+        <booleanInput name="bi3" /> <booleanInput name="bi4" />
+        <booleanInput name="bi5" /> <booleanInput name="bi6" />
+        <answer name="a" numAwardsCredited="6">
+          <award credit="1/6"><when>$bi1</when></award>
+          <award credit="1/6"><when>$bi2</when></award>
+          <award credit="1/6"><when>$bi3</when></award>
+          <award credit="1/6"><when>$bi4</when></award>
+          <award credit="1/6"><when>$bi5</when></award>
+          <award credit="1/6"><when>$bi6</when></award>
+        </answer>
+  `,
+        });
+        const answerIdx = await resolvePathToNodeIdx("a");
+
+        for (let i = 1; i <= 5; i++) {
+            await updateBooleanInputValue({
+                boolean: true,
+                componentIdx: await resolvePathToNodeIdx(`bi${i}`),
+                core,
+            });
+        }
+        await submitAnswer({ componentIdx: answerIdx, core });
+        let stateVariables = await core.returnAllStateVariables(false, true);
+        expect(stateVariables[answerIdx].stateValues.creditAchieved).closeTo(
+            5 / 6,
+            1e-14,
+        );
+        expect(stateVariables[answerIdx].stateValues.hasBeenCorrect).eq(false);
+        expect(
+            stateVariables[answerIdx].stateValues.numIncorrectSubmissions,
+        ).eq(1);
+
+        await updateBooleanInputValue({
+            boolean: true,
+            componentIdx: await resolvePathToNodeIdx("bi6"),
+            core,
+        });
+        await submitAnswer({ componentIdx: answerIdx, core });
+        stateVariables = await core.returnAllStateVariables(false, true);
+        expect(stateVariables[answerIdx].stateValues.creditAchieved).eq(1);
+        expect(stateVariables[answerIdx].stateValues.hasBeenCorrect).eq(true);
+        // The full-credit submission is not counted as incorrect.
+        expect(
+            stateVariables[answerIdx].stateValues.numIncorrectSubmissions,
+        ).eq(1);
+    });
+
     it("number of awards credited, zero credits are triggered", async () => {
         const doenetML = `
         <mathInput name="mi1" />
@@ -4057,6 +4584,51 @@ Enter any letter:
                 { latex: "x", credit: 1, submissionPrevented: true },
             ],
         });
+    });
+
+    it("numAttemptsLeft does not go negative when maxNumAttempts is reduced", async () => {
+        const doenetML = `
+    <p>Attempt limit: <mathInput name="limit" prefill="3" /></p>
+    <answer name="answer1" maxNumAttempts="$limit">x</answer>
+  `;
+
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML,
+        });
+
+        const answerIdx = await resolvePathToNodeIdx("answer1");
+        const limitIdx = await resolvePathToNodeIdx("limit");
+
+        let stateVariables = await core.returnAllStateVariables(false, true);
+        const mathInputIdx =
+            stateVariables[answerIdx].stateValues.inputChildren[0].componentIdx;
+        expect(stateVariables[answerIdx].stateValues.numAttemptsLeft).eq(3);
+
+        await updateMathInputValue({
+            latex: "y",
+            componentIdx: mathInputIdx,
+            core,
+        });
+        await submitAnswer({ componentIdx: answerIdx, core });
+        await updateMathInputValue({
+            latex: "z",
+            componentIdx: mathInputIdx,
+            core,
+        });
+        await submitAnswer({ componentIdx: answerIdx, core });
+
+        stateVariables = await core.returnAllStateVariables(false, true);
+        expect(stateVariables[answerIdx].stateValues.numSubmissions).eq(2);
+        expect(stateVariables[answerIdx].stateValues.numAttemptsLeft).eq(1);
+
+        await updateMathInputValue({
+            latex: "1",
+            componentIdx: limitIdx,
+            core,
+        });
+
+        stateVariables = await core.returnAllStateVariables(false, true);
+        expect(stateVariables[answerIdx].stateValues.numAttemptsLeft).eq(0);
     });
 
     it("disable after correct", async () => {
@@ -7359,6 +7931,43 @@ What is the derivative of <function name="f">x^2</function>?
         expect(stateVariables[answerIdx].stateValues.disabled).eq(true);
     });
 
+    it("disable wrong choices disables a choice with non-numeric credit", async () => {
+        // A non-numeric credit counts as 0, so the choice is a wrong one.
+        const doenetML = `
+    <answer name="ans" disableWrongChoices>
+        <choice credit="abc">A</choice>
+        <choice credit="1">B</choice>
+    </answer>
+  `;
+
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML,
+        });
+
+        let stateVariables = await core.returnAllStateVariables(false, true);
+        const answerIdx = await resolvePathToNodeIdx("ans");
+        const choiceInputIdx =
+            stateVariables[answerIdx].stateValues.inputChildren[0].componentIdx;
+        const choiceIndices = stateVariables[choiceInputIdx].activeChildren.map(
+            (child) => child.componentIdx,
+        );
+
+        await updateSelectedIndices({
+            componentIdx: choiceInputIdx,
+            selectedIndices: [1],
+            core,
+        });
+        await submitAnswer({ componentIdx: answerIdx, core });
+
+        stateVariables = await core.returnAllStateVariables(false, true);
+        expect(stateVariables[answerIdx].stateValues.creditAchieved).eq(0);
+        expect(
+            choiceIndices.map(
+                (idx) => stateVariables[idx].stateValues.disabled,
+            ),
+        ).eqls([true, false]);
+    });
+
     it("disable wrong choices", async () => {
         const doenetML = `
     <answer name="ans" disableWrongChoices>
@@ -7836,6 +8445,31 @@ What is the derivative of <function name="f">x^2</function>?
                 await resolvePathToNodeIdx("ans")
             ].activeChildren.map((child) => child.componentType),
         ).eqls(["description", "label", "award"]);
+    });
+
+    it("exposes the resolved correctness settings, not the raw attribute values", async () => {
+        // Each attribute writes a `…Preliminary` variable so the resolved
+        // definition can tell an unspecified attribute from a specified one
+        // and fall back to the ancestor. Those raw variables are plumbing;
+        // the resolved names are the properties an author references.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <answer name="ans" colorCorrectness="false" showCorrectness="false">x</answer>
+    <text name="colorResolved" extend="$ans.colorCorrectness" />
+    <text name="colorRaw" extend="$ans.colorCorrectnessPreliminary" />
+    <text name="showResolved" extend="$ans.showCorrectness" />
+    <text name="showRaw" extend="$ans.showCorrectnessPreliminary" />
+  `,
+        });
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        const value = async (name) =>
+            stateVariables[await resolvePathToNodeIdx(name)].stateValues.value;
+
+        expect(await value("colorResolved")).eq("false");
+        expect(await value("showResolved")).eq("false");
+        expect(await value("colorRaw")).eq("");
+        expect(await value("showRaw")).eq("");
     });
 
     it("color correctness set on sugared inputs", async () => {
@@ -8720,7 +9354,7 @@ What is the derivative of <function name="f">x^2</function>?
 
     it("force individual answer coloring  with section-wide check work", async () => {
         const doenetML = `
-    <section name="sec" sectionWideCheckWork forceIndividualAnswerColoring>
+    <section name="sec" sectionWideCheckWork colorAnswersSeparately>
         <answer name="ans1">
             <mathInput name="mi1"/>
                 x
@@ -8770,7 +9404,7 @@ What is the derivative of <function name="f">x^2</function>?
         expect(stateVariables[answer2Idx].stateValues.justSubmitted).eq(true);
         expect(stateVariables[answer2Idx].stateValues.creditAchieved).eq(0);
 
-        // since forceIndividualAnswerColoring is set,
+        // since colorAnswersSeparately is set,
         // math inputs should reflect their own answer credit achieved
         expect(stateVariables[mathInput1Idx].stateValues.justSubmitted).eq(
             true,
@@ -8785,7 +9419,7 @@ What is the derivative of <function name="f">x^2</function>?
 
     it("answer coloring based on document-wide check work by default", async () => {
         const doenetML = `
-    <document name="doc" documentWideCheckWork>
+    <document name="doc" sectionWideCheckWork>
         <answer name="ans1">
             <mathInput name="mi1"/>
                 x
@@ -8854,7 +9488,7 @@ What is the derivative of <function name="f">x^2</function>?
 
     it("force individual answer coloring  with document-wide check work", async () => {
         const doenetML = `
-    <document name="doc" documentWideCheckWork forceIndividualAnswerColoring>
+    <document name="doc" sectionWideCheckWork colorAnswersSeparately>
         <answer name="ans1">
             <mathInput name="mi1"/>
                 x
@@ -8904,7 +9538,7 @@ What is the derivative of <function name="f">x^2</function>?
         expect(stateVariables[answer2Idx].stateValues.justSubmitted).eq(true);
         expect(stateVariables[answer2Idx].stateValues.creditAchieved).eq(0);
 
-        // since forceIndividualAnswerColoring is set,
+        // since colorAnswersSeparately is set,
         // math inputs should reflect their own answer credit achieved
         expect(stateVariables[mathInput1Idx].stateValues.justSubmitted).eq(
             true,
@@ -9087,5 +9721,382 @@ What is the derivative of <function name="f">x^2</function>?
         const ansIdx = await resolvePathToNodeIdx("ans");
         // Should be false since there are no inputs
         expect(stateVariables[ansIdx].stateValues.focused).eq(false);
+    });
+
+    it("colorInputsSeparately with two mathInputs and separate awards", async () => {
+        // Each award references a different input; per-input coloring should
+        // color each box independently based on which award(s) it is covered by.
+        const doenetML = `
+  <mathInput name="mi1" forAnswer="$ans" />
+  <mathInput name="mi2" forAnswer="$ans" />
+  <answer name="ans" numAwardsCredited="2" colorInputsSeparately>
+    <award name="aw1" credit="0.5"><when>$mi1 = x</when></award>
+    <award name="aw2" credit="0.5"><when>$mi2 = y</when></award>
+    <award name="aw3" credit="0"><when>$mi1 = z</when></award>
+  </answer>
+  `;
+
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML,
+        });
+        const ansIdx = await resolvePathToNodeIdx("ans");
+        const mi1Idx = await resolvePathToNodeIdx("mi1");
+        const mi2Idx = await resolvePathToNodeIdx("mi2");
+
+        // Helper: submit and check per-input creditAchieved
+        async function checkCreditAfterSubmit({
+            mi1Latex,
+            mi2Latex,
+            expectedCredit,
+            expectedMi1Credit,
+            expectedMi2Credit,
+        }: {
+            mi1Latex: string;
+            mi2Latex: string;
+            expectedCredit: number;
+            expectedMi1Credit: number;
+            expectedMi2Credit: number;
+        }) {
+            await updateMathInputValue({
+                latex: mi1Latex,
+                componentIdx: mi1Idx,
+                core,
+            });
+            await updateMathInputValue({
+                latex: mi2Latex,
+                componentIdx: mi2Idx,
+                core,
+            });
+            await submitAnswer({ componentIdx: ansIdx, core });
+
+            const sv = await core.returnAllStateVariables(false, true);
+
+            expect(sv[ansIdx].stateValues.creditAchieved).closeTo(
+                expectedCredit,
+                1e-12,
+            );
+            expect(sv[mi1Idx].stateValues.creditAchieved).closeTo(
+                expectedMi1Credit,
+                1e-12,
+                `mi1 credit: expected ${expectedMi1Credit}`,
+            );
+            expect(sv[mi2Idx].stateValues.creditAchieved).closeTo(
+                expectedMi2Credit,
+                1e-12,
+                `mi2 credit: expected ${expectedMi2Credit}`,
+            );
+        }
+
+        // Both correct: both get full credit
+        await checkCreditAfterSubmit({
+            mi1Latex: "x",
+            mi2Latex: "y",
+            expectedCredit: 1,
+            expectedMi1Credit: 1,
+            expectedMi2Credit: 1,
+        });
+
+        // mi1 correct, mi2 wrong: mi1 green, mi2 red
+        await checkCreditAfterSubmit({
+            mi1Latex: "x",
+            mi2Latex: "z",
+            expectedCredit: 0.5,
+            expectedMi1Credit: 1,
+            expectedMi2Credit: 0,
+        });
+
+        // mi1 wrong, mi2 correct: mi1 red, mi2 green
+        await checkCreditAfterSubmit({
+            mi1Latex: "a",
+            mi2Latex: "y",
+            expectedCredit: 0.5,
+            expectedMi1Credit: 0,
+            expectedMi2Credit: 1,
+        });
+
+        // Both wrong: both red
+        await checkCreditAfterSubmit({
+            mi1Latex: "a",
+            mi2Latex: "b",
+            expectedCredit: 0,
+            expectedMi1Credit: 0,
+            expectedMi2Credit: 0,
+        });
+
+        // mi1 = z matches aw3 (credit=0 award): maxCredit for mi1 = 0.5 (aw1),
+        // aw3 is awarded but contributes 0 — so mi1 shows 0/0.5 = 0
+        await checkCreditAfterSubmit({
+            mi1Latex: "z",
+            mi2Latex: "y",
+            expectedCredit: 0.5,
+            expectedMi1Credit: 0,
+            expectedMi2Credit: 1,
+        });
+    });
+
+    it("colorInputsSeparately: award credit above 1 is capped for per-input credit", async () => {
+        // An award's earned credit is capped at 1, so the per-input maximum
+        // must be capped the same way or a correct input would get only 1/2.
+        const doenetML = `
+  <answer name="ans" colorInputsSeparately>
+    <mathInput name="mi" />
+    <award credit="2" referencesAreResponses="$mi"><when>$mi = x</when></award>
+    <award credit="0.5" referencesAreResponses="$mi"><when>$mi = y</when></award>
+  </answer>
+  `;
+
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML,
+        });
+        const ansIdx = await resolvePathToNodeIdx("ans");
+        const miIdx = await resolvePathToNodeIdx("mi");
+
+        for (const [latex, expectedCredit] of [
+            ["x", 1],
+            ["y", 0.5],
+            ["z", 0],
+        ] as const) {
+            await updateMathInputValue({ latex, componentIdx: miIdx, core });
+            await submitAnswer({ componentIdx: ansIdx, core });
+
+            const sv = await core.returnAllStateVariables(false, true);
+            expect(sv[ansIdx].stateValues.creditAchieved).eq(expectedCredit);
+            expect(sv[miIdx].stateValues.creditAchieved).eq(expectedCredit);
+        }
+    });
+
+    it("colorInputsSeparately: award credit above 1 with matchPartial gives each input the fraction satisfied", async () => {
+        const doenetML = `
+  <mathInput name="mi1" forAnswer="$ans" />
+  <mathInput name="mi2" forAnswer="$ans" />
+  <answer name="ans" colorInputsSeparately>
+    <award credit="2" matchPartial><when>$mi1 = x and $mi2 = y</when></award>
+  </answer>
+  `;
+
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML,
+        });
+        const ansIdx = await resolvePathToNodeIdx("ans");
+        const mi1Idx = await resolvePathToNodeIdx("mi1");
+        const mi2Idx = await resolvePathToNodeIdx("mi2");
+
+        await updateMathInputValue({ latex: "x", componentIdx: mi1Idx, core });
+        await updateMathInputValue({ latex: "z", componentIdx: mi2Idx, core });
+        await submitAnswer({ componentIdx: ansIdx, core });
+
+        const sv = await core.returnAllStateVariables(false, true);
+        expect(sv[ansIdx].stateValues.creditAchieved).eq(0.5);
+        expect(sv[mi1Idx].stateValues.creditAchieved).eq(0.5);
+        expect(sv[mi2Idx].stateValues.creditAchieved).eq(0.5);
+    });
+
+    it("colorInputsSeparately: award with non-numeric credit does not block a later award's per-input credit", async () => {
+        // Before the clamp, the NaN credit stuck as mi1's maximum, so mi1 fell
+        // back to the overall credit (0.5) instead of its own credit (1).
+        const doenetML = `
+  <mathInput name="mi1" forAnswer="$ans" />
+  <mathInput name="mi2" forAnswer="$ans" />
+  <answer name="ans" numAwardsCredited="2" colorInputsSeparately>
+    <award credit="abc"><when>$mi1 = x</when></award>
+    <award credit="0.5"><when>$mi1 = y</when></award>
+    <award credit="0.5"><when>$mi2 = z</when></award>
+  </answer>
+  `;
+
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML,
+        });
+        const ansIdx = await resolvePathToNodeIdx("ans");
+        const mi1Idx = await resolvePathToNodeIdx("mi1");
+        const mi2Idx = await resolvePathToNodeIdx("mi2");
+
+        await updateMathInputValue({ latex: "y", componentIdx: mi1Idx, core });
+        await updateMathInputValue({ latex: "w", componentIdx: mi2Idx, core });
+        await submitAnswer({ componentIdx: ansIdx, core });
+
+        const sv = await core.returnAllStateVariables(false, true);
+        expect(sv[ansIdx].stateValues.creditAchieved).eq(0.5);
+        expect(sv[mi1Idx].stateValues.creditAchieved).eq(1);
+        expect(sv[mi2Idx].stateValues.creditAchieved).eq(0);
+    });
+
+    it("colorInputsSeparately: input with no covering award falls back to overall credit", async () => {
+        // mi3 is not referenced by any award, so it should fall back to the
+        // answer's overall creditAchieved rather than getting a per-input value.
+        const doenetML = `
+  <mathInput name="mi1" forAnswer="$ans" />
+  <mathInput name="mi2" forAnswer="$ans" />
+  <mathInput name="mi3" forAnswer="$ans" />
+  <answer name="ans" numAwardsCredited="2" colorInputsSeparately>
+    <award name="aw1" credit="0.5"><when>$mi1 = x</when></award>
+    <award name="aw2" credit="0.5"><when>$mi2 = y</when></award>
+  </answer>
+  `;
+
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML,
+        });
+        const ansIdx = await resolvePathToNodeIdx("ans");
+        const mi1Idx = await resolvePathToNodeIdx("mi1");
+        const mi2Idx = await resolvePathToNodeIdx("mi2");
+        const mi3Idx = await resolvePathToNodeIdx("mi3");
+
+        await updateMathInputValue({ latex: "x", componentIdx: mi1Idx, core });
+        await updateMathInputValue({ latex: "y", componentIdx: mi2Idx, core });
+        await updateMathInputValue({ latex: "q", componentIdx: mi3Idx, core });
+        await submitAnswer({ componentIdx: ansIdx, core });
+
+        const sv = await core.returnAllStateVariables(false, true);
+        expect(sv[ansIdx].stateValues.creditAchieved).closeTo(1, 1e-12);
+        // mi1 and mi2 get per-input coloring
+        expect(sv[mi1Idx].stateValues.creditAchieved).closeTo(1, 1e-12);
+        expect(sv[mi2Idx].stateValues.creditAchieved).closeTo(1, 1e-12);
+        // mi3 has no covering award → falls back to overall answer credit (1)
+        expect(sv[mi3Idx].stateValues.creditAchieved).closeTo(1, 1e-12);
+    });
+
+    it("colorInputsSeparately: partial credit per input with multiple awards covering one input", async () => {
+        // Two awards cover mi1 (different correctness levels); the best awarded
+        // one determines actualCredit; maxCredit is the best overall.
+        const doenetML = `
+  <mathInput name="mi1" forAnswer="$ans" />
+  <mathInput name="mi2" forAnswer="$ans" />
+  <answer name="ans" numAwardsCredited="2" colorInputsSeparately>
+    <award name="aw1" credit="0.4"><when>$mi1 = x</when></award>
+    <award name="aw2" credit="0.2"><when>$mi1 = x^2</when></award>
+    <award name="aw3" credit="0.6"><when>$mi2 = y</when></award>
+  </answer>
+  `;
+
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML,
+        });
+        const ansIdx = await resolvePathToNodeIdx("ans");
+        const mi1Idx = await resolvePathToNodeIdx("mi1");
+        const mi2Idx = await resolvePathToNodeIdx("mi2");
+
+        // mi1 = x^2 (partial): aw2 awarded (credit=0.2), maxCredit for mi1=0.4
+        // mi2 = y (full): aw3 awarded (credit=0.6), maxCredit for mi2=0.6
+        await updateMathInputValue({
+            latex: "x^2",
+            componentIdx: mi1Idx,
+            core,
+        });
+        await updateMathInputValue({ latex: "y", componentIdx: mi2Idx, core });
+        await submitAnswer({ componentIdx: ansIdx, core });
+
+        const sv = await core.returnAllStateVariables(false, true);
+        // Overall: top-2 awards selected are aw3 (0.6) + aw2 (0.2) = 0.8
+        expect(sv[ansIdx].stateValues.creditAchieved).closeTo(0.8, 1e-12);
+        // mi1: actualCredit = 0.2 (aw2 awarded), maxCredit = 0.4 → ratio = 0.5
+        expect(sv[mi1Idx].stateValues.creditAchieved).closeTo(0.5, 1e-12);
+        // mi2: actualCredit = 0.6 (aw3 awarded), maxCredit = 0.6 → ratio = 1
+        expect(sv[mi2Idx].stateValues.creditAchieved).closeTo(1, 1e-12);
+    });
+
+    it("colorInputsSeparately: input reference nested inside <math> inside <when> is still detected", async () => {
+        // Verifies that referencedStateVars uses descendant traversal, not just
+        // direct children. <when><math>$mi1</math>=x</when> puts the shadow of
+        // mi1 inside <math>, not as a direct child of <when>.
+        const doenetML = `
+  <mathInput name="mi1" forAnswer="$ans" />
+  <mathInput name="mi2" forAnswer="$ans" />
+  <answer name="ans" numAwardsCredited="2" colorInputsSeparately>
+    <award name="aw1" credit="0.5"><when><math>$mi1</math>=x</when></award>
+    <award name="aw2" credit="0.5"><when><math>$mi2</math>=y</when></award>
+  </answer>
+  `;
+
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML,
+        });
+        const ansIdx = await resolvePathToNodeIdx("ans");
+        const mi1Idx = await resolvePathToNodeIdx("mi1");
+        const mi2Idx = await resolvePathToNodeIdx("mi2");
+
+        // Both correct
+        await updateMathInputValue({ latex: "x", componentIdx: mi1Idx, core });
+        await updateMathInputValue({ latex: "y", componentIdx: mi2Idx, core });
+        await submitAnswer({ componentIdx: ansIdx, core });
+
+        let sv = await core.returnAllStateVariables(false, true);
+        expect(sv[ansIdx].stateValues.creditAchieved).closeTo(1, 1e-12);
+        expect(sv[mi1Idx].stateValues.creditAchieved).closeTo(1, 1e-12);
+        expect(sv[mi2Idx].stateValues.creditAchieved).closeTo(1, 1e-12);
+
+        // mi1 wrong, mi2 correct
+        await updateMathInputValue({ latex: "z", componentIdx: mi1Idx, core });
+        await submitAnswer({ componentIdx: ansIdx, core });
+
+        sv = await core.returnAllStateVariables(false, true);
+        expect(sv[ansIdx].stateValues.creditAchieved).closeTo(0.5, 1e-12);
+        expect(sv[mi1Idx].stateValues.creditAchieved).closeTo(0, 1e-12);
+        expect(sv[mi2Idx].stateValues.creditAchieved).closeTo(1, 1e-12);
+    });
+
+    it("colorInputsSeparately works for choiceInput implicit values", async () => {
+        const doenetML = `
+  <choiceInput name="ci" forAnswer="$ans">
+    <choice>A</choice>
+    <choice>B</choice>
+  </choiceInput>
+  <mathInput name="mi" forAnswer="$ans" />
+  <answer name="ans" numAwardsCredited="2" colorInputsSeparately>
+    <award credit="0.5"><when>$ci = B</when></award>
+    <award credit="0.5"><when>$mi = x</when></award>
+  </answer>
+  `;
+
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML,
+        });
+        const ansIdx = await resolvePathToNodeIdx("ans");
+        const choiceInputIdx = await resolvePathToNodeIdx("ci");
+        const mathInputIdx = await resolvePathToNodeIdx("mi");
+
+        await updateSelectedIndices({
+            componentIdx: choiceInputIdx,
+            selectedIndices: [2],
+            core,
+        });
+        await updateMathInputValue({
+            latex: "z",
+            componentIdx: mathInputIdx,
+            core,
+        });
+        await submitAnswer({ componentIdx: ansIdx, core });
+
+        const sv = await core.returnAllStateVariables(false, true);
+        expect(sv[ansIdx].stateValues.creditAchieved).closeTo(0.5, 1e-12);
+        expect(sv[choiceInputIdx].stateValues.creditAchieved).closeTo(1, 1e-12);
+        expect(sv[mathInputIdx].stateValues.creditAchieved).closeTo(0, 1e-12);
+    });
+
+    it("without colorInputsSeparately all linked inputs use overall credit", async () => {
+        const doenetML = `
+  <mathInput name="mi1" forAnswer="$ans" />
+  <mathInput name="mi2" forAnswer="$ans" />
+  <answer name="ans" numAwardsCredited="2">
+    <award credit="0.5"><when>$mi1 = x</when></award>
+    <award credit="0.5"><when>$mi2 = y</when></award>
+  </answer>
+  `;
+
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML,
+        });
+        const ansIdx = await resolvePathToNodeIdx("ans");
+        const mi1Idx = await resolvePathToNodeIdx("mi1");
+        const mi2Idx = await resolvePathToNodeIdx("mi2");
+
+        await updateMathInputValue({ latex: "x", componentIdx: mi1Idx, core });
+        await updateMathInputValue({ latex: "z", componentIdx: mi2Idx, core });
+        await submitAnswer({ componentIdx: ansIdx, core });
+
+        const sv = await core.returnAllStateVariables(false, true);
+        expect(sv[ansIdx].stateValues.creditAchieved).closeTo(0.5, 1e-12);
+        expect(sv[mi1Idx].stateValues.creditAchieved).closeTo(0.5, 1e-12);
+        expect(sv[mi2Idx].stateValues.creditAchieved).closeTo(0.5, 1e-12);
     });
 });

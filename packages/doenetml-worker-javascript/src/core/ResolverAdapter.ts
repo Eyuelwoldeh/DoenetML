@@ -16,9 +16,28 @@ import {
  * Stateless — the resolver lives outside this process. Each function takes
  * a back-reference to Core to read `_components` / `componentInfoObjects`,
  * invoke the resolver callbacks (`addNodesToResolver`,
- * `deleteNodesFromResolver`, `calculateRootNames`), append diagnostics, and
+ * `deleteNodesFromResolver`, `updateRootNames`), append diagnostics, and
  * notify `dependencies.addBlockersFromChangedReplacements`.
  */
+
+/**
+ * Bring `core.rootNames` up to date with the resolver by applying the root
+ * names that changed since the last call. With `reportAll`, the resolver
+ * reports every root name, for a `core.rootNames` that starts out empty.
+ */
+export function refreshRootNames(core: Core, reportAll = false): void {
+    const result = core.updateRootNames?.(reportAll);
+    if (!result) {
+        return;
+    }
+    for (const [componentIdx, name] of result.changes) {
+        if (name == null) {
+            delete core.rootNames[componentIdx];
+        } else {
+            core.rootNames[componentIdx] = name;
+        }
+    }
+}
 
 export async function addReplacementsToResolver({
     core,
@@ -48,17 +67,28 @@ export async function addReplacementsToResolver({
             blankStringReplacements,
         });
 
-    // If `createComponentIdx` was specified, the one replacement is already in the resolver,
-    // so we just add its children and attribute components/references.
-    // Otherwise add all replacements.
+    // If `createComponentIdx` was specified, the composite is expected to produce
+    // a single replacement, which took that component index and so is already in
+    // the resolver: it is the parent of the fragment, and we add its children and
+    // attribute components/references.
+    //
+    // A composite can produce a different number of replacements than that, in
+    // which case none of them took the index -- `adjustForCreateComponentIdxName`
+    // and `addAttributesToSingleReplacement` both only act on a lone replacement.
+    // The node at `createComponentIdx` is then a parent with no component of its
+    // own, and the replacements are its children, as in the case below.
+    const fragmentParent = replacementActingAsFragmentParent(
+        serializedReplacements,
+        component,
+    );
     const fragmentChildren: any[] = [];
     let parentSourceSequence: any = null;
-    if (component.attributes.createComponentIdx != null) {
-        if (serializedReplacements[0]?.children) {
-            fragmentChildren.push(...serializedReplacements[0].children);
+    if (fragmentParent) {
+        if (fragmentParent.children) {
+            fragmentChildren.push(...fragmentParent.children);
         }
-        for (const attrName in serializedReplacements[0]?.attributes) {
-            const attribute = serializedReplacements[0].attributes[attrName];
+        for (const attrName in fragmentParent.attributes) {
+            const attribute = fragmentParent.attributes[attrName];
             if (attribute.type === "component") {
                 fragmentChildren.push(attribute.component);
             } else if (attribute.type === "references") {
@@ -68,8 +98,7 @@ export async function addReplacementsToResolver({
 
         // if the replacement that is the fragment parent has a source sequence,
         // then add that as the `parentSourceSequence` of the flat fragment
-        let sourceSequence =
-            serializedReplacements[0]?.attributes["source:sequence"];
+        let sourceSequence = fragmentParent.attributes["source:sequence"];
         const createComponentIdxPrimitive =
             component.attributes.createComponentIdx?.primitive;
         if (sourceSequence && createComponentIdxPrimitive?.type === "number") {
@@ -111,7 +140,7 @@ export async function addReplacementsToResolver({
     ) {
         core.addNodesToResolver(flatFragment, indexResolution);
 
-        core.rootNames = core.calculateRootNames?.().names;
+        refreshRootNames(core);
 
         let indexParent =
             indexResolution.ReplaceAll?.parent ??
@@ -128,6 +157,42 @@ export async function addReplacementsToResolver({
             }
         }
     }
+}
+
+/**
+ * Return the replacement that the resolver already holds as the composite's
+ * `createComponentIdx` node, or `null` if there is none.
+ *
+ * A composite with `createComponentIdx` set is expected to produce exactly one
+ * replacement, which is given that index (by `adjustForCreateComponentIdxName`,
+ * `addAttributesToSingleReplacement`, or `verifyReplacementsMatchSpecifiedType`,
+ * each of which acts only on a lone replacement). When the composite produces a
+ * different number of replacements -- none, or several, as a reference to a
+ * repeat iteration whose body has more than one child does -- no replacement
+ * carries the index and there is no fragment parent among them.
+ */
+function replacementActingAsFragmentParent(
+    serializedReplacements: any[],
+    component: any,
+): any | null {
+    const createComponentIdx =
+        component.attributes.createComponentIdx?.primitive?.value;
+
+    if (createComponentIdx == null || serializedReplacements.length !== 1) {
+        return null;
+    }
+
+    const replacement = serializedReplacements[0];
+
+    if (
+        typeof replacement !== "object" ||
+        replacement === null ||
+        getEffectiveComponentIdx(replacement) !== createComponentIdx
+    ) {
+        return null;
+    }
+
+    return replacement;
 }
 
 export async function determineParentAndIndexResolutionForResolver({
@@ -230,10 +295,13 @@ export async function determineParentAndIndexResolutionForResolver({
         if (copyComponent.replacementOf) {
             const indexParent = copyComponent.replacementOf;
 
-            // determine where the replacement will end up being spliced in
+            // Determine where the replacement will end up being spliced in.
+            // This is the span of `component` itself, which is only part of
+            // `copyComponent`'s when `component` is a replacement of another
+            // copy, as the copy of `$m7` is in a copy of `<group>$m7 $l</group>`.
             const { startIdx, endIdx } = await calcStartEndIdx({
                 replacements: indexParent.replacements,
-                copyComponentIdx: copyComponent.componentIdx,
+                copyComponentIdx: component.componentIdx,
                 updateStart: update_start,
                 updateEnd: update_end,
             });
@@ -246,8 +314,9 @@ export async function determineParentAndIndexResolutionForResolver({
                     },
                 };
             } else {
-                // if the copy was not found as a replacement of the composite,
-                // then it wasn't a top-level replacement and it doesn't affect the composite's index resolution
+                // If the copy is not one of the composite's active items (it is
+                // inside one of them, or withheld), it doesn't affect the
+                // composite's index resolution.
                 indexResolution = "None";
             }
         } else {
@@ -308,7 +377,7 @@ export function addComponentsToResolver({
     if (core.addNodesToResolver) {
         core.addNodesToResolver(flatFragment, "None");
 
-        core.rootNames = core.calculateRootNames?.().names;
+        refreshRootNames(core);
     }
 }
 
@@ -385,6 +454,6 @@ export function removeComponentsFromResolver({
             nodes: flatElements,
         });
 
-        core.rootNames = core.calculateRootNames?.().names;
+        refreshRootNames(core);
     }
 }

@@ -4581,7 +4581,7 @@ describe("Point tag tests @group4", async () => {
             );
             let coordsString = xString.join(", ");
             if (nDim > 1) {
-                coordsString = `( ${coordsString} )`;
+                coordsString = `(${coordsString})`;
             }
 
             const stateVariables = await core.returnAllStateVariables(
@@ -5551,49 +5551,49 @@ describe("Point tag tests @group4", async () => {
         const stateVariables = await core.returnAllStateVariables(false, true);
         expect(
             stateVariables[await resolvePathToNodeIdx("pP")].stateValues.text,
-        ).eq("( 32, 0.067, 5 )");
+        ).eq("(32, 0.067, 5)");
         expect(
             stateVariables[await resolvePathToNodeIdx("pQ")].stateValues.text,
-        ).eq("( 32.25, 0.07, 5 )");
+        ).eq("(32.25, 0.07, 5)");
         expect(
             stateVariables[await resolvePathToNodeIdx("pR")].stateValues.text,
-        ).eq("( 32.25, 0.0673, 5.00 )");
+        ).eq("(32.25, 0.0673, 5.00)");
         expect(
             stateVariables[await resolvePathToNodeIdx("Pcoords")].stateValues
                 .text,
-        ).eq("( 32, 0.067, 5 )");
+        ).eq("(32, 0.067, 5)");
         expect(
             stateVariables[await resolvePathToNodeIdx("Qcoords")].stateValues
                 .text,
-        ).eq("( 32.25, 0.07, 5 )");
+        ).eq("(32.25, 0.07, 5)");
         expect(
             stateVariables[await resolvePathToNodeIdx("Rcoords")].stateValues
                 .text,
-        ).eq("( 32.25, 0.0673, 5.00 )");
+        ).eq("(32.25, 0.0673, 5.00)");
         expect(
             stateVariables[await resolvePathToNodeIdx("PcoordsDec4")]
                 .stateValues.text,
-        ).eq("( 32.2526, 0.0673, 5 )");
+        ).eq("(32.2526, 0.0673, 5)");
         expect(
             stateVariables[await resolvePathToNodeIdx("QcoordsDig4")]
                 .stateValues.text,
-        ).eq("( 32.25, 0.06729, 5 )");
+        ).eq("(32.25, 0.06729, 5)");
         expect(
             stateVariables[await resolvePathToNodeIdx("RcoordsDig2")]
                 .stateValues.text,
-        ).eq("( 32, 0.067, 5.0 )");
+        ).eq("(32, 0.067, 5.0)");
         expect(
             stateVariables[await resolvePathToNodeIdx("PcoordsPad")].stateValues
                 .text,
-        ).eq("( 32, 0.067, 5.0 )");
+        ).eq("(32, 0.067, 5.0)");
         expect(
             stateVariables[await resolvePathToNodeIdx("QcoordsPad")].stateValues
                 .text,
-        ).eq("( 32.25, 0.07, 5.00 )");
+        ).eq("(32.25, 0.07, 5.00)");
         expect(
             stateVariables[await resolvePathToNodeIdx("RcoordsNoPad")]
                 .stateValues.text,
-        ).eq("( 32.25, 0.0673, 5 )");
+        ).eq("(32.25, 0.0673, 5)");
         // TODO: fix display digits propagation for math lists
         // expect(
         //     stateVariables[await resolvePathToNodeIdx("Pxs[1]")].stateValues.text,
@@ -5616,27 +5616,27 @@ describe("Point tag tests @group4", async () => {
         expect(
             stateVariables[await resolvePathToNodeIdx("Pmath")].stateValues
                 .text,
-        ).eq("( 32, 0.067, 5 )");
+        ).eq("(32, 0.067, 5)");
         expect(
             stateVariables[await resolvePathToNodeIdx("Qmath")].stateValues
                 .text,
-        ).eq("( 32.25, 0.07, 5 )");
+        ).eq("(32.25, 0.07, 5)");
         expect(
             stateVariables[await resolvePathToNodeIdx("Rmath")].stateValues
                 .text,
-        ).eq("( 32.25, 0.0673, 5.00 )");
+        ).eq("(32.25, 0.0673, 5.00)");
         expect(
             stateVariables[await resolvePathToNodeIdx("PmathDec4")].stateValues
                 .text,
-        ).eq("( 32.2526, 0.0673, 5 )");
+        ).eq("(32.2526, 0.0673, 5)");
         expect(
             stateVariables[await resolvePathToNodeIdx("QmathDig4")].stateValues
                 .text,
-        ).eq("( 32.25, 0.06729, 5 )");
+        ).eq("(32.25, 0.06729, 5)");
         expect(
             stateVariables[await resolvePathToNodeIdx("RmathDig2")].stateValues
                 .text,
-        ).eq("( 32, 0.067, 5.0 )");
+        ).eq("(32, 0.067, 5.0)");
         expect(
             stateVariables[await resolvePathToNodeIdx("Px1number")].stateValues
                 .text,
@@ -5670,25 +5670,25 @@ describe("Point tag tests @group4", async () => {
 
         expect(
             stateVariables[await resolvePathToNodeIdx("pp1")].stateValues.text,
-        ).eq("( 34.24502348, 245.238234 )");
+        ).eq("(34.24502348, 245.238234)");
 
         expect(
             stateVariables[await resolvePathToNodeIdx("pp1Dig4")].stateValues
                 .text,
-        ).eq("( 34.25, 245.2 )");
+        ).eq("(34.25, 245.2)");
         expect(
             stateVariables[await resolvePathToNodeIdx("pp1Dig4a")].stateValues
                 .text,
-        ).eq("( 34.25, 245.2 )");
+        ).eq("(34.25, 245.2)");
 
         expect(
             stateVariables[await resolvePathToNodeIdx("pp1Dec6")].stateValues
                 .text,
-        ).eq("( 34.24502, 245.23823 )");
+        ).eq("(34.24502, 245.23823)");
         expect(
             stateVariables[await resolvePathToNodeIdx("pp1Dec6a")].stateValues
                 .text,
-        ).eq("( 34.24502, 245.23823 )");
+        ).eq("(34.24502, 245.23823)");
     });
 
     it("warnings from attractTo and constrainTo", async () => {
@@ -6733,7 +6733,12 @@ describe("Point tag tests @group4", async () => {
             ).eqls(y2);
         }
 
-        let x1 = me.fromText("sqrt(-1)").tree;
+        // The engine folds a numeric radicand to its principal value, so the
+        // stored coordinate is `i` rather than the unevaluated `sqrt(-1)` the
+        // author typed. Spelled out rather than taken from
+        // `me.fromText("sqrt(-1)").simplify()`, which would put the engine on
+        // both sides of the comparison and pass for any answer it gave.
+        let x1 = "i";
         let y1 = 1;
         let x2 = 1;
         let y2 = x1;
@@ -6864,5 +6869,343 @@ describe("Point tag tests @group4", async () => {
         expect(p1Latex).match(/10\^{-12}|10\^\{21\}|10\^21/);
         expect(p2Latex).contain("0.000000000007");
         expect(p2Latex).contain("2000000000000000000000");
+    });
+
+    it("referencing a point directly in its own label works", async () => {
+        // Regression test for: https://github.com/Doenet/DoenetML/issues/1333
+        // `<label>$a</label>` inside point `a` should display the point's
+        // coordinates (same as `$a.coords`), not an error.
+        // Also covers context-aware fallback selection:
+        // - $a directly in <label>
+        // - $a via transparent <group> inside <label>
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+<graph>
+  <point name="a">(2,3)
+    <label>$a</label>
+  </point>
+  <point name="ref">(2,3)
+    <label>$ref.coords</label>
+  </point>
+  <point name="viaGroup">(2,3)
+    <label><group>$viaGroup</group></label>
+  </point>
+</graph>
+`,
+        });
+
+        const aIdx = await resolvePathToNodeIdx("a");
+        const refIdx = await resolvePathToNodeIdx("ref");
+        const viaGroupIdx = await resolvePathToNodeIdx("viaGroup");
+
+        async function check_labels(x: number, y: number) {
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            const aLabel = stateVariables[aIdx].stateValues.label;
+            const refLabel = stateVariables[refIdx].stateValues.label;
+            const viaGroupLabel = stateVariables[viaGroupIdx].stateValues.label;
+
+            // $a (self-reference) should give same result as $ref.coords
+            expect(aLabel).eq(refLabel);
+            // $viaGroup inside a transparent <group> should also match
+            expect(viaGroupLabel).eq(refLabel);
+
+            expect(
+                stateVariables[aIdx].stateValues.xs.map((v: any) => v.tree),
+            ).eqls([x, y]);
+            expect(
+                stateVariables[refIdx].stateValues.xs.map((v: any) => v.tree),
+            ).eqls([x, y]);
+            expect(
+                stateVariables[viaGroupIdx].stateValues.xs.map(
+                    (v: any) => v.tree,
+                ),
+            ).eqls([x, y]);
+        }
+
+        const diagnostics = getDiagnosticsByType(core);
+        expect(diagnostics.errors.length).eq(0);
+
+        // Initial state: all points at (2, 3), labels non-empty
+        const initialStateVariables = await core.returnAllStateVariables(
+            false,
+            true,
+        );
+        const initialLabel = initialStateVariables[aIdx].stateValues.label;
+        expect(typeof initialLabel).eq("string");
+        expect(initialLabel.length).greaterThan(0);
+        await check_labels(2, 3);
+
+        // Move point a and verify its label updates
+        await movePoint({ componentIdx: aIdx, x: -4, y: 7, core });
+        await movePoint({ componentIdx: refIdx, x: -4, y: 7, core });
+        await movePoint({ componentIdx: viaGroupIdx, x: -4, y: 7, core });
+        await check_labels(-4, 7);
+
+        // Move again
+        await movePoint({ componentIdx: aIdx, x: 0, y: -1, core });
+        await movePoint({ componentIdx: refIdx, x: 0, y: -1, core });
+        await movePoint({ componentIdx: viaGroupIdx, x: 0, y: -1, core });
+        await check_labels(0, -1);
+    });
+
+    it("self-referential point in label works via m, math, boolean contexts", async () => {
+        // <m>, <math>, and <boolean> are all recognized contexts, so a
+        // self-referential $a inside them within a <label> should resolve
+        // to the point's coordinates rather than error.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+<graph>
+  <point name="viaM">(2,3)
+    <label><m>$viaM</m></label>
+  </point>
+  <point name="viaMath">(2,3)
+    <label><math>$viaMath</math></label>
+  </point>
+  <point name="viaBoolean">(2,3)
+    <label><boolean>$viaBoolean</boolean></label>
+  </point>
+  <point name="ref">(2,3)
+    <label>$ref.coords</label>
+  </point>
+</graph>
+`,
+        });
+
+        const viaMIdx = await resolvePathToNodeIdx("viaM");
+        const viaMathIdx = await resolvePathToNodeIdx("viaMath");
+        const viaBooleanIdx = await resolvePathToNodeIdx("viaBoolean");
+        const refIdx = await resolvePathToNodeIdx("ref");
+
+        const diagnostics = getDiagnosticsByType(core);
+        expect(diagnostics.errors.length).eq(0);
+
+        async function check_labels(x: number, y: number) {
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            const viaMLabel = stateVariables[viaMIdx].stateValues.label;
+            const viaMathLabel = stateVariables[viaMathIdx].stateValues.label;
+            const viaBooleanLabel =
+                stateVariables[viaBooleanIdx].stateValues.label;
+
+            // All three should be non-empty strings
+            expect(typeof viaMLabel).eq("string");
+            expect(viaMLabel.length).greaterThan(0);
+            expect(typeof viaMathLabel).eq("string");
+            expect(viaMathLabel.length).greaterThan(0);
+            expect(typeof viaBooleanLabel).eq("string");
+            expect(viaBooleanLabel.length).greaterThan(0);
+
+            // <m> and <math> both render math, so they should match $ref.coords
+            const refLabel = stateVariables[refIdx].stateValues.label;
+            expect(viaMLabel).eq(refLabel);
+            expect(viaMathLabel).eq(refLabel);
+
+            expect(
+                stateVariables[viaMIdx].stateValues.xs.map((v: any) => v.tree),
+            ).eqls([x, y]);
+        }
+
+        await check_labels(2, 3);
+
+        await movePoint({ componentIdx: viaMIdx, x: -1, y: 4, core });
+        await movePoint({ componentIdx: viaMathIdx, x: -1, y: 4, core });
+        await movePoint({ componentIdx: viaBooleanIdx, x: -1, y: 4, core });
+        await movePoint({ componentIdx: refIdx, x: -1, y: 4, core });
+        await check_labels(-1, 4);
+    });
+
+    it("self-referential point works via number context and via adapted inner point", async () => {
+        // <number> is a recognized context (qualitatively similar to <math>).
+        // An inner <point> also works because point adapts to coords, a math subtype.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+<graph>
+  <point name="viaNumber">(2,3)
+    <label><number>$viaNumber</number></label>
+  </point>
+  <point name="viaInnerPoint">(2,3)
+    <label><point>$viaInnerPoint</point></label>
+  </point>
+</graph>
+`,
+        });
+
+        const diagnostics = getDiagnosticsByType(core);
+        expect(diagnostics.errors.length).eq(0);
+
+        const viaNumberIdx = await resolvePathToNodeIdx("viaNumber");
+        const viaInnerPointIdx = await resolvePathToNodeIdx("viaInnerPoint");
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        const viaNumberLabel = stateVariables[viaNumberIdx].stateValues.label;
+        const viaInnerPointLabel =
+            stateVariables[viaInnerPointIdx].stateValues.label;
+
+        expect(typeof viaNumberLabel).eq("string");
+        expect(viaNumberLabel.length).greaterThan(0);
+        expect(typeof viaInnerPointLabel).eq("string");
+        expect(viaInnerPointLabel.length).greaterThan(0);
+
+        // Labels update when the point moves (inner-point case tracks coords;
+        // number context renders NaN for a non-scalar, which is acceptable)
+        await movePoint({ componentIdx: viaNumberIdx, x: 5, y: -2, core });
+        await movePoint({ componentIdx: viaInnerPointIdx, x: 5, y: -2, core });
+        const sv2 = await core.returnAllStateVariables(false, true);
+        expect(sv2[viaInnerPointIdx].stateValues.label).not.eq(
+            viaInnerPointLabel,
+        );
+    });
+
+    it("self-reference inside a non-sensical context like <answer> still errors", async () => {
+        // Components like <answer> are not in the recognized rendering-context
+        // list and don't make sense inside a <label>. The circular-dependency
+        // error is the expected outcome in such cases.
+        const { core } = await createTestCore({
+            doenetML: `
+<point name="a">(2,3)
+  <label><answer>$a</answer></label>
+</point>
+`,
+        });
+
+        const diagnostics = getDiagnosticsByType(core);
+        expect(diagnostics.errors.length).greaterThan(0);
+        expect(diagnostics.errors[0].message).contain(
+            "Circular dependency detected",
+        );
+    });
+
+    // A constrained point whose position is essential used to be unloadable
+    // once it had been dragged (#1939). Persistence strips the math-expression
+    // class from `unconstrainedXs` on the way out, so the position comes back
+    // as a bare number; the constraint machinery reads that variable directly
+    // and called a math-expression method on it, which threw during initial
+    // dependency resolution and so took the whole document with it. Because the
+    // bad value was already saved, every later load failed the same way and the
+    // reader could not recover.
+    //
+    // `movePoint` is the action the graph renderer dispatches on a drag, and
+    // the second core is given exactly the state the first one handed its host.
+    async function dragThenReload(doenetML: string) {
+        const first = await createTestCore({ doenetML });
+        const pIdx = await first.resolvePathToNodeIdx("P");
+        await movePoint({
+            componentIdx: pIdx,
+            x: 1.7,
+            y: 0.4,
+            core: first.core,
+        });
+
+        const movedTo = (await first.core.returnAllStateVariables(false, true))[
+            pIdx
+        ].stateValues.xs.map((x: any) => x.evaluate_to_constant());
+
+        await first.core.saveImmediately();
+        const savedState = first.scoreState.state as string;
+        expect(
+            savedState,
+            "nothing was saved, so the reload proves nothing",
+        ).toContain("unconstrainedXs");
+
+        const second = await createTestCore({
+            doenetML,
+            initialState: savedState,
+        });
+        const reloadedTo = (
+            await second.core.returnAllStateVariables(false, true)
+        )[await second.resolvePathToNodeIdx("P")].stateValues.xs.map((x: any) =>
+            x.evaluate_to_constant(),
+        );
+
+        return { movedTo, reloadedTo };
+    }
+
+    it("a dragged point constrained to a function survives a reload", async () => {
+        const { movedTo, reloadedTo } = await dragThenReload(`
+<graph>
+  <function name="f">-0.25*x^3+1.5*x+1</function>
+  <point name="P"><constrainTo>$f</constrainTo></point>
+</graph>
+`);
+
+        // Dragging to x=1.7 puts the point on the curve, not where the pointer
+        // went, and the reload has to land in the same place.
+        expect(movedTo[0]).closeTo(1.7, 1e-12);
+        expect(movedTo[1]).closeTo(2.32175, 1e-12);
+        expect(reloadedTo[0]).closeTo(movedTo[0], 1e-12);
+        expect(reloadedTo[1]).closeTo(movedTo[1], 1e-12);
+    });
+
+    it("a dragged point attracted to a function survives a reload", async () => {
+        // `attractTo` reaches the same nearest-point code by a different route,
+        // and unlike `constrainTo` it leaves the point where it was dragged.
+        const { movedTo, reloadedTo } = await dragThenReload(`
+<graph>
+  <function name="f">-0.25*x^3+1.5*x+1</function>
+  <point name="P"><attractTo>$f</attractTo></point>
+</graph>
+`);
+
+        // The drag is pinned to a literal as well as compared with the reload:
+        // `set` also runs on the ordinary drag path, so a hook that mangled the
+        // position on both paths alike would satisfy the comparison on its own.
+        expect(movedTo[0]).closeTo(1.7, 1e-12);
+        expect(movedTo[1]).closeTo(0.4, 1e-12);
+        expect(reloadedTo[0]).closeTo(movedTo[0], 1e-12);
+        expect(reloadedTo[1]).closeTo(movedTo[1], 1e-12);
+    });
+
+    it("a dragged endpoint constrained to a function survives a reload", async () => {
+        // `<endpoint>` extends `<point>`, so it inherits both the essential
+        // location variable and the fix.
+        const doenetML = `
+<graph>
+  <function name="f">-0.25*x^3+1.5*x+1</function>
+  <lineSegment name="ls">
+    <endpoint name="e1"><constrainTo>$f</constrainTo></endpoint>
+    <endpoint name="e2">(2,0)</endpoint>
+  </lineSegment>
+</graph>
+`;
+        const first = await createTestCore({ doenetML });
+        const e1 = await first.resolvePathToNodeIdx("e1");
+        await movePoint({ componentIdx: e1, x: 1.7, y: 0.4, core: first.core });
+        await first.core.saveImmediately();
+
+        const second = await createTestCore({
+            doenetML,
+            initialState: first.scoreState.state as string,
+        });
+        const reloaded = (
+            await second.core.returnAllStateVariables(false, true)
+        )[await second.resolvePathToNodeIdx("e1")].stateValues.xs.map(
+            (x: any) => x.evaluate_to_constant(),
+        );
+
+        expect(reloaded[0]).closeTo(1.7, 1e-12);
+        expect(reloaded[1]).closeTo(2.32175, 1e-12);
+    });
+
+    it("a dragged equilibriumPoint constrained to a function survives a reload", async () => {
+        // The other component that extends `<point>` and so reaches the same
+        // essential location variable. It is checked separately from
+        // `<endpoint>` because an author writes it on its own, not as part of
+        // another component.
+        const { movedTo, reloadedTo } = await dragThenReload(`
+<graph>
+  <function name="f">-0.25*x^3+1.5*x+1</function>
+  <equilibriumPoint name="P"><constrainTo>$f</constrainTo></equilibriumPoint>
+</graph>
+`);
+
+        expect(movedTo[0]).closeTo(1.7, 1e-12);
+        expect(movedTo[1]).closeTo(2.32175, 1e-12);
+        expect(reloadedTo[0]).closeTo(movedTo[0], 1e-12);
+        expect(reloadedTo[1]).closeTo(movedTo[1], 1e-12);
     });
 });

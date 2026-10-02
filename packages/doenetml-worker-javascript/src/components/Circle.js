@@ -1,3 +1,4 @@
+import { returnGraphicalStyleDescriptionDefinitions } from "@doenet/utils";
 import {
     returnNumberDisplayAttributeComponentShadowing,
     returnNumberDisplayStateVariableDefinitions,
@@ -7,6 +8,8 @@ import Curve from "./Curve";
 import GraphicalComponent from "./abstract/GraphicalComponent";
 
 import me from "math-expressions";
+import { codedDiagnostic } from "../utils/diagnostics";
+import { evaluateToNumber } from "../utils/math";
 
 export default class Circle extends Curve {
     constructor(args) {
@@ -124,258 +127,13 @@ export default class Circle extends Curve {
             returnNumberDisplayStateVariableDefinitions(),
         );
 
-        stateVariableDefinitions.styleDescription = {
-            description: "A textual description of the circle's style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                filled: {
-                    dependencyType: "stateVariable",
-                    variableName: "filled",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
+        Object.assign(
+            stateVariableDefinitions,
+            returnGraphicalStyleDescriptionDefinitions({
+                kind: "closedShape",
+                noun: "circle",
             }),
-            definition: function ({ dependencyValues }) {
-                let lineColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWordDarkMode;
-                } else {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWord;
-                }
-
-                let borderDescription =
-                    dependencyValues.selectedStyle.lineWidthWord;
-                if (dependencyValues.selectedStyle.lineStyleWord) {
-                    if (borderDescription) {
-                        borderDescription += " ";
-                    }
-                    borderDescription +=
-                        dependencyValues.selectedStyle.lineStyleWord;
-                }
-                if (borderDescription) {
-                    borderDescription += " ";
-                }
-
-                let styleDescription;
-                if (!dependencyValues.filled) {
-                    styleDescription = borderDescription + lineColorWord;
-                } else {
-                    let fillColorWord;
-                    if (
-                        dependencyValues.document?.stateValues.theme === "dark"
-                    ) {
-                        fillColorWord =
-                            dependencyValues.selectedStyle
-                                .fillColorWordDarkMode;
-                    } else {
-                        fillColorWord =
-                            dependencyValues.selectedStyle.fillColorWord;
-                    }
-
-                    if (fillColorWord === lineColorWord) {
-                        styleDescription = "filled " + fillColorWord;
-                        if (borderDescription) {
-                            styleDescription +=
-                                " with " + borderDescription + "border";
-                        }
-                    } else {
-                        styleDescription =
-                            "filled " +
-                            fillColorWord +
-                            " with " +
-                            borderDescription +
-                            lineColorWord +
-                            " border";
-                    }
-                }
-
-                return { setValue: { styleDescription } };
-            },
-        };
-
-        stateVariableDefinitions.styleDescriptionWithNoun = {
-            description: 'Style description including the word "circle".',
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                filled: {
-                    dependencyType: "stateVariable",
-                    variableName: "filled",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let lineColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWordDarkMode;
-                } else {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWord;
-                }
-
-                let borderDescription =
-                    dependencyValues.selectedStyle.lineWidthWord;
-                if (dependencyValues.selectedStyle.lineStyleWord) {
-                    if (borderDescription) {
-                        borderDescription += " ";
-                    }
-                    borderDescription +=
-                        dependencyValues.selectedStyle.lineStyleWord;
-                }
-                if (borderDescription) {
-                    borderDescription += " ";
-                }
-
-                let styleDescriptionWithNoun;
-                if (!dependencyValues.filled) {
-                    styleDescriptionWithNoun =
-                        borderDescription + lineColorWord + " circle";
-                } else {
-                    let fillColorWord;
-                    if (
-                        dependencyValues.document?.stateValues.theme === "dark"
-                    ) {
-                        fillColorWord =
-                            dependencyValues.selectedStyle
-                                .fillColorWordDarkMode;
-                    } else {
-                        fillColorWord =
-                            dependencyValues.selectedStyle.fillColorWord;
-                    }
-
-                    if (fillColorWord === lineColorWord) {
-                        styleDescriptionWithNoun =
-                            "filled " + fillColorWord + " circle";
-                        if (borderDescription) {
-                            styleDescriptionWithNoun +=
-                                " with a " + borderDescription + "border";
-                        }
-                    } else {
-                        styleDescriptionWithNoun =
-                            "filled " +
-                            fillColorWord +
-                            " circle with a " +
-                            borderDescription +
-                            lineColorWord +
-                            " border";
-                    }
-                }
-
-                return { setValue: { styleDescriptionWithNoun } };
-            },
-        };
-
-        stateVariableDefinitions.borderStyleDescription = {
-            description: "A textual description of the circle's border style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let lineColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWordDarkMode;
-                } else {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWord;
-                }
-
-                let borderStyleDescription =
-                    dependencyValues.selectedStyle.lineWidthWord;
-                if (dependencyValues.selectedStyle.lineStyleWord) {
-                    if (borderStyleDescription) {
-                        borderStyleDescription += " ";
-                    }
-                    borderStyleDescription +=
-                        dependencyValues.selectedStyle.lineStyleWord;
-                }
-
-                if (borderStyleDescription) {
-                    borderStyleDescription += " ";
-                }
-
-                borderStyleDescription += lineColorWord;
-
-                return { setValue: { borderStyleDescription } };
-            },
-        };
-
-        stateVariableDefinitions.fillStyleDescription = {
-            description: "A textual description of the circle's fill style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                filled: {
-                    dependencyType: "stateVariable",
-                    variableName: "filled",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let fillColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    fillColorWord =
-                        dependencyValues.selectedStyle.fillColorWordDarkMode;
-                } else {
-                    fillColorWord =
-                        dependencyValues.selectedStyle.fillColorWord;
-                }
-
-                let fillStyleDescription;
-                if (!dependencyValues.filled) {
-                    fillStyleDescription = "unfilled";
-                } else {
-                    fillStyleDescription = fillColorWord;
-                }
-
-                return { setValue: { fillStyleDescription } };
-            },
-        };
+        );
 
         stateVariableDefinitions.hideOffGraphIndicator = {
             description:
@@ -977,7 +735,7 @@ export default class Circle extends Curve {
                         dependencyValuesByKey[arrayKey].prescribedCenterX;
                     if (prescribedX) {
                         numericalPrescribedCenter[arrayKey] =
-                            prescribedX.evaluate_to_constant();
+                            evaluateToNumber(prescribedX);
                     } else {
                         numericalPrescribedCenter[arrayKey] = NaN;
                     }
@@ -1052,7 +810,7 @@ export default class Circle extends Curve {
                 for (let point of dependencyValues.throughPoints) {
                     let numericalPoint = [];
                     for (let dim = 0; dim < 2; dim++) {
-                        let numericalValue = point[dim].evaluate_to_constant();
+                        let numericalValue = evaluateToNumber(point[dim]);
                         if (Number.isFinite(numericalValue)) {
                             numericalPoint.push(numericalValue);
                         } else {
@@ -1169,13 +927,11 @@ export default class Circle extends Curve {
             }),
             definition: function ({ dependencyValues }) {
                 if (dependencyValues.haveNonNumericalThroughPoints) {
-                    let message =
-                        "Haven't implemented `<circle>` through " +
-                        dependencyValues.numThroughPoints +
-                        " points";
-                    message +=
-                        " in case where the points don't have numerical values.";
-                    let warning = { message, type: "warning" };
+                    let warning = codedDiagnostic({
+                        type: "warning",
+                        code: "doenet-w0027",
+                        args: { count: dependencyValues.numThroughPoints },
+                    });
                     return {
                         setValue: {
                             numericalRadiusCalculatedWithCenter: null,
@@ -1280,11 +1036,10 @@ export default class Circle extends Curve {
                         },
                     };
                 } else if (dependencyValues.numThroughPoints > 3) {
-                    let warning = {
-                        message:
-                            "Cannot calculate circle through more than 3 points.",
+                    let warning = codedDiagnostic({
                         type: "warning",
-                    };
+                        code: "doenet-w0028",
+                    });
                     return {
                         setValue: {
                             numericalRadiusCalculatedWithCenter: null,
@@ -1325,11 +1080,10 @@ export default class Circle extends Curve {
                     dependencyValues.havePrescribedRadius &&
                     dependencyValues.numThroughPoints > 0
                 ) {
-                    let warning = {
-                        message:
-                            "Cannot calculate circle with specified radius, center and through points.",
+                    let warning = codedDiagnostic({
                         type: "warning",
-                    };
+                        code: "doenet-w0029",
+                    });
                     return {
                         setValue: { haveCenterRadiusPoints: true },
                         sendDiagnostics: [warning],
@@ -1470,7 +1224,7 @@ export default class Circle extends Curve {
                     if (dependencyValues.numThroughPoints === 0) {
                         let r = dependencyValues.essentialRadius;
                         if (r instanceof me.class) {
-                            r = r.evaluate_to_constant();
+                            r = evaluateToNumber(r);
                         }
                         return {
                             setValue: { numericalRadius: r },
@@ -1501,11 +1255,10 @@ export default class Circle extends Curve {
                         );
                         return { setValue: { numericalRadius } };
                     } else {
-                        let warning = {
-                            message:
-                                "Cannot calculate circle with specified center through more than 1 point.",
+                        let warning = codedDiagnostic({
                             type: "warning",
-                        };
+                            code: "doenet-w0030",
+                        });
 
                         return {
                             setValue: { numericalRadius: NaN },
@@ -1518,7 +1271,7 @@ export default class Circle extends Curve {
                 if (dependencyValues.numThroughPoints < 2) {
                     let r = dependencyValues.essentialRadius;
                     if (r instanceof me.class) {
-                        r = r.evaluate_to_constant();
+                        r = evaluateToNumber(r);
                     }
                     return {
                         setValue: { numericalRadius: r },
@@ -1844,7 +1597,7 @@ export default class Circle extends Curve {
                                     .essentialCenterX;
 
                             if (value instanceof me.class) {
-                                value = value.evaluate_to_constant();
+                                value = evaluateToNumber(value);
                             }
                             numericalCenter[arrayKey] = value;
                         }
@@ -1904,10 +1657,18 @@ export default class Circle extends Curve {
 
                         if (r < 0 || 4 * r2 < dist2) {
                             let dist = Math.round(Math.sqrt(dist2) * 100) / 100;
-                            let warning = {
-                                message: `Cannot calculate circle: given that the distance between the two points is ${dist}, the specified radius ${r} is too small.`,
+                            let warning = codedDiagnostic({
                                 type: "warning",
-                            };
+                                code: "doenet-w0031",
+                                // Strings rather than numbers: the radius is
+                                // the author's own value quoted back, and a
+                                // number argument is formatted as a quantity,
+                                // which would round 0.0001 away to 0.
+                                args: {
+                                    distance: String(dist),
+                                    radius: String(r),
+                                },
+                            });
                             return {
                                 setValue: { numericalCenter: [NaN, NaN] },
                                 sendDiagnostics: [warning],
@@ -1939,11 +1700,10 @@ export default class Circle extends Curve {
                             setValue: { numericalCenter: [centerx, centery] },
                         };
                     } else {
-                        let warning = {
-                            message:
-                                "Cannot create circle through more than two points with a specified radius.",
+                        let warning = codedDiagnostic({
                             type: "warning",
-                        };
+                            code: "doenet-w0032",
+                        });
                         return {
                             setValue: { numericalCenter: [NaN, NaN] },
                             sendDiagnostics: [warning],
@@ -1958,7 +1718,7 @@ export default class Circle extends Curve {
                             dependencyValuesByKey[arrayKey].essentialCenterX;
 
                         if (value instanceof me.class) {
-                            value = value.evaluate_to_constant();
+                            value = evaluateToNumber(value);
                         }
                         numericalCenter[arrayKey] = value;
                     }
@@ -2134,16 +1894,14 @@ export default class Circle extends Curve {
                 },
             }),
             definition: function ({ dependencyValues }) {
-                if (
-                    !(
-                        dependencyValues.haveNumericalEntries &&
-                        dependencyValues.numThroughPoints > 0 &&
-                        dependencyValues.numericalRadius > 0 &&
-                        dependencyValues.numericalCenter.every((x) =>
-                            Number.isFinite(x),
-                        )
+                if (!(
+                    dependencyValues.haveNumericalEntries &&
+                    dependencyValues.numThroughPoints > 0 &&
+                    dependencyValues.numericalRadius > 0 &&
+                    dependencyValues.numericalCenter.every((x) =>
+                        Number.isFinite(x),
                     )
-                ) {
+                )) {
                     return {
                         useEssentialOrDefaultValue: {
                             throughAngles: true,
@@ -2289,22 +2047,20 @@ export default class Circle extends Curve {
 
                             return { setValue: { radius } };
                         } catch (e) {
-                            let warning = {
-                                message:
-                                    "Invalid center or through points of circle.",
+                            let warning = codedDiagnostic({
                                 type: "warning",
-                            };
+                                code: "doenet-w0033",
+                            });
                             return {
                                 setValue: { radius: me.fromAst("\uff3f") },
                                 sendDiagnostics: [warning],
                             };
                         }
                     } else {
-                        let warning = {
-                            message:
-                                "Cannot calculate radius of circle with specified center through more than 1 point.",
+                        let warning = codedDiagnostic({
                             type: "warning",
-                        };
+                            code: "doenet-w0034",
+                        });
                         return {
                             setValue: { radius: me.fromAst("\uff3f") },
                             sendDiagnostics: [warning],
@@ -2390,11 +2146,10 @@ export default class Circle extends Curve {
                         instructions,
                     };
                 } else {
-                    let warning = {
-                        message:
-                            "Cannot change radius of circle with non-numerical through points",
+                    let warning = codedDiagnostic({
                         type: "warning",
-                    };
+                        code: "doenet-w0035",
+                    });
                     return { success: false, sendDiagnostics: [warning] };
                 }
             },
@@ -2746,11 +2501,12 @@ export default class Circle extends Curve {
                             globalDependencyValues.haveNonNumericalPrescribedRadius ||
                             globalDependencyValues.haveNonNumericalThroughPoints
                         ) {
-                            diagnostics.push({
-                                message:
-                                    "Cannot create circle through more than one point with specified radius when don't have numerical values.",
-                                type: "warning",
-                            });
+                            diagnostics.push(
+                                codedDiagnostic({
+                                    type: "warning",
+                                    code: "doenet-w0036",
+                                }),
+                            );
                         }
                         return {
                             setValue: {
@@ -2904,11 +2660,10 @@ export default class Circle extends Curve {
                         instructions,
                     };
                 } else {
-                    let warning = {
-                        message:
-                            "Haven't implemented changing center of circle through points with non numerical values.",
+                    let warning = codedDiagnostic({
                         type: "warning",
-                    };
+                        code: "doenet-w0037",
+                    });
                     return { success: false, sendDiagnostics: [warning] };
                 }
             },
@@ -2939,13 +2694,11 @@ export default class Circle extends Curve {
                                 return {};
                             }
 
-                            if (
-                                !(
-                                    Number.isFinite(centerX) &&
-                                    Number.isFinite(centerY) &&
-                                    Number.isFinite(radius)
-                                )
-                            ) {
+                            if (!(
+                                Number.isFinite(centerX) &&
+                                Number.isFinite(centerY) &&
+                                Number.isFinite(radius)
+                            )) {
                                 return {};
                             }
 
@@ -2979,13 +2732,11 @@ export default class Circle extends Curve {
                 },
             }),
             definition({ dependencyValues }) {
-                if (
-                    !(
-                        dependencyValues.numericalRadius >= 0 &&
-                        dependencyValues.numericalCenter.length == 2 &&
-                        dependencyValues.numericalCenter.every(Number.isFinite)
-                    )
-                ) {
+                if (!(
+                    dependencyValues.numericalRadius >= 0 &&
+                    dependencyValues.numericalCenter.length == 2 &&
+                    dependencyValues.numericalCenter.every(Number.isFinite)
+                )) {
                     // if don't have a numerical circle in 2D, then don't calculate if contains point
                     return { setValue: { containsPoint: () => false } };
                 }

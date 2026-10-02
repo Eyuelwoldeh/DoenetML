@@ -1,3 +1,4 @@
+import { returnGraphicalStyleDescriptionDefinitions } from "@doenet/utils";
 import { returnNumberDisplayAttributeComponentShadowing } from "../utils/numberDisplay";
 import { returnGraphControlOrderAttribute } from "../utils/graphical";
 import Polyline from "./Polyline";
@@ -91,258 +92,13 @@ export default class Polygon extends Polyline {
     static returnStateVariableDefinitions() {
         let stateVariableDefinitions = super.returnStateVariableDefinitions();
 
-        stateVariableDefinitions.styleDescription = {
-            description: "A textual description of the polygon's style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                filled: {
-                    dependencyType: "stateVariable",
-                    variableName: "filled",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
+        Object.assign(
+            stateVariableDefinitions,
+            returnGraphicalStyleDescriptionDefinitions({
+                kind: "closedShape",
+                noun: "polygon",
             }),
-            definition: function ({ dependencyValues }) {
-                let lineColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWordDarkMode;
-                } else {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWord;
-                }
-
-                let borderDescription =
-                    dependencyValues.selectedStyle.lineWidthWord;
-                if (dependencyValues.selectedStyle.lineStyleWord) {
-                    if (borderDescription) {
-                        borderDescription += " ";
-                    }
-                    borderDescription +=
-                        dependencyValues.selectedStyle.lineStyleWord;
-                }
-                if (borderDescription) {
-                    borderDescription += " ";
-                }
-
-                let styleDescription;
-                if (!dependencyValues.filled) {
-                    styleDescription = borderDescription + lineColorWord;
-                } else {
-                    let fillColorWord;
-                    if (
-                        dependencyValues.document?.stateValues.theme === "dark"
-                    ) {
-                        fillColorWord =
-                            dependencyValues.selectedStyle
-                                .fillColorWordDarkMode;
-                    } else {
-                        fillColorWord =
-                            dependencyValues.selectedStyle.fillColorWord;
-                    }
-
-                    if (fillColorWord === lineColorWord) {
-                        styleDescription = "filled " + fillColorWord;
-                        if (borderDescription) {
-                            styleDescription +=
-                                " with " + borderDescription + "border";
-                        }
-                    } else {
-                        styleDescription =
-                            "filled " +
-                            fillColorWord +
-                            " with " +
-                            borderDescription +
-                            lineColorWord +
-                            " border";
-                    }
-                }
-
-                return { setValue: { styleDescription } };
-            },
-        };
-
-        stateVariableDefinitions.styleDescriptionWithNoun = {
-            description: 'Style description including the word "polygon".',
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                filled: {
-                    dependencyType: "stateVariable",
-                    variableName: "filled",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let lineColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWordDarkMode;
-                } else {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWord;
-                }
-
-                let borderDescription =
-                    dependencyValues.selectedStyle.lineWidthWord;
-                if (dependencyValues.selectedStyle.lineStyleWord) {
-                    if (borderDescription) {
-                        borderDescription += " ";
-                    }
-                    borderDescription +=
-                        dependencyValues.selectedStyle.lineStyleWord;
-                }
-                if (borderDescription) {
-                    borderDescription += " ";
-                }
-
-                let styleDescriptionWithNoun;
-                if (!dependencyValues.filled) {
-                    styleDescriptionWithNoun =
-                        borderDescription + lineColorWord + " polygon";
-                } else {
-                    let fillColorWord;
-                    if (
-                        dependencyValues.document?.stateValues.theme === "dark"
-                    ) {
-                        fillColorWord =
-                            dependencyValues.selectedStyle
-                                .fillColorWordDarkMode;
-                    } else {
-                        fillColorWord =
-                            dependencyValues.selectedStyle.fillColorWord;
-                    }
-
-                    if (fillColorWord === lineColorWord) {
-                        styleDescriptionWithNoun =
-                            "filled " + fillColorWord + " polygon";
-                        if (borderDescription) {
-                            styleDescriptionWithNoun +=
-                                " with a " + borderDescription + "border";
-                        }
-                    } else {
-                        styleDescriptionWithNoun =
-                            "filled " +
-                            fillColorWord +
-                            " polygon with a " +
-                            borderDescription +
-                            lineColorWord +
-                            " border";
-                    }
-                }
-
-                return { setValue: { styleDescriptionWithNoun } };
-            },
-        };
-
-        stateVariableDefinitions.borderStyleDescription = {
-            description: "A textual description of the polygon's border style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let lineColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWordDarkMode;
-                } else {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWord;
-                }
-
-                let borderStyleDescription =
-                    dependencyValues.selectedStyle.lineWidthWord;
-                if (dependencyValues.selectedStyle.lineStyleWord) {
-                    if (borderStyleDescription) {
-                        borderStyleDescription += " ";
-                    }
-                    borderStyleDescription +=
-                        dependencyValues.selectedStyle.lineStyleWord;
-                }
-
-                if (borderStyleDescription) {
-                    borderStyleDescription += " ";
-                }
-
-                borderStyleDescription += lineColorWord;
-
-                return { setValue: { borderStyleDescription } };
-            },
-        };
-
-        stateVariableDefinitions.fillStyleDescription = {
-            description: "A textual description of the polygon's fill style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                filled: {
-                    dependencyType: "stateVariable",
-                    variableName: "filled",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let fillColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    fillColorWord =
-                        dependencyValues.selectedStyle.fillColorWordDarkMode;
-                } else {
-                    fillColorWord =
-                        dependencyValues.selectedStyle.fillColorWord;
-                }
-
-                let fillStyleDescription;
-                if (!dependencyValues.filled) {
-                    fillStyleDescription = "unfilled";
-                } else {
-                    fillStyleDescription = fillColorWord;
-                }
-
-                return { setValue: { fillStyleDescription } };
-            },
-        };
+        );
 
         stateVariableDefinitions.numSides = {
             isAlias: true,
@@ -443,14 +199,12 @@ export default class Polygon extends Polyline {
                     nxPty = numericalVertices[i]?.[1];
 
                     // only implement for constants
-                    if (
-                        !(
-                            Number.isFinite(prPtx) &&
-                            Number.isFinite(prPty) &&
-                            Number.isFinite(nxPtx) &&
-                            Number.isFinite(nxPty)
-                        )
-                    ) {
+                    if (!(
+                        Number.isFinite(prPtx) &&
+                        Number.isFinite(prPty) &&
+                        Number.isFinite(nxPtx) &&
+                        Number.isFinite(nxPty)
+                    )) {
                         vals.push(null);
                     } else {
                         let BA1sub = nxPtx - prPtx;
@@ -480,6 +234,35 @@ export default class Polygon extends Polyline {
 
                             let x1 = variables.x1?.evaluate_to_constant();
                             let x2 = variables.x2?.evaluate_to_constant();
+
+                            // A point with a non-numeric coordinate has no
+                            // nearest point; leave it where it is. `NaN` fails
+                            // this test, which is the whole job.
+                            //
+                            // The guard was added when the engine answered
+                            // `null` rather than `NaN` here, and `null` is `0`
+                            // to the distance arithmetic below — so the point
+                            // silently snapped to whatever is nearest the
+                            // origin instead of staying put. The engine
+                            // answers `NaN` now (math-expressions#84), so the
+                            // guard is no longer the only thing standing
+                            // between a blank coordinate and a wrong snap.
+                            // Same guard as `<circle>`, `<line>`, `<parabola>`
+                            // and `<curve>`; it stays for the symmetry and
+                            // because it says what the definition requires.
+                            //
+                            // It is not, at this site, load-bearing for the
+                            // `Complex` arm, and the test below does not
+                            // pretend otherwise. `<constrainTo>` does deliver
+                            // a `Complex` here — measured, `x1` is
+                            // `{re: 0, im: 2}` for `x="sqrt(-4)"` — but every
+                            // candidate distance below is built with `-` and
+                            // `*`, which take a `Complex` to `NaN`, so no
+                            // candidate ever wins and the point is left alone
+                            // with the guard reverted too.
+                            if (!(Number.isFinite(x1) && Number.isFinite(x2))) {
+                                return {};
+                            }
 
                             let prevPtx, prevPty;
                             let nextPtx = numericalVertices[numVertices - 1][0];
@@ -610,14 +393,12 @@ export default class Polygon extends Polyline {
                 // Return: true if winding number != 0, i.e., point is in polygon
                 let containsPoint = function (P) {
                     // short circuit if not in bounding box
-                    if (
-                        !(
-                            P[0] <= maxx &&
-                            P[0] >= minx &&
-                            P[1] <= maxy &&
-                            P[1] >= miny
-                        )
-                    ) {
+                    if (!(
+                        P[0] <= maxx &&
+                        P[0] >= minx &&
+                        P[1] <= maxy &&
+                        P[1] >= miny
+                    )) {
                         return false;
                     }
 

@@ -32,6 +32,7 @@ import {
     ShadowSourceDependency,
     UnlinkedCopySourceDependency,
     PrimaryShadowDependency,
+    ShadowInfoDependency,
 } from "./shadowDependencies";
 import {
     AdapterSourceStateVariableDependency,
@@ -41,6 +42,9 @@ import {
     CountAmongSiblingsDependency,
     ValueDependency,
     FlagDependency,
+    InitializeCountersDependency,
+    LocaleDependency,
+    TranslatorDependency,
 } from "./siblingAndValueDependencies";
 import {
     DoenetAttributeDependency,
@@ -96,11 +100,15 @@ export const dependencyTypeClasses: ReadonlyArray<DependencyClass> = [
     ShadowSourceDependency,
     UnlinkedCopySourceDependency,
     PrimaryShadowDependency,
+    ShadowInfoDependency,
     AdapterSourceStateVariableDependency,
     AdapterSourceDependency,
     CountAmongSiblingsDependency,
     ValueDependency,
     FlagDependency,
+    InitializeCountersDependency,
+    LocaleDependency,
+    TranslatorDependency,
     DoenetAttributeDependency,
     ExtendingDependency,
     AttributePrimitiveDependency,

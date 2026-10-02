@@ -5,7 +5,9 @@ import {
     returnStandardSequenceStateVariableDefinitions,
 } from "../utils/sequence";
 import me from "math-expressions";
+const { mod } = me.math;
 import { nanoid } from "nanoid";
+import { codedDiagnostic } from "../utils/diagnostics";
 
 export default class AnimateFromSequence extends BaseComponent {
     constructor(args) {
@@ -178,7 +180,7 @@ export default class AnimateFromSequence extends BaseComponent {
                         {
                             setEssentialValue: "selectedIndex",
                             value:
-                                me.math.mod(
+                                mod(
                                     desiredStateVariableValues.selectedIndex -
                                         1,
                                     await stateValues.numValues,
@@ -351,7 +353,14 @@ export default class AnimateFromSequence extends BaseComponent {
         };
 
         stateVariableDefinitions.targetComponentIdx = {
-            additionalStateVariablesDefined: ["unresolvedPath"],
+            // `targetOriginalPath` is the `target` reference's path as the
+            // author wrote it — positions and all — kept so that a failure
+            // can quote the `$…` back to them. The component index alone is
+            // no use for that: it never appeared in the document.
+            additionalStateVariablesDefined: [
+                "unresolvedPath",
+                "targetOriginalPath",
+            ],
             returnDependencies: () => ({
                 target: {
                     dependencyType: "attributeRefResolutions",
@@ -366,6 +375,7 @@ export default class AnimateFromSequence extends BaseComponent {
                         setValue: {
                             targetComponentIdx: target.componentIdx,
                             unresolvedPath: target.unresolvedPath,
+                            targetOriginalPath: target.originalPath,
                         },
                     };
                 } else {
@@ -373,6 +383,7 @@ export default class AnimateFromSequence extends BaseComponent {
                         setValue: {
                             targetComponentIdx: null,
                             unresolvedPath: null,
+                            targetOriginalPath: null,
                         },
                     };
                 }
@@ -449,11 +460,13 @@ export default class AnimateFromSequence extends BaseComponent {
                     targetIdentities === null ||
                     targetIdentities.length === 0
                 ) {
-                    diagnostics.push({
-                        message:
-                            "Invalid target for `<animateFromSequence>`: cannot find target.",
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0043",
+                            args: { source: "animateFromSequence" },
+                        }),
+                    );
                 }
 
                 return {
@@ -467,6 +480,7 @@ export default class AnimateFromSequence extends BaseComponent {
             stateVariablesDeterminingDependencies: [
                 "targetIdentities",
                 "unresolvedPath",
+                "targetOriginalPath",
             ],
             returnDependencies: function ({ stateValues }) {
                 let dependencies = {
@@ -501,6 +515,11 @@ export default class AnimateFromSequence extends BaseComponent {
                                     "stateVariableFromUnresolvedPath",
                                 componentIdx: target.componentIdx,
                                 unresolvedPath: stateValues.unresolvedPath,
+                                // So that an index in the path that cannot be
+                                // applied is reported as the reference the
+                                // author wrote in `target`.
+                                referenceOriginalPath:
+                                    stateValues.targetOriginalPath,
                                 returnAsComponentObject: true,
                                 variablesOptional: true,
                                 caseInsensitiveVariableMatch: true,
@@ -533,13 +552,13 @@ export default class AnimateFromSequence extends BaseComponent {
                     for (let ind in dependencyValues.targetIdentities) {
                         let target = dependencyValues["target" + ind];
                         if (target == null) {
-                            let message =
-                                "Invalid target for `<animateFromSequence>`: cannot find target.";
-
-                            diagnostics.push({
-                                message,
-                                type: "warning",
-                            });
+                            diagnostics.push(
+                                codedDiagnostic({
+                                    type: "warning",
+                                    code: "doenet-w0043",
+                                    args: { source: "animateFromSequence" },
+                                }),
+                            );
                             continue;
                         }
                         targets.push(target);
@@ -556,17 +575,29 @@ export default class AnimateFromSequence extends BaseComponent {
                                         prop += `[idx]`;
                                     }
                                 }
-                                let message = `Invalid target for \`<animateFromSequence>\`: cannot find a state variable named "${prop}" on a \`<${target.componentType}>\`.`;
-                                diagnostics.push({
-                                    message,
-                                    type: "warning",
-                                });
+                                diagnostics.push(
+                                    codedDiagnostic({
+                                        type: "warning",
+                                        code: "doenet-w0044",
+                                        args: {
+                                            source: "animateFromSequence",
+                                            property: prop,
+                                            component: target.componentType,
+                                        },
+                                    }),
+                                );
                             } else {
-                                let message = `Invalid target for \`<animateFromSequence>\`: cannot find a state variable named "value" on a \`<${target.componentType}>\`.`;
-                                diagnostics.push({
-                                    message,
-                                    type: "warning",
-                                });
+                                diagnostics.push(
+                                    codedDiagnostic({
+                                        type: "warning",
+                                        code: "doenet-w0044",
+                                        args: {
+                                            source: "animateFromSequence",
+                                            property: "value",
+                                            component: target.componentType,
+                                        },
+                                    }),
+                                );
                             }
                         }
                     }
@@ -669,7 +700,7 @@ export default class AnimateFromSequence extends BaseComponent {
                 let additionalInstructions =
                     await this.getUpdateInstructionsToSetTargetsToValue(
                         (await this.stateValues.possibleValues)[
-                            me.math.mod(startIndex - 1, numValues)
+                            mod(startIndex - 1, numValues)
                         ],
                     );
                 updateInstructions.push(...additionalInstructions);
@@ -877,10 +908,7 @@ export default class AnimateFromSequence extends BaseComponent {
         let additionalInstructions =
             await this.getUpdateInstructionsToSetTargetsToValue(
                 (await this.stateValues.possibleValues)[
-                    me.math.mod(
-                        newSelectedIndex - 1,
-                        await this.stateValues.numValues,
-                    )
+                    mod(newSelectedIndex - 1, await this.stateValues.numValues)
                 ],
             );
         updateInstructions.push(...additionalInstructions);

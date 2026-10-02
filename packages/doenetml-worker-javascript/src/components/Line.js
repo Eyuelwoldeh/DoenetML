@@ -2,6 +2,7 @@ import GraphicalComponent from "./abstract/GraphicalComponent";
 import me from "math-expressions";
 import {
     convertValueToMathExpression,
+    returnGraphicalStyleDescriptionDefinitions,
     returnTextStyleDescriptionDefinitions,
 } from "@doenet/utils";
 import {
@@ -12,7 +13,12 @@ import {
 } from "../utils/numberDisplay";
 import { returnLineFamilyLabelPositionAttribute } from "../utils/graphicalLabels";
 import { returnWrapNonLabelsDescriptionsSugarFunction } from "../utils/label";
-import { returnNVariables, roundForDisplay } from "../utils/math";
+import {
+    evaluateToNumber,
+    returnNVariables,
+    roundForDisplay,
+} from "../utils/math";
+import { codedDiagnostic } from "../utils/diagnostics";
 
 export default class Line extends GraphicalComponent {
     constructor(args) {
@@ -107,72 +113,13 @@ export default class Line extends GraphicalComponent {
             returnTextStyleDescriptionDefinitions();
         Object.assign(stateVariableDefinitions, styleDescriptionDefinitions);
 
-        stateVariableDefinitions.styleDescription = {
-            description: "A textual description of the line's style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
+        Object.assign(
+            stateVariableDefinitions,
+            returnGraphicalStyleDescriptionDefinitions({
+                kind: "stroke",
+                noun: "line",
             }),
-            definition: function ({ dependencyValues }) {
-                let lineColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWordDarkMode;
-                } else {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWord;
-                }
-
-                let styleDescription =
-                    dependencyValues.selectedStyle.lineWidthWord;
-                if (dependencyValues.selectedStyle.lineStyleWord) {
-                    if (styleDescription) {
-                        styleDescription += " ";
-                    }
-                    styleDescription +=
-                        dependencyValues.selectedStyle.lineStyleWord;
-                }
-
-                if (styleDescription) {
-                    styleDescription += " ";
-                }
-
-                styleDescription += lineColorWord;
-
-                return { setValue: { styleDescription } };
-            },
-        };
-
-        stateVariableDefinitions.styleDescriptionWithNoun = {
-            description: 'Style description including the word "line".',
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                styleDescription: {
-                    dependencyType: "stateVariable",
-                    variableName: "styleDescription",
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let styleDescriptionWithNoun =
-                    dependencyValues.styleDescription + " line";
-
-                return { setValue: { styleDescriptionWithNoun } };
-            },
-        };
+        );
 
         stateVariableDefinitions.numDimensions = {
             description: "Number of dimensions the line lives in.",
@@ -1471,11 +1418,10 @@ export default class Line extends GraphicalComponent {
                 let numDimens = dependencyValues.numDimensions;
 
                 if (Number.isNaN(numDimens)) {
-                    let warning = {
-                        message:
-                            "Line through points of undetermined dimensions.",
+                    let warning = codedDiagnostic({
                         type: "warning",
-                    };
+                        code: "doenet-w0001",
+                    });
                     return {
                         setValue: {
                             equation: blankMath,
@@ -1488,11 +1434,10 @@ export default class Line extends GraphicalComponent {
                 }
 
                 if (numDimens < 2) {
-                    let warning = {
-                        message:
-                            "Line must be through points of at least two dimensions.",
+                    let warning = codedDiagnostic({
                         type: "warning",
-                    };
+                        code: "doenet-w0002",
+                    });
                     return {
                         setValue: {
                             equation: blankMath,
@@ -1518,13 +1463,19 @@ export default class Line extends GraphicalComponent {
                         point2x.variables().indexOf(varStrings[i]) !== -1 ||
                         point2y.variables().indexOf(varStrings[i]) !== -1
                     ) {
-                        let warning = {
-                            message:
-                                "Line is through points that depend on variables: " +
-                                varStrings.join(", ") +
-                                ".",
+                        let warning = codedDiagnostic({
                             type: "warning",
-                        };
+                            code: "doenet-w0003",
+                            // A bare enumeration, not an "and" list: the
+                            // message names which variables were seen, it
+                            // doesn't conjoin them.
+                            args: {
+                                variables: {
+                                    list: varStrings,
+                                    type: "unit",
+                                },
+                            },
+                        });
                         return {
                             setValue: {
                                 equation: blankMath,
@@ -1626,13 +1577,11 @@ export default class Line extends GraphicalComponent {
                 }
 
                 // if not inverting equation, must be inverting coeffs
-                if (
-                    !(
-                        "coeff0" in desiredStateVariableValues &&
-                        "coeffvar1" in desiredStateVariableValues &&
-                        "coeffvar2" in desiredStateVariableValues
-                    )
-                ) {
+                if (!(
+                    "coeff0" in desiredStateVariableValues &&
+                    "coeffvar1" in desiredStateVariableValues &&
+                    "coeffvar2" in desiredStateVariableValues
+                )) {
                     console.log(
                         `Haven't implemented inverting coeffs if not specifying all of them`,
                     );
@@ -1789,8 +1738,15 @@ export default class Line extends GraphicalComponent {
                         ind < globalDependencyValues.numDimensions;
                         ind++
                     ) {
-                        let val = point[ind].evaluate_to_constant();
-                        numericalP.push(val);
+                        // `evaluateToNumber`, not a bare
+                        // `evaluate_to_constant()`: this array is
+                        // `forRenderer`, and neither a `Complex` nor the
+                        // `null` the engine used to report for "no numeric
+                        // value" survives the crossing as a number.
+                        // `Number(null)` was `0`, so an undefined point was
+                        // drawn at the origin rather than not drawn. Same
+                        // spelling as `Point.js`'s `numericalXs`.
+                        numericalP.push(evaluateToNumber(point[ind]));
                     }
                     numericalPoints[arrayKey] = numericalP;
                 }
@@ -2170,13 +2126,11 @@ export default class Line extends GraphicalComponent {
             "0,0": me.fromAst(point1coords[0]),
             "0,1": me.fromAst(point1coords[1]),
         };
-        if (
-            !(
-                (await this.stateValues.basedOnSlope) ||
-                (await this.stateValues.basedOnParallel) ||
-                (await this.stateValues.basedOnPerpendicular)
-            )
-        ) {
+        if (!(
+            (await this.stateValues.basedOnSlope) ||
+            (await this.stateValues.basedOnParallel) ||
+            (await this.stateValues.basedOnPerpendicular)
+        )) {
             desiredPoints["1,0"] = me.fromAst(point2coords[0]);
             desiredPoints["1,1"] = me.fromAst(point2coords[1]);
         }
@@ -2226,13 +2180,11 @@ export default class Line extends GraphicalComponent {
 
         // we will attempt to keep the slope of the line fixed
         // even if one of the points is constrained
-        if (
-            !(
-                (await this.stateValues.basedOnSlope) ||
-                (await this.stateValues.basedOnParallel) ||
-                (await this.stateValues.basedOnPerpendicular)
-            )
-        ) {
+        if (!(
+            (await this.stateValues.basedOnSlope) ||
+            (await this.stateValues.basedOnParallel) ||
+            (await this.stateValues.basedOnPerpendicular)
+        )) {
             // based on two points
 
             let numericalPoints = [point1coords, point2coords];
@@ -2350,6 +2302,22 @@ export default class Line extends GraphicalComponent {
     }
 }
 
+/**
+ * The diagnostic raised wherever an `equation` turns out not to be linear in
+ * the line's two variables.
+ *
+ * Four call sites detect that in four different ways but report the same
+ * thing, so they share one constructor and cannot drift in what they
+ * interpolate.
+ */
+function invalidEquationFormatDiagnostic(var1String, var2String) {
+    return codedDiagnostic({
+        type: "warning",
+        code: "doenet-w0004",
+        args: { variable1: var1String, variable2: var2String },
+    });
+}
+
 function calculateCoeffsFromEquation({ equation, variables }) {
     // determine if equation is a linear equation in the variables
 
@@ -2358,50 +2326,55 @@ function calculateCoeffsFromEquation({ equation, variables }) {
     let var1String = var1.toString();
     let var2String = var2.toString();
 
-    equation = equation.expand().simplify();
+    // Read the two sides from the equation *as authored*, and orient the
+    // difference explicitly rather than by operand position.
+    //
+    // The coefficients are a public property, so they should be the ones that
+    // fall out of the equation the author wrote: everything moved to the left,
+    // i.e. LHS - RHS. Position alone cannot deliver that, because `simplify`
+    // reorders a relation's operands for some inputs and not others -- it turns
+    // `5x-2y=3` into `3 = 5x-2y` but leaves `y=2x+1` alone -- so reading the
+    // sides off the simplified tree negated the coefficients of whichever
+    // spelling it happened not to swap. `y=x^2` reported the coefficients of
+    // `x^2 - y = 0`.
+    //
+    // The `0 = ax+by+c` form the inverse definition writes below is the one
+    // exception: there LHS - RHS would negate everything on the round trip, so
+    // a zero side orients to its non-zero partner.
+    //
+    // This decides the *coefficients* only. The direction a line points is
+    // canonicalized separately, in `calculatePointsFromCoeffs`, precisely so
+    // that it does not depend on this.
+    const tree = equation.tree;
 
-    if (
-        !(
-            Array.isArray(equation.tree) &&
-            equation.tree[0] === "=" &&
-            equation.tree.length === 3
-        )
-    ) {
+    if (!(Array.isArray(tree) && tree[0] === "=" && tree.length === 3)) {
         return { success: false };
     }
 
-    let rhs = me
-        .fromAst(["+", equation.tree[2], ["-", equation.tree[1]]])
+    const difference = me
+        .fromAst(tree[1] === 0 ? tree[2] : ["+", tree[1], ["-", tree[2]]])
         .expand()
         .simplify();
-    // divide rhs into terms
 
-    let terms = [];
-    if (Array.isArray(rhs.tree) && rhs.tree[0] === "+") {
-        terms = rhs.tree.slice(1);
-    } else {
-        terms = [rhs.tree];
+    const coeffs = getTermCoeffs(difference.tree);
+    if (!coeffs.success) {
+        return coeffs;
     }
 
-    let coeffvar1 = me.fromAst(0);
-    let coeffvar2 = me.fromAst(0);
-    let coeff0 = me.fromAst(0);
+    return {
+        success: true,
+        coeff0: coeffs.coeff0.simplify(),
+        coeffvar1: coeffs.coeffvar1.simplify(),
+        coeffvar2: coeffs.coeffvar2.simplify(),
+    };
 
-    for (let term of terms) {
-        let coeffs = getTermCoeffs(term);
-        if (!coeffs.success) {
-            return coeffs;
-        }
-        coeffvar1 = coeffvar1.add(coeffs.coeffvar1);
-        coeffvar2 = coeffvar2.add(coeffs.coeffvar2);
-        coeff0 = coeff0.add(coeffs.coeff0);
-    }
-    coeffvar1 = coeffvar1.simplify();
-    coeffvar2 = coeffvar2.simplify();
-    coeff0 = coeff0.simplify();
-
-    return { success: true, coeff0, coeffvar1, coeffvar2 };
-
+    /**
+     * Split one summand of `difference` into its contributions to the three
+     * coefficients, returning each as an `Expression`.
+     *
+     * Recursive: a summand can itself be a sum, because `simplify` does not
+     * guarantee a flat top-level sum.
+     */
     function getTermCoeffs(term) {
         let cv1 = 0,
             cv2 = 0,
@@ -2418,16 +2391,12 @@ function calculateCoeffsFromEquation({ equation, variables }) {
         } else if (typeof term === "number") {
             c0 = term;
         } else if (!Array.isArray(term)) {
-            let warning = {
-                message:
-                    "Invalid format for equation of line in variables " +
-                    var1 +
-                    " and " +
-                    var2 +
-                    ".",
-                type: "warning",
+            return {
+                success: false,
+                sendDiagnostics: [
+                    invalidEquationFormatDiagnostic(var1String, var2String),
+                ],
             };
-            return { success: false, sendDiagnostics: [warning] };
         } else {
             let operator = term[0];
             let operands = term.slice(1);
@@ -2440,16 +2409,29 @@ function calculateCoeffsFromEquation({ equation, variables }) {
                 cv2 = ["-", coeffs.coeffvar2.tree];
                 c0 = ["-", coeffs.coeff0.tree];
             } else if (operator === "+") {
-                let warning = {
-                    message:
-                        "Invalid format for equation of line in variables " +
-                        var1 +
-                        " and " +
-                        var2 +
-                        ".",
-                    type: "warning",
+                // A sum where a single term was expected. `simplify` pulls a
+                // common minus sign out of an all-negative sum, so a vertical
+                // line's `-5x-15 = 0` comes back spelled `0 = -(5x+15)` and the
+                // `-` branch above hands the sum straight here. Recursing keeps
+                // that from being reported as a non-linear equation -- which
+                // blanked all three coefficients, and with them `slope`, for
+                // every line whose equation happened to be all-negative.
+                let sum = {
+                    success: true,
+                    coeffvar1: me.fromAst(0),
+                    coeffvar2: me.fromAst(0),
+                    coeff0: me.fromAst(0),
                 };
-                return { success: false, sendDiagnostics: [warning] };
+                for (const operand of operands) {
+                    const coeffs = getTermCoeffs(operand);
+                    if (!coeffs.success) {
+                        return coeffs;
+                    }
+                    sum.coeffvar1 = sum.coeffvar1.add(coeffs.coeffvar1);
+                    sum.coeffvar2 = sum.coeffvar2.add(coeffs.coeffvar2);
+                    sum.coeff0 = sum.coeff0.add(coeffs.coeff0);
+                }
+                return sum;
             } else if (operator === "*") {
                 let var1ind = -1,
                     var2ind = -1;
@@ -2529,29 +2511,21 @@ function calculatePointsFromCoeffs({
         coeff0.variables(true).indexOf(var1String) !== -1 ||
         coeff0.variables(true).indexOf(var2String) !== -1
     ) {
-        let warning = {
-            message:
-                "Invalid format for equation of line in variables " +
-                var1String +
-                " and " +
-                var2String +
-                ".",
-            type: "warning",
+        return {
+            success: false,
+            sendDiagnostics: [
+                invalidEquationFormatDiagnostic(var1String, var2String),
+            ],
         };
-        return { success: false, sendDiagnostics: [warning] };
     }
     let zero = me.fromAst(0);
     if (coeffvar1.equals(zero) && coeffvar2.equals(zero)) {
-        let warning = {
-            message:
-                "Invalid format for equation of line in variables " +
-                var1String +
-                " and " +
-                var2String +
-                ".",
-            type: "warning",
+        return {
+            success: false,
+            sendDiagnostics: [
+                invalidEquationFormatDiagnostic(var1String, var2String),
+            ],
         };
-        return { success: false, sendDiagnostics: [warning] };
     }
 
     // console.log("coefficient of " + var1 + " is " + coeffvar1);
@@ -2582,11 +2556,38 @@ function calculatePointsFromCoeffs({
             point2x = (b * (b * x1 - a * x2) - a * c) / denom;
             point2y = (a * (-b * x1 + a * x2) - b * c) / denom;
         } else {
-            // create two points that equation passes through
-            point1x = (2 * b - a * c) / denom;
-            point1y = (-2 * a - b * c) / denom;
-            point2x = (b - a * c) / denom;
-            point2y = -(a + b * c) / denom;
+            // Create two points the equation passes through.
+            //
+            // This is the one place a line acquires a *direction*: the two
+            // points come out ordered, and `point2 - point1` is `(-b, a)`
+            // scaled, so negating the coefficients reverses it. The line is the
+            // same either way, but `<angle betweenLines>` aims its ray along
+            // `points[1] - points[0]`, so the arbitrary sign would be visible
+            // on screen.
+            //
+            // Negating all three coefficients describes the same line, so we
+            // are free to choose. Pick the sign that points the line in the +x
+            // direction, and +y for a vertical one. Without this, two spellings
+            // of one line disagree: `5x-2y=3` and `2y-5x=-3` produced opposite
+            // rays.
+            //
+            // Numeric coefficients only. The symbolic branch below cannot test
+            // a sign, so two spellings of a line with symbolic coefficients
+            // still disagree about direction.
+            //
+            // The coefficients themselves are left alone -- they are a public
+            // property and stay in the form the author's equation gives.
+            //
+            // The direction is `(-b, a)`, so `b < 0` already points +x and
+            // `b > 0` needs flipping; a vertical line (`b === 0`) orients on
+            // `a` to point +y. When neither settles it the line is degenerate
+            // and any sign will do, so default to `+1`.
+            const sign = b > 0 ? -1 : b < 0 ? 1 : a < 0 ? -1 : 1;
+            const [ax, bx, cx] = [a * sign, b * sign, c * sign];
+            point1x = (2 * bx - ax * cx) / denom;
+            point1y = (-2 * ax - bx * cx) / denom;
+            point2x = (bx - ax * cx) / denom;
+            point2y = -(ax + bx * cx) / denom;
         }
 
         points["0,0"] = me.fromAst(point1x);

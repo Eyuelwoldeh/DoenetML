@@ -1,4 +1,5 @@
 import type Core from "../Core";
+import { reportInternalError } from "../utils/internalErrors";
 import type { ComponentIdx } from "@doenet/utils";
 import { addComponents } from "./ComponentBuilder";
 import { deleteComponents } from "./DeletionEngine";
@@ -65,18 +66,55 @@ type PerformUpdateArgs = {
      */
     doNotSave?: boolean;
     /**
-     * Skip *both* renderer-update paths (the read-only mirror and the
-     * post-update fan-out). Used when the caller will re-issue updates
-     * imminently and renderer churn would be wasted.
+     * Opt out of *forcing* this update's own target components into the
+     * renderer-update set. Normally those components are queued
+     * unconditionally so the renderer is re-sent their authoritative
+     * `forRenderer` values — even when nothing actually changed — which is
+     * how an optimistic renderer edit (text typed into an input, a dragged
+     * point) gets confirmed or reverted once core processes or rejects the
+     * requested change. Set this only when the targeted state variables are
+     * not rendered, so there is no optimistic edit to reconcile and
+     * re-sending would be wasted work (e.g. the video component recording
+     * watch progress into its non-rendered `segmentsWatched`). It does not
+     * suppress renderer updates for *other* state variables that genuinely
+     * changed as a result of this update: those are still queued by
+     * staleness propagation.
      */
     canSkipUpdatingRenderer?: boolean;
     /**
-     * Skip only the late `updateAllChangedRenderers` call at the end of
-     * `performUpdate`, while still letting the early read-only path and
-     * the components-to-update bookkeeping run. Submission-recording
-     * updates override this and always fan out.
+     * Postpone this update's final `updateAllChangedRenderers` fan-out so a
+     * batch of updates can finish before the UI changes, avoiding
+     * intermediate states flashing on screen. Components still accumulate in
+     * the pending renderer set; the caller is responsible for a later update
+     * or action *without* this flag that flushes them. For example, each
+     * answer submission defers its fan-out and `submitAllAnswers` flushes
+     * once on its final `numSubmissions` update; a lone answer submission
+     * flushes via its trailing `triggerChainedActions`. Unrelated to
+     * `canSkipUpdatingRenderer`: this only times *when* the fan-out happens,
+     * not *which* components it covers.
      */
     skipRendererUpdate?: boolean;
+    /**
+     * Mark this as one step of a continuous interaction — a drag still in
+     * progress — rather than its committed result. The update is performed in
+     * full either way; what changes is the renderer fan-out. This update's own
+     * targets are sent immediately and the rest wait until the interaction
+     * goes quiet, so the thing being dragged keeps up even when the move
+     * invalidated much of the document. The commit that ends the interaction
+     * arrives without this flag and flushes the remainder.
+     *
+     * Set by the graph drag handlers (`Point.movePoint` and its siblings
+     * forward the renderer's flag), `Slider.changeValue` (both dragging and
+     * keyboard stepping), and `SubsetOfRealsInput.movePoint` for the points of
+     * a number line. Before this it was accepted and ignored.
+     *
+     * Set it only for a continuous interaction whose downstream may settle
+     * late. A keystroke is not one, however in-progress its value: the
+     * feedback beside an input has to keep up with it, so the inputs that
+     * commit on blur or enter deliberately do not set this. See the comment
+     * at `inputUpdateImmediateValue` in `utils/input.js`.
+     */
+    transient?: boolean;
     sourceInformation?: SourceInformation;
 };
 
@@ -122,8 +160,13 @@ export class UpdateExecutor {
      * Main path: look up `component.actions[actionName]` (with optional
      * case-insensitive fallback when `caseInsensitiveMatch` is set), record
      * the `event` if provided, and `await` the action. Returns
-     * `{ actionId }` on success. If the component exists but the action
-     * does not, a warning diagnostic is added and `{}` is returned.
+     * `{ actionId }` on success. If the component exists but the action does
+     * not, `{ actionUnavailable: true }` is returned: what an author can be
+     * told about that depends on how the action was asked for, and only the
+     * caller knows. `<callAction>` turns it into a warning naming the
+     * `target` the author wrote; everything else reaches here from a
+     * renderer or from the core itself, where there is nothing an author
+     * wrote to name, so all that is left is a line on the console.
      */
     async performAction({
         componentIdx,
@@ -135,7 +178,8 @@ export class UpdateExecutor {
         if (actionName === "setTheme" && componentIdx === undefined) {
             // For now, co-opting the action mechanism to let the viewer set the theme (dark mode) on document.
             // Don't have an actual action on document as don't want the ability for others to call it.
-            // Theme doesn't affect the colors displayed, only the words in the styleDescriptions.
+            // Theme is presentation-only (not user content), but renderers can
+            // use it to choose dark-mode style colors and descriptions.
             await this.performUpdate({
                 updateInstructions: [
                     {
@@ -150,6 +194,32 @@ export class UpdateExecutor {
             });
 
             return { actionId: args!.actionId };
+        }
+
+        if (actionName === "setStyleOverrides" && componentIdx === undefined) {
+            // Same co-opted mechanism as `setTheme`: reader style overrides
+            // are a UI-only state variable on the document that the viewer
+            // sets on behalf of the host application (e.g. a reader picking
+            // colors they can better distinguish). Not user content, so never
+            // saved.
+            await this.performUpdate({
+                updateInstructions: [
+                    {
+                        updateType: "updateValue",
+                        componentIdx: this.core.documentIdx,
+                        stateVariable: "readerStyleOverrides",
+                        value: args!.styleOverrides ?? null,
+                    },
+                ],
+                actionId: args!.actionId,
+                doNotSave: true, // this isn't an interaction, so don't save doc state
+            });
+
+            return { actionId: args!.actionId };
+        }
+
+        if (actionName === "recordVisibilityChange" && args) {
+            this.core.recordRenderVisibility(componentIdx!, args);
         }
 
         let component = this.core._components[componentIdx!];
@@ -197,12 +267,10 @@ export class UpdateExecutor {
         }
 
         if (component) {
-            this.core.addDiagnostic({
-                type: "warning",
-                message: `Cannot run action ${actionName} on component ${componentIdx}`,
-                position: component.position,
-                sourceDoc: component.sourceDoc,
-            });
+            reportInternalError(
+                `Cannot run action ${actionName} on component ${componentIdx}`,
+            );
+            return { actionUnavailable: true };
         }
 
         return {};
@@ -229,10 +297,20 @@ export class UpdateExecutor {
      *     downstream answer-submission detection.
      *
      * After the loop, `executeUpdateStateVariables` runs once more on
-     * any leftover `newStateVariableValues`, then
-     * `processStateVariableTriggers` and `updateAllChangedRenderers` run
-     * conditionally based on the `skipRendererUpdate` /
-     * `canSkipUpdatingRenderer` flags. Essential values saved during
+     * any leftover `newStateVariableValues`. Unless
+     * `canSkipUpdatingRenderer` is set, each instruction's target component
+     * is queued into `componentsToUpdateRenderers` so an optimistic
+     * renderer edit can be confirmed or reverted (see that flag). Then
+     * `processStateVariableTriggers` runs, and the final
+     * `updateAllChangedRenderers` fan-out runs only when
+     * `skipRendererUpdate` is false.
+     *
+     * A `transient` update reorders that tail: the update's own targets,
+     * along with everything rendered on a visible graph
+     * (`componentsOnVisibleGraphs`), are sent *before*
+     * `processStateVariableTriggers`, and the remainder is
+     * handed to `scheduleDeferredRendererUpdate` rather than going out with
+     * `updateAllChangedRenderers`. Essential values saved during
      * definitions are merged into the cumulative changes log so they
      * persist on the next save.
      *
@@ -251,6 +329,7 @@ export class UpdateExecutor {
         doNotSave = false,
         canSkipUpdatingRenderer = false,
         skipRendererUpdate = false,
+        transient = false,
         sourceInformation = {},
     }: PerformUpdateArgs) {
         if (diagnostics) {
@@ -318,10 +397,9 @@ export class UpdateExecutor {
                         if (component) {
                             componentsToDelete.push(component);
                         } else {
-                            this.core.addDiagnostic({
-                                type: "info",
-                                message: `Cannot delete ${componentIdx} as it doesn't exist.`,
-                            });
+                            reportInternalError(
+                                `Cannot delete ${componentIdx} as it doesn't exist.`,
+                            );
                         }
                     }
 
@@ -362,9 +440,12 @@ export class UpdateExecutor {
 
         newStateVariableValuesProcessed.push(newStateVariableValues);
 
-        // always update the renderers from the update instructions themselves,
-        // as even if changes were prevented, the renderers need to be given that information
-        // so they can revert if the showed the changes before hearing back from core
+        // Queue each instruction's target component so the renderer is
+        // re-sent its authoritative forRenderer values. This send happens
+        // even when the requested change was rejected or left the value
+        // unchanged, letting a renderer that optimistically showed the edit
+        // revert to core's value. canSkipUpdatingRenderer opts out when the
+        // targets are not rendered, so there is nothing to reconcile.
         if (!canSkipUpdatingRenderer) {
             updateInstructions.forEach((comp) => {
                 if (comp.componentIdx != undefined) {
@@ -375,13 +456,41 @@ export class UpdateExecutor {
             });
         }
 
-        await this.core.processStateVariableTriggers();
+        const targets = updateInstructions
+            .map((instruction) => instruction.componentIdx)
+            .filter(
+                (componentIdx): componentIdx is ComponentIdx =>
+                    componentIdx != undefined,
+            );
 
-        if (!skipRendererUpdate || recordComponentSubmissions.length > 0) {
-            await this.core.updateAllChangedRenderers(
+        if (transient && !skipRendererUpdate) {
+            // Put the dragged component, and every visible graph it moves, on
+            // screen before doing anything with the rest of what its move
+            // invalidated.
+            await this.core.updateRenderersForComponents(
+                this.core.componentsOnVisibleGraphs(targets),
                 sourceInformation,
                 actionId,
             );
+        }
+
+        await this.core.processStateVariableTriggers();
+
+        if (!skipRendererUpdate) {
+            if (transient) {
+                this.core.scheduleDeferredRendererUpdate(
+                    sourceInformation,
+                    actionId,
+                );
+            } else {
+                // What the reader can see goes out now; the rest waits for
+                // the idle lane.
+                await this.core.updateOnScreenRenderers(
+                    targets,
+                    sourceInformation,
+                    actionId,
+                );
+            }
         }
 
         if (recordComponentSubmissions.length > 0) {
@@ -422,12 +531,31 @@ export class UpdateExecutor {
         ) {
             for (const stateId in this.core.essentialValuesSavedInDefinition) {
                 const componentIdx = this.core.componentIdxByStateId[stateId];
-                let essentialState =
-                    this.core._components[componentIdx]?.essentialState;
+                const component = this.core._components[componentIdx];
+                let essentialState = component?.essentialState;
+                // A definition that draws from a seed the variant does not
+                // determine -- `<sampleRandomNumbers>` and the other two
+                // date-seeded samplers -- produces values a fresh build does
+                // not reproduce. They exist nowhere but in the saved state, so
+                // they are persisted like the reader's own work rather than
+                // dropped as a definition's (see
+                // `BaseComponent.definitionEssentialValuesAreReproducible`).
+                const reproducible =
+                    (component?.constructor as any)
+                        ?.definitionEssentialValuesAreReproducible !== false;
                 if (essentialState) {
                     for (let varName in this.core
                         .essentialValuesSavedInDefinition[stateId]) {
                         if (essentialState[varName] !== undefined) {
+                            // Recorded, not withheld: a later partial write to
+                            // an array merges into this entry, and this is what
+                            // puts the `mergeObject` base there. What it is not
+                            // is the reader's work, so unless they also write
+                            // to this component it does not get persisted
+                            // (Doenet/DoenetML#1940).
+                            if (reproducible) {
+                                this.core.definitionSetStateIds.add(stateId);
+                            }
                             this.core.essentialValueWriter.mergeIntoCumulative(
                                 stateId,
                                 varName,
@@ -444,8 +572,34 @@ export class UpdateExecutor {
             // merge in new state variables set in update
             for (let newValuesProcessed of newStateVariableValuesProcessed) {
                 for (const componentIdxStr in newValuesProcessed) {
-                    const stateId =
-                        this.core._components[Number(componentIdxStr)].stateId;
+                    const component =
+                        this.core._components[Number(componentIdxStr)];
+                    if (!component) {
+                        // The update deleted this component after writing to
+                        // it — a composite recreating its replacements is the
+                        // ordinary way that happens, and `<sort>` does it
+                        // whenever it rebuilds rather than moving the
+                        // replacements it has. Its saved entry has already been
+                        // dropped by `DeletionEngine`, so there is nothing to
+                        // merge; before this guard the missing `stateId` threw
+                        // here, and because `performAction` catches, the throw
+                        // silently took the rest of `performUpdate` with it —
+                        // the remaining components' writes were never merged,
+                        // and the save this call would have scheduled was not.
+                        // What a reader saw of that: typing into a `<sort>`
+                        // reorders it, the reorder corrects the input to
+                        // whatever now sits in the position it is bound to, and
+                        // that correction is on the far side of the throw. The
+                        // input's saved state stayed at what they typed, so a
+                        // reload showed them a different value from the one
+                        // they had just been looking at.
+                        continue;
+                    }
+                    const stateId = component.stateId;
+                    // What the reader themselves changed, as opposed to what a
+                    // definition computed: this is the set that is persisted
+                    // (Doenet/DoenetML#1940).
+                    this.core.readerTouchedStateIds.add(stateId);
                     for (let varName in newValuesProcessed[componentIdxStr]) {
                         this.core.essentialValueWriter.mergeIntoCumulative(
                             stateId,

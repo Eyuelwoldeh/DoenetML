@@ -1,6 +1,7 @@
 import CompositeComponent from "./abstract/CompositeComponent";
 import { deepClone } from "@doenet/utils";
 import { setUpVariantSeedAndRng } from "../utils/variants";
+import { codedDiagnostic } from "../utils/diagnostics";
 export default class ConditionalContent extends CompositeComponent {
     static componentType = "conditionalContent";
 
@@ -60,17 +61,15 @@ export default class ConditionalContent extends CompositeComponent {
                     // If the condition attribute was not moved to a case child via sugar,
                     // then warn that it is not used on conditionalContent
 
-                    const warning = {
-                        type: "warning",
-                        message:
-                            "Attribute `condition` is ignored on a `<conditionalContent>` component with case or else children.",
-                    };
-                    if (dependencyValues.conditionAttribute.position) {
-                        warning.position =
-                            dependencyValues.conditionAttribute.position;
-                    }
-
-                    diagnostics.push(warning);
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0079",
+                            position:
+                                dependencyValues.conditionAttribute.position ||
+                                undefined,
+                        }),
+                    );
                 }
 
                 return {
@@ -384,21 +383,10 @@ export default class ConditionalContent extends CompositeComponent {
         });
     }
 
-    get allPotentialRendererTypes() {
-        let allPotentialRendererTypes = super.allPotentialRendererTypes;
-
-        if (this.serializedChildren) {
-            let additionalRendererTypes =
-                this.potentialRendererTypesFromSerializedComponents(
-                    this.serializedChildren,
-                );
-            for (let rendererType of additionalRendererTypes) {
-                if (!allPotentialRendererTypes.includes(rendererType)) {
-                    allPotentialRendererTypes.push(rendererType);
-                }
-            }
-        }
-
-        return allPotentialRendererTypes;
-    }
+    // No `addOwnPotentialRendererTypes` override here, unlike the sibling
+    // composites that hold a template: this class defines no
+    // `keepChildrenSerialized`, so `ComponentBuilder` always gives it an empty
+    // `serializedChildren` and such an override could contribute nothing. The
+    // branches are covered by `Case`, which does keep its children serialized
+    // and does report their renderer types.
 }

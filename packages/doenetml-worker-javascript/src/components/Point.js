@@ -3,9 +3,10 @@ import me from "math-expressions";
 import { breakEmbeddedStringByCommas } from "./commonsugar/breakstrings";
 import {
     convertValueToMathExpression,
-    vectorOperators,
     deepClone,
+    returnGraphicalStyleDescriptionDefinitions,
     returnTextStyleDescriptionDefinitions,
+    vectorOperators,
 } from "@doenet/utils";
 import {
     buildNumberDisplayParameters,
@@ -13,7 +14,12 @@ import {
     returnNumberDisplayAttributes,
     returnNumberDisplayStateVariableDefinitions,
 } from "../utils/numberDisplay";
-import { roundForDisplay } from "../utils/math";
+import {
+    roundForDisplay,
+    markUnspecifiedComponents,
+    isUnspecifiedComponentValue,
+    evaluateToNumber,
+} from "../utils/math";
 import {
     returnConstraintDefinitions,
     returnStickyGroupDefinitions,
@@ -426,66 +432,13 @@ export default class Point extends GraphicalComponent {
             returnTextStyleDescriptionDefinitions();
         Object.assign(stateVariableDefinitions, styleDescriptionDefinitions);
 
-        stateVariableDefinitions.styleDescription = {
-            description: "A textual description of the point's style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
+        Object.assign(
+            stateVariableDefinitions,
+            returnGraphicalStyleDescriptionDefinitions({
+                kind: "marker",
+                noun: "point",
             }),
-            definition: function ({ dependencyValues }) {
-                let markerColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    markerColorWord =
-                        dependencyValues.selectedStyle.markerColorWordDarkMode;
-                } else {
-                    markerColorWord =
-                        dependencyValues.selectedStyle.markerColorWord;
-                }
-                return {
-                    setValue: {
-                        styleDescription: markerColorWord,
-                    },
-                };
-            },
-        };
-
-        stateVariableDefinitions.styleDescriptionWithNoun = {
-            description: 'Style description including the word "point".',
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                styleDescription: {
-                    dependencyType: "stateVariable",
-                    variableName: "styleDescription",
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let pointDescription =
-                    dependencyValues.styleDescription +
-                    " " +
-                    dependencyValues.selectedStyle.markerStyleWord;
-                return {
-                    setValue: { styleDescriptionWithNoun: pointDescription },
-                };
-            },
-        };
+        );
 
         stateVariableDefinitions.inUnorderedList = {
             returnDependencies: () => ({
@@ -734,6 +687,15 @@ export default class Point extends GraphicalComponent {
             entryPrefixes: ["unconstrainedX"],
             defaultValueByArrayKey: () => me.fromAst(0),
             hasEssential: true,
+            // Restored saved state arrives as a bare tree, not a math
+            // expression: persistence strips the class on the way out, to keep
+            // the saved state small, and nothing on the way back in puts it
+            // back. `set` is the declared place to coerce a value that came
+            // from outside, and without it a reloaded point holds a raw number
+            // here. `xs` converts before publishing a value, so the raw number
+            // is invisible until the constraint machinery reads this variable
+            // directly and calls a math-expression method on it (#1939).
+            set: convertValueToMathExpression,
             returnArraySizeDependencies: () => ({
                 numDimensions: {
                     dependencyType: "stateVariable",
@@ -976,7 +938,9 @@ export default class Point extends GraphicalComponent {
                         desiredCoords = me.fromAst(coordsTree[1]);
                     } else {
                         coordsTree[0] = "vector";
-                        desiredCoords = me.fromAst(coordsTree);
+                        desiredCoords = me.fromAst(
+                            markUnspecifiedComponents(coordsTree),
+                        );
                     }
                     let instruction = {
                         setDependency: coordsDependency,
@@ -1197,18 +1161,16 @@ export default class Point extends GraphicalComponent {
 
                 let coordsTree = desiredStateVariableValues.coords.tree;
 
-                if (
-                    !(
-                        Array.isArray(coordsTree) &&
-                        vectorOperators.includes(coordsTree[0])
-                    )
-                ) {
+                if (!(
+                    Array.isArray(coordsTree) &&
+                    vectorOperators.includes(coordsTree[0])
+                )) {
                     desiredXValues[0] = desiredStateVariableValues.coords;
                 } else {
                     for (let i = 0; i < coordsTree.length - 1; i++) {
                         let desiredValue =
                             desiredStateVariableValues.coords.get_component(i);
-                        if (desiredValue.tree !== undefined) {
+                        if (!isUnspecifiedComponentValue(desiredValue)) {
                             desiredXValues[i] = desiredValue;
                         }
                     }
@@ -1319,11 +1281,11 @@ export default class Point extends GraphicalComponent {
                 for (let arrayKey of arrayKeys) {
                     let x = dependencyValuesByKey[arrayKey].x;
                     if (x) {
-                        x =
-                            dependencyValuesByKey[
-                                arrayKey
-                            ].x.evaluate_to_constant();
-                        numericalXs[arrayKey] = Number(x);
+                        // A coordinate with no numeric value, or a complex
+                        // one, has to reach the renderer as `NaN`.
+                        numericalXs[arrayKey] = evaluateToNumber(
+                            dependencyValuesByKey[arrayKey].x,
+                        );
                     } else {
                         numericalXs[arrayKey] = NaN;
                     }

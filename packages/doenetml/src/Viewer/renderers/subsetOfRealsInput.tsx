@@ -7,6 +7,8 @@ import { ActionButtonGroup } from "@doenet/ui-components";
 import { ToggleButton } from "@doenet/ui-components";
 import { ToggleButtonGroup } from "@doenet/ui-components";
 import { useRecordVisibilityChanges } from "../../utils/visibility";
+import { useT } from "../../utils/i18n";
+import { ltrIslandProps } from "./utils/direction";
 import "./subsetOfRealsInput.css";
 
 interface PointDisplayed {
@@ -34,6 +36,7 @@ export default React.memo(function subsetOfReals(
     let { id, SVs, actions, callAction } =
         useDoenetRenderer<SubsetOfRealsInputSVs>(props, false);
     let [mode, setMode] = useState("add remove points");
+    const t = useT();
     let bounds = useRef<HTMLDivElement | null>(null);
     let pointGrabbed = useRef<number | null>(null);
 
@@ -61,9 +64,27 @@ export default React.memo(function subsetOfReals(
         controlButtons = (
             <>
                 <ToggleButtonGroup onClick={handleTogglePoints}>
-                    <ToggleButton value="Add/Remove points"></ToggleButton>
-                    <ToggleButton value="Toggle points and intervals"></ToggleButton>
-                    <ToggleButton value="Move Points"></ToggleButton>
+                    <ToggleButton
+                        value={t(
+                            "subset-add-remove-points",
+                            undefined,
+                            "Add/Remove points",
+                        )}
+                    ></ToggleButton>
+                    <ToggleButton
+                        value={t(
+                            "subset-toggle-points-intervals",
+                            undefined,
+                            "Toggle points and intervals",
+                        )}
+                    ></ToggleButton>
+                    <ToggleButton
+                        value={t(
+                            "subset-move-points",
+                            undefined,
+                            "Move Points",
+                        )}
+                    ></ToggleButton>
                 </ToggleButtonGroup>
                 <ActionButtonGroup>
                     <ActionButton
@@ -72,7 +93,7 @@ export default React.memo(function subsetOfReals(
                                 action: actions.clear,
                             })
                         }
-                        value="Clear"
+                        value={t("subset-clear", undefined, "Clear")}
                     ></ActionButton>
                     <ActionButton
                         onClick={() =>
@@ -109,7 +130,7 @@ export default React.memo(function subsetOfReals(
                 y1="35"
                 x2={x}
                 y2="45"
-                style={{ stroke: "black", strokeWidth: "1" }}
+                style={{ stroke: "var(--canvasText)", strokeWidth: "1" }}
                 shapeRendering="geometricPrecision"
             />,
         );
@@ -138,7 +159,7 @@ export default React.memo(function subsetOfReals(
 
         let currentFillColor = "var(--mainPurple)"; // New CSS variable color
         if (!closed) {
-            currentFillColor = "white";
+            currentFillColor = "var(--canvas)";
         }
 
         let key = `point-${xPosition}`;
@@ -149,7 +170,7 @@ export default React.memo(function subsetOfReals(
                 cx={xPosition}
                 cy="40"
                 r="6"
-                stroke="black"
+                stroke="var(--mainPurple)"
                 strokeWidth="1"
                 fill={currentFillColor}
             />,
@@ -178,7 +199,7 @@ export default React.memo(function subsetOfReals(
             storedPoints.push(
                 <polygon
                     key={lowerPointKey}
-                    points="5,40 20,46 20,34"
+                    points="5,40 20,50 20,30"
                     style={{
                         fill: currentFillColor,
                         stroke: currentFillColor,
@@ -193,7 +214,7 @@ export default React.memo(function subsetOfReals(
             storedPoints.push(
                 <polygon
                     key={higherPointKey}
-                    points="795,40 780,46 780,34"
+                    points="795,40 780,50 780,30"
                     style={{
                         fill: currentFillColor,
                         stroke: currentFillColor,
@@ -241,7 +262,8 @@ export default React.memo(function subsetOfReals(
     }
 
     async function handleInput(e: React.MouseEvent, inputState: string) {
-        let mouseLeft = e.clientX - (bounds.current?.offsetLeft ?? 0);
+        let mouseLeft =
+            e.clientX - (bounds.current?.getBoundingClientRect().left ?? 0);
         let xPosition = xPositionToXValue(mouseLeft);
         let pointHitTolerance = 0.2;
 
@@ -336,14 +358,21 @@ export default React.memo(function subsetOfReals(
     }
 
     return (
-        <div ref={ref} id={id}>
+        // A number line runs from −10 on the left to 10 on the right in every
+        // language: it is mathematical notation, not prose. Everything under
+        // here assumes that — the hash marks are laid out at fixed pixel
+        // offsets, the arrowheads are hard-coded left and right, and the
+        // pointer handler maps an x position to a value by subtracting a left
+        // edge. Pinned as one attribute on the whole widget so the controls
+        // above the axis stay on the same side as the axis itself.
+        <div ref={ref} id={id} {...ltrIslandProps()}>
             <div ref={bounds} style={{ display: "flex", gap: "12px" }}>
                 {controlButtons}
             </div>
             <svg
                 width="808"
                 height="80"
-                style={{ backgroundColor: "white" }}
+                style={{ backgroundColor: "var(--canvas)" }}
                 onMouseDown={(e) => {
                     handleInput(e, "down");
                 }}
@@ -360,16 +389,16 @@ export default React.memo(function subsetOfReals(
                 <polygon
                     points="5,40 20,50 20,30"
                     style={{
-                        fill: "black",
-                        stroke: "black",
+                        fill: "var(--canvasText)",
+                        stroke: "var(--canvasText)",
                         strokeWidth: "1",
                     }}
                 />
                 <polygon
                     points="795,40 780,50 780,30"
                     style={{
-                        fill: "black",
-                        stroke: "black",
+                        fill: "var(--canvasText)",
+                        stroke: "var(--canvasText)",
                         strokeWidth: "1",
                     }}
                 />
@@ -380,7 +409,7 @@ export default React.memo(function subsetOfReals(
                     y1="40"
                     x2="780"
                     y2="40"
-                    style={{ stroke: "black", strokeWidth: "2" }}
+                    style={{ stroke: "var(--canvasText)", strokeWidth: "2" }}
                 />
                 {storedPoints}
                 {labels}

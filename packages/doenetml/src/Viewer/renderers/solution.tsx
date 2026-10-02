@@ -6,6 +6,8 @@ import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPuzzlePiece as puzzle } from "@fortawesome/free-solid-svg-icons";
 import { useRecordVisibilityChanges } from "../../utils/visibility";
 import { addCommasForCompositeRanges } from "./utils/composites";
+import { useChromeLangDir, useT } from "../../utils/i18n";
+import { clickToToggleLabel } from "./utils/disclosure";
 import "./solution.css";
 
 interface SolutionSVs {
@@ -23,11 +25,18 @@ export default React.memo(function Solution(props: UseDoenetRendererProps) {
     let { id, SVs, children, actions, callAction } =
         useDoenetRenderer<SolutionSVs>(props);
 
+    const t = useT();
+
     const ref = useRef(null);
 
     useRecordVisibilityChanges(ref, callAction, actions);
 
-    let openCloseText = "open";
+    const openCloseText = clickToToggleLabel(t, SVs.open);
+    // The heading is mixed: the section name and message come from the worker
+    // in the document's language, while "(click to open)" is the reader's.
+    // Only the chrome half re-declares itself, and only where the two
+    // directions disagree.
+    const chromeLangDir = useChromeLangDir();
 
     if (SVs.hidden) {
         return null;
@@ -53,8 +62,11 @@ export default React.memo(function Solution(props: UseDoenetRendererProps) {
         }
 
         icon = <FontAwesomeIcon icon={puzzle} />;
-        openCloseText = "close";
-        childrenToRender = SVs.rendered ? children : <p>Initializing...</p>;
+        childrenToRender = SVs.rendered ? (
+            children
+        ) : (
+            <p>{t("collapsible-initializing", undefined, "Initializing...")}</p>
+        );
         infoBlockStyle = {
             display: "block",
             margin: "0px 4px 12px 4px",
@@ -117,7 +129,7 @@ export default React.memo(function Solution(props: UseDoenetRendererProps) {
                     borderTopRightRadius: "5px",
                     borderBottomLeftRadius: SVs.open ? "0px" : "5px",
                     borderBottomRightRadius: SVs.open ? "0px" : "5px",
-                    backgroundColor: "var(--mainGray)",
+                    backgroundColor: "var(--revealButtonSurface)",
                     cursor: "pointer",
                 }}
                 tabIndex={0}
@@ -125,8 +137,8 @@ export default React.memo(function Solution(props: UseDoenetRendererProps) {
                 onClick={onClickFunction}
                 onKeyDown={onKeyPressFunction}
             >
-                {icon} {SVs.sectionName} {SVs.message} (click to {openCloseText}
-                )
+                {icon} {SVs.sectionName} {SVs.message}{" "}
+                <span {...chromeLangDir}>{openCloseText}</span>
             </span>
             <span style={infoBlockStyle}>{childrenToRender}</span>
         </aside>

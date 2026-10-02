@@ -9,7 +9,10 @@ import { getCompletionItems } from "./methods/get-completion-items";
 import { getSchemaViolations } from "./methods/get-schema-violations";
 import {
     getCompletionContext,
+    isParenthesizedRefMacro,
+    segmentFitsBareMacro,
     type CompletionContext,
+    type RefMemberCompletionContext,
 } from "./methods/get-completion-context";
 import {
     COMPOSITE_WRAPPER_NAMES,
@@ -26,7 +29,12 @@ import {
 // Re-exported so consumers (notably `@doenet/lsp`'s context-help feature)
 // can type a precomputed completion context they thread into
 // `computeContextHelp` to avoid a redundant schema walk per RPC.
-export { type CompletionContext };
+export {
+    type CompletionContext,
+    type RefMemberCompletionContext,
+    isParenthesizedRefMacro,
+    segmentFitsBareMacro,
+};
 
 /**
  * Per-attribute fields surfaced in autocomplete and the help panel.
@@ -35,12 +43,44 @@ export { type CompletionContext };
  * like `"true"`/`"false"` injected by `valueForTrue`/`valueForFalse`).
  * `autocompleteValues` is the author-facing list with per-value descriptions —
  * boolean aliases are intentionally omitted so they don't pollute suggestions.
+ *
+ * The two are independent. An attribute declaring `suggestedValues` has
+ * `autocompleteValues` and no `values` at all: it offers completions while
+ * accepting anything, so the schema-violation check (which reads only `values`)
+ * never fires for it.
  */
 export type SchemaAttribute = {
     name: string;
     description?: string;
+    /**
+     * Component type the attribute's value is parsed as (the worker's
+     * `createComponentOfType`). Carried so author-facing surfaces can explain
+     * a value syntax the description alone can't — the help panel reads
+     * `componentSize` to list the length units an attribute accepts.
+     * Optional: only attributes read from the generated schema carry one. A
+     * synthesized attribute (an author-declared `<module>` one, from
+     * `mergeDeclaredIntoSchemaAttributes`) leaves it unset, so the surfaces
+     * that key off it treat the value as unexplained rather than mistyped.
+     */
+    type?: string;
     values?: string[];
     autocompleteValues?: ValidValueEntry[];
+    /**
+     * `true` when `autocompleteValues` are suggestions rather than the
+     * permitted set. Always accompanied by an absent `values`. Author-facing
+     * surfaces read it to stay honest about the list: the help panel labels it
+     * "Suggested values", and autocomplete keeps the free-text "wrap in
+     * quotes" hint for a bare value the list doesn't contain instead of going
+     * silent as it does for an enum.
+     */
+    suggestedValuesOnly?: boolean;
+    /**
+     * `true` when the attribute is list-valued and its `values` constrain each
+     * item of the list (not the whole value). Schema-violation checks split the
+     * authored value on whitespace and validate each token; the help panel
+     * phrases the constraint per-item.
+     */
+    isList?: boolean;
     defaultValue?: unknown;
 };
 
@@ -350,7 +390,14 @@ export class AutoCompleter {
     parentChildMap: Map<string, Set<string>> = new Map();
     nodeAttributeMap: Map<
         string,
-        Map<string, { correctCase: Set<string>; lowerCase: Set<string> } | null>
+        Map<
+            string,
+            {
+                correctCase: Set<string>;
+                lowerCase: Set<string>;
+                isList: boolean;
+            } | null
+        >
     > = new Map();
     /**
      * Processed snippets indexed by element (normalized to schema capitalization) for quick lookup.
@@ -663,6 +710,7 @@ export class AutoCompleter {
                                   lowerCase: new Set(
                                       a.values.map((v) => v.toLowerCase()),
                                   ),
+                                  isList: Boolean(a.isList),
                               }
                             : null,
                     ]),
@@ -1189,6 +1237,7 @@ export class AutoCompleter {
                               lowerCase: new Set(
                                   aliasAttr.values.map((v) => v.toLowerCase()),
                               ),
+                              isList: Boolean(aliasAttr.isList),
                           }
                         : null;
                 }
@@ -1264,10 +1313,10 @@ export class AutoCompleter {
      * Get snippets allowed for a given set of allowed element names.
      * Filters snippets by:
      * 1. Whether their element is in the allowed elements set
-     * 2. Whether their key starts with the typed prefix
+     * 2. Whether their key contains the typed text
      *
      * @param allowedElements - Set of allowed element names
-     * @param typedPrefix - The text typed after `<` (used for prefix filtering)
+     * @param typedPrefix - The text typed after `<` (used for substring filtering)
      * @returns Array of ProcessedSnippets that match the criteria
      */
     _getSnippetsForElements(
@@ -1283,11 +1332,13 @@ export class AutoCompleter {
             results.push(...snippets);
         }
 
-        // Filter by typed prefix on snippet key if prefix is provided
+        // Filter by typed text on snippet key (substring, so the snippet
+        // surfaces when its key contains the typed text — matching element
+        // name matching).
         if (typedPrefix) {
             const prefixLower = typedPrefix.toLowerCase();
             return results.filter((s) =>
-                s.key.toLowerCase().startsWith(prefixLower),
+                s.key.toLowerCase().includes(prefixLower),
             );
         }
         return results;

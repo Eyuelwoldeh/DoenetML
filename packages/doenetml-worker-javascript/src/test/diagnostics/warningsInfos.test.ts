@@ -49,6 +49,37 @@ describe("Warning Tests @group4", async () => {
         ).eq(true);
     });
 
+    it("Deprecated odeSystem renderMode attribute", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+<odeSystem name="ode" renderMode="display">
+    <rightHandSide>-x</rightHandSide>
+</odeSystem>
+            `,
+        });
+
+        const diagnosticsByType = getDiagnosticsByType(core);
+
+        // The deprecation pass drops the attribute before the component sees
+        // it, so it is a warning rather than an "invalid attribute" error.
+        expect(diagnosticsByType.errors.length).eq(0);
+        expect(diagnosticsByType.warnings.length).eq(1);
+        expect(
+            diagnosticsByType.warnings.some((warning) =>
+                warning.message.includes(
+                    "Attribute `renderMode` on `<odeSystem>` is deprecated and ignored.",
+                ),
+            ),
+        ).eq(true);
+
+        // The system still renders as an aligned environment.
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("ode")].stateValues
+                .renderMode,
+        ).eq("align");
+    });
+
     it("Deprecated selectFromSequence sortResults attribute", async () => {
         const { core } = await createTestCore({
             doenetML: `
@@ -97,6 +128,214 @@ describe("Warning Tests @group4", async () => {
                 ),
             ),
         ).eq(true);
+    });
+
+    it("Deprecated description attribute names the component it was written on", async () => {
+        // `descriptionAttributeSugar` covers ten component types and puts the
+        // one the attribute was written on into the message, so exercise a
+        // couple of them together. `<image>` is covered in `image.test.ts`,
+        // which also checks that the rewritten child still supplies the alt
+        // text.
+        const { core } = await createTestCore({
+            doenetML: `
+<mathInput description="Enter a number" />
+<graph description="A graph" />
+            `,
+        });
+
+        const diagnosticsByType = getDiagnosticsByType(core);
+
+        expect(diagnosticsByType.errors.length).eq(0);
+        expect(diagnosticsByType.warnings.length).eq(2);
+
+        expect(
+            diagnosticsByType.warnings.map((warning) => warning.message),
+        ).contains(
+            "[deprecation] Attribute `description` on `<mathInput>` is deprecated; use a `<shortDescription>` child instead.",
+        );
+        expect(
+            diagnosticsByType.warnings.map((warning) => warning.message),
+        ).contains(
+            "[deprecation] Attribute `description` on `<graph>` is deprecated; use a `<shortDescription>` child instead.",
+        );
+    });
+
+    it("Deprecated physical labelPosition values are migrated to start/end", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+<textInput name="ti" labelPosition="left"><label>Text</label></textInput>
+<booleanInput name="bi" labelPosition="RIGHT"><label>Boolean</label></booleanInput>
+            `,
+        });
+
+        const diagnosticsByType = getDiagnosticsByType(core);
+
+        expect(diagnosticsByType.errors.length).eq(0);
+        expect(diagnosticsByType.warnings.length).eq(2);
+
+        const messages = diagnosticsByType.warnings.map(
+            (warning) => warning.message,
+        );
+        expect(messages).contains(
+            "[deprecation] Value `left` of attribute `labelPosition` on `<textInput>` is deprecated; use `start` instead.",
+        );
+        // Written in another casing: the migration matches the deprecated
+        // value case-insensitively, so it is recognized however the author
+        // capitalized it, and the message names it in canonical casing.
+        expect(messages).contains(
+            "[deprecation] Value `right` of attribute `labelPosition` on `<booleanInput>` is deprecated; use `end` instead.",
+        );
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("ti")].stateValues
+                .labelPosition,
+        ).eq("start");
+        expect(
+            stateVariables[await resolvePathToNodeIdx("bi")].stateValues
+                .labelPosition,
+        ).eq("end");
+    });
+
+    it("Deprecated resultsLocation values are migrated to start/end", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+<codeEditor name="ce" resultsLocation="left" />
+            `,
+        });
+
+        const diagnosticsByType = getDiagnosticsByType(core);
+
+        expect(diagnosticsByType.errors.length).eq(0);
+        expect(
+            diagnosticsByType.warnings.map((warning) => warning.message),
+        ).contains(
+            "[deprecation] Value `left` of attribute `resultsLocation` on `<codeEditor>` is deprecated; use `start` instead.",
+        );
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("ce")].stateValues
+                .resultsLocation,
+        ).eq("start");
+    });
+
+    it("labelPosition on a graph component keeps its physical values", async () => {
+        // A point's label sits in coordinate space, which does not mirror, so
+        // `upperLeft` is not up for renaming and must not draw a deprecation.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+<graph><point name="P" labelPosition="upperLeft">(1,2)<label>A</label></point></graph>
+            `,
+        });
+
+        const diagnosticsByType = getDiagnosticsByType(core);
+        expect(diagnosticsByType.errors.length).eq(0);
+        expect(diagnosticsByType.warnings.length).eq(0);
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("P")].stateValues
+                .labelPosition,
+        ).eq("upperleft");
+    });
+
+    it("Deprecated tabular border attributes are migrated to logical names", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+<tabular name="t" top="minor" left="medium" halign="right">
+  <row name="r" left="major">
+    <cell name="c" right="minor" bottom="medium">hello</cell>
+  </row>
+</tabular>
+            `,
+        });
+
+        const diagnosticsByType = getDiagnosticsByType(core);
+
+        expect(diagnosticsByType.errors.length).eq(0);
+        expect(diagnosticsByType.warnings.length).eq(6);
+
+        const messages = diagnosticsByType.warnings.map(
+            (warning) => warning.message,
+        );
+        expect(messages).contains(
+            "[deprecation] Attribute `left` on `<row>` is deprecated; use `startBorder` instead.",
+        );
+        expect(messages).contains(
+            "[deprecation] Attribute `right` on `<cell>` is deprecated; use `endBorder` instead.",
+        );
+        expect(messages).contains(
+            "[deprecation] Attribute `bottom` on `<cell>` is deprecated; use `bottomBorder` instead.",
+        );
+        expect(messages).contains(
+            "[deprecation] Attribute `top` on `<tabular>` is deprecated; use `topBorder` instead.",
+        );
+        expect(messages).contains(
+            "[deprecation] Attribute `left` on `<tabular>` is deprecated; use `startBorder` instead.",
+        );
+        // On the same element as the `left` → `startBorder` rename: the
+        // attribute rename and the value rename are applied in one visit, and
+        // `left` as an attribute name and `left` as a `halign` value are
+        // migrated independently of each other.
+        expect(messages).contains(
+            "[deprecation] Value `right` of attribute `halign` on `<tabular>` is deprecated; use `end` instead.",
+        );
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("t")].stateValues
+                .topBorder,
+        ).eq("minor");
+        expect(
+            stateVariables[await resolvePathToNodeIdx("t")].stateValues
+                .startBorder,
+        ).eq("medium");
+        expect(
+            stateVariables[await resolvePathToNodeIdx("t")].stateValues.halign,
+        ).eq("end");
+        expect(
+            stateVariables[await resolvePathToNodeIdx("r")].stateValues
+                .startBorder,
+        ).eq("major");
+        expect(
+            stateVariables[await resolvePathToNodeIdx("c")].stateValues
+                .endBorder,
+        ).eq("minor");
+        expect(
+            stateVariables[await resolvePathToNodeIdx("c")].stateValues
+                .bottomBorder,
+        ).eq("medium");
+    });
+
+    it("Deprecated halign values are migrated to start/end", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+<tabular halign="right">
+  <row><cell name="c" halign="left">hello</cell></row>
+</tabular>
+            `,
+        });
+
+        const diagnosticsByType = getDiagnosticsByType(core);
+
+        expect(diagnosticsByType.errors.length).eq(0);
+        expect(diagnosticsByType.warnings.length).eq(2);
+
+        const messages = diagnosticsByType.warnings.map(
+            (warning) => warning.message,
+        );
+        expect(messages).contains(
+            "[deprecation] Value `right` of attribute `halign` on `<tabular>` is deprecated; use `end` instead.",
+        );
+        expect(messages).contains(
+            "[deprecation] Value `left` of attribute `halign` on `<cell>` is deprecated; use `start` instead.",
+        );
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("c")].stateValues.halign,
+        ).eq("start");
     });
 
     it("From state variable definitions", async () => {
@@ -240,23 +479,25 @@ describe("Warning Tests @group4", async () => {
         expect(diagnosticsByType.warnings.length).eq(0);
         expect(diagnosticsByType.infos.length).eq(5);
 
+        // Infos surface in evaluation order, which under on-demand
+        // dependency setup follows document order.
         expect(diagnosticsByType.infos[0].message).contain(
-            "Invalid value `new1` for attribute `format`",
-        );
-        expect(diagnosticsByType.infos[0].type).eq("info");
-        expect(diagnosticsByType.infos[0].position.start.line).eq(5);
-        expect(diagnosticsByType.infos[0].position.start.column).eq(3);
-        expect(diagnosticsByType.infos[0].position.end.line).eq(5);
-        expect(diagnosticsByType.infos[0].position.end.column).eq(46);
-
-        expect(diagnosticsByType.infos[1].message).contain(
             "Invalid value `bad` for attribute `type`",
         );
+        expect(diagnosticsByType.infos[0].type).eq("info");
+        expect(diagnosticsByType.infos[0].position.start.line).eq(2);
+        expect(diagnosticsByType.infos[0].position.start.column).eq(3);
+        expect(diagnosticsByType.infos[0].position.end.line).eq(2);
+        expect(diagnosticsByType.infos[0].position.end.column).eq(26);
+
+        expect(diagnosticsByType.infos[1].message).contain(
+            "Invalid value `new1` for attribute `format`",
+        );
         expect(diagnosticsByType.infos[1].type).eq("info");
-        expect(diagnosticsByType.infos[1].position.start.line).eq(2);
+        expect(diagnosticsByType.infos[1].position.start.line).eq(5);
         expect(diagnosticsByType.infos[1].position.start.column).eq(3);
-        expect(diagnosticsByType.infos[1].position.end.line).eq(2);
-        expect(diagnosticsByType.infos[1].position.end.column).eq(26);
+        expect(diagnosticsByType.infos[1].position.end.line).eq(5);
+        expect(diagnosticsByType.infos[1].position.end.column).eq(46);
 
         expect(diagnosticsByType.infos[2].message).contain(
             "Invalid value `new2` for attribute `format`",
@@ -783,13 +1024,21 @@ describe("Warning Tests @group4", async () => {
         const diagnosticsByType = getDiagnosticsByType(core);
 
         expect(diagnosticsByType.errors.length).eq(0);
-        expect(
-            diagnosticsByType.infos.some((info) =>
-                info.message.includes(
-                    "cannot determine unique variants of selectFromSequence as numToSelect isn't a non-negative integer",
-                ),
+        const info = diagnosticsByType.infos.find((info) =>
+            info.message.includes(
+                "cannot determine unique variants of selectFromSequence as numToSelect isn't a non-negative integer",
             ),
-        ).eq(true);
+        );
+        expect(info).toBeDefined();
+
+        // `pushVariantInfo` builds every one of these on its callers' behalf,
+        // so the code and arguments are the only evidence that the sentence
+        // came from the catalog rather than from a literal at the call site —
+        // and they are the half the main thread re-renders from. The tag is an
+        // argument because it is an identifier that stays as written in every
+        // language; the reason it gives is what the code names.
+        expect(info?.code).eq("doenet-i0022");
+        expect(info?.args?.component).eq("selectFromSequence");
     });
 
     it("non-integer requested variant index produces an info", async () => {
@@ -808,6 +1057,84 @@ describe("Warning Tests @group4", async () => {
                     info.message.includes("must be an integer"),
             ),
         ).eq(true);
+    });
+
+    it("reports a warning about markup in index brackets once, however deeply nested", async () => {
+        // A reference resolution carries the same index nodes on both its
+        // `originalPath` and its `unresolvedPath`, and the load-time pipeline
+        // expands both, so anything reported about markup between index
+        // brackets used to arrive once per path — twice one level in, four
+        // times two levels in.
+        const documents = [
+            `<p>$(x)[<number>1</number>]</p>`,
+            `<numberList name="myList">100 300 200 50</numberList>
+             <p>$myList[<p>$(x)[<number>1</number>]</p>]</p>`,
+            `<numberList name="myList">100 300 200 50</numberList>
+             <p>$myList[<p>$myList[<p>$(x)[<number>1</number>]</p>]</p>]</p>`,
+        ];
+        for (const doenetML of documents) {
+            const { core } = await createTestCore({ doenetML });
+            const diagnosticsByType = getDiagnosticsByType(core);
+            expect(
+                diagnosticsByType.warnings.filter(
+                    (warning) => warning.code === "doenet-w0162",
+                ).length,
+                doenetML,
+            ).eq(1);
+            // Whatever else each document earns, no two of them are the same
+            // message in the same place.
+            const keys = diagnosticsByType.warnings.map((warning) =>
+                JSON.stringify([
+                    warning.message,
+                    warning.position?.start?.offset,
+                ]),
+            );
+            expect(new Set(keys).size, doenetML).eq(keys.length);
+        }
+    });
+
+    it("says nothing about invalid children an author did not write", async () => {
+        // An element in index brackets that normalization turns into an
+        // `_error` used to draw a second warning beside the genuine one:
+        // "Invalid children for `<_error>`: Found invalid children: `<_copy>`".
+        // Neither component is anything the author wrote.
+        const documents = [
+            `<numberList name="myList">100 300 200 50</numberList>
+             <p>$myList[<indexOf type="text" tolerance="1e-6" target="100">$myList</indexOf>]</p>`,
+            `<numberList name="myList">100 300 200 50</numberList>
+             <p>$myList[<number bogusAttr="1">$k</number>]</p>`,
+            // Reported against `<setup>` rather than `<_error>`, from the alias
+            // components `<repeat>` synthesizes, but the same cause.
+            `<numberList name="myList">100 300 200 50</numberList>
+             <p>$myList[<indexOf target="2"><repeat for="1 2" valueName="v"><number>$v</number></repeat></indexOf>]</p>`,
+        ];
+        for (const doenetML of documents) {
+            const { core } = await createTestCore({ doenetML });
+            const diagnosticsByType = getDiagnosticsByType(core);
+            expect(
+                diagnosticsByType.warnings.filter(
+                    (warning) => warning.code === "doenet-w0107",
+                ),
+                doenetML,
+            ).eqls([]);
+        }
+
+        // The first document's genuine error is still reported, and the same
+        // markup written in ordinary content behaves the same way — which is
+        // what made the extra message specific to an index in the first place.
+        for (const doenetML of [
+            `<numberList name="myList">100 300 200 50</numberList>
+             <p>$myList[<indexOf type="text" tolerance="1e-6" target="100">$myList</indexOf>]</p>`,
+            `<numberList name="myList">100 300 200 50</numberList>
+             <p><indexOf type="text" tolerance="1e-6" target="100">$myList</indexOf></p>`,
+        ]) {
+            const { core } = await createTestCore({ doenetML });
+            const diagnosticsByType = getDiagnosticsByType(core);
+            expect(diagnosticsByType.errors.length, doenetML).eq(1);
+            expect(diagnosticsByType.errors[0].message).contain(
+                `Invalid attribute "tolerance"`,
+            );
+        }
     });
 
     it("non-numeric requested variant index produces an info", async () => {

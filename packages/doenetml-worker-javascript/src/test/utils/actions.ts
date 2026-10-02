@@ -284,6 +284,94 @@ export async function updateMatrixInputValueToImmediateValue({
     }
 }
 
+async function fractionInputPartIdx({
+    componentIdx,
+    part,
+    core,
+    stateVariables,
+}: {
+    componentIdx: number;
+    part: "numerator" | "denominator";
+    core: PublicDoenetMLCore;
+    stateVariables?: any;
+}) {
+    if (stateVariables === undefined) {
+        stateVariables = await core.returnAllStateVariables(false, true);
+    }
+    let fractionInput = stateVariables[componentIdx];
+    let childInd = part === "denominator" ? 1 : 0;
+    return fractionInput.activeChildren[childInd]?.componentIdx;
+}
+
+export async function updateFractionInputValue({
+    latex,
+    componentIdx,
+    part,
+    core,
+}: {
+    latex: string;
+    componentIdx: number;
+    part: "numerator" | "denominator";
+    core: PublicDoenetMLCore;
+}) {
+    let partIdx = await fractionInputPartIdx({ componentIdx, part, core });
+
+    if (partIdx !== undefined) {
+        await core.requestAction({
+            componentIdx: partIdx,
+            actionName: "updateRawValue",
+            args: { rawRendererValue: latex },
+        });
+        await core.requestAction({
+            componentIdx: partIdx,
+            actionName: "updateValue",
+            args: {},
+        });
+    }
+}
+
+export async function updateFractionInputImmediateValue({
+    latex,
+    componentIdx,
+    part,
+    core,
+}: {
+    latex: string;
+    componentIdx: number;
+    part: "numerator" | "denominator";
+    core: PublicDoenetMLCore;
+}) {
+    let partIdx = await fractionInputPartIdx({ componentIdx, part, core });
+
+    if (partIdx !== undefined) {
+        await core.requestAction({
+            componentIdx: partIdx,
+            actionName: "updateRawValue",
+            args: { rawRendererValue: latex },
+        });
+    }
+}
+
+export async function updateFractionInputValueToImmediateValue({
+    componentIdx,
+    part,
+    core,
+}: {
+    componentIdx: number;
+    part: "numerator" | "denominator";
+    core: PublicDoenetMLCore;
+}) {
+    let partIdx = await fractionInputPartIdx({ componentIdx, part, core });
+
+    if (partIdx !== undefined) {
+        await core.requestAction({
+            componentIdx: partIdx,
+            actionName: "updateValue",
+            args: {},
+        });
+    }
+}
+
 export async function updateMatrixInputNumRows({
     numRows,
     componentIdx,
@@ -340,6 +428,26 @@ export async function clickPoint({
     await core.requestAction({
         componentIdx,
         actionName: "pointClicked",
+        args: { componentIdx },
+    });
+}
+
+/**
+ * Click a component that has a `*Clicked` action, such as a `<text>`
+ * (`textClicked`) or an `<image>` (`imageClicked`).
+ */
+export async function clickComponent({
+    componentIdx,
+    actionName,
+    core,
+}: {
+    componentIdx: number;
+    actionName: string;
+    core: PublicDoenetMLCore;
+}) {
+    await core.requestAction({
+        componentIdx,
+        actionName,
         args: { componentIdx },
     });
 }

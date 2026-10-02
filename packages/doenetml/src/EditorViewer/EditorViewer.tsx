@@ -9,12 +9,17 @@ import React, {
 } from "react";
 import { flushSync } from "react-dom";
 import { ResizablePanelPair } from "@doenet/ui-components";
-import { CodeMirror, LSP } from "@doenet/codemirror";
+import { CodeMirror, LSP, EditorView, keymap } from "@doenet/codemirror";
 import "@doenet/codemirror/style.css";
-import { DocViewer } from "../Viewer/DocViewer";
+import { DocViewer, type SourcePosition } from "../Viewer/DocViewer";
 import { DiagnosticsResponseTabContents } from "./DiagnosticsResponseTabs";
 import type { DiagnosticsTabId } from "./DiagnosticsResponseTabs";
-import { DiagnosticRecord, nanInfinityReviver } from "@doenet/utils";
+import {
+    DiagnosticRecord,
+    nanInfinityReviver,
+    isSaveShortcutKeydown,
+    type ReaderStyleOverrides,
+} from "@doenet/utils";
 import { nanoid } from "nanoid";
 import { prettyPrint } from "@doenet/parser/pretty-printer";
 import { formatResponse } from "../utils/responses";
@@ -23,16 +28,30 @@ import { EditorFooter } from "./EditorFooter";
 import { ViewerControlsBar } from "./ViewerControlsBar";
 import "./editor-viewer.css";
 import { useTabStore } from "@ariakit/react";
-import { setVariantsFromCallback } from "../utils/variants";
+import type { ResolvedTheme } from "../utils/theme";
+import { setVariantsFromCallback, type VariantsState } from "../utils/variants";
+import { hasNavigationModifier } from "../utils/sourceNavigation";
 import type { DiagnosticsSummary } from "./diagnostics";
 import {
     mergeDiagnosticsByType,
     toAdditionalDiagnosticsForLsp,
 } from "./diagnostics";
 import type { HelpContent } from "@doenet/lsp-tools";
-import { EditorSelection } from "@codemirror/state";
+import { EditorSelection, type Extension } from "@codemirror/state";
 import type { Completion } from "@codemirror/autocomplete";
 import { doenetGlobalConfig } from "../global-config";
+import type { DiagnosticArgs } from "@doenet/i18n";
+import {
+    I18nProvider,
+    useChromeTranslator,
+    useLocaleCatalogs,
+    useUiLocale,
+} from "../utils/i18n";
+import { useDiagnosticFormatter } from "../utils/diagnostics";
+import type {
+    DiagnosticPresentation,
+    SeverityHeadingKey,
+} from "@doenet/codemirror";
 
 const HELP_NONE: HelpContent = { kind: "none" };
 
@@ -40,6 +59,33 @@ const HELP_NONE: HelpContent = { kind: "none" };
 // stable across renders. A parameter default `= []` would create a fresh array
 // each render, refiring every effect/memo that depends on `initialDiagnostics`.
 const EMPTY_INITIAL_DIAGNOSTICS: DiagnosticRecord[] = [];
+
+// Click-to-navigate takes over the editor's Mod+click: CodeMirror's default
+// reading of that chord — Cmd on macOS, Ctrl elsewhere — is "add another
+// selection range", which would leave a stray second cursor behind after
+// every navigation gesture, so the next keystroke would type in two places
+// at once. Turning the chord's selection meaning off here (rather than
+// undoing the extra range afterwards) keeps CodeMirror the single owner of
+// the selection. The trade-off: multiple selections can no longer be made
+// with the mouse; `Mod-d` (`selectNextOccurrence`) still adds them from the
+// keyboard. CodeMirror reads only the highest-precedence input to this
+// facet and nothing else configures it, so appending this one is enough.
+const NO_MOUSE_MULTIPLE_SELECTIONS: Extension =
+    EditorView.clickAddsSelectionRange.of(() => false);
+
+/**
+ * Keyboard equivalent of the editor→viewer Cmd/Ctrl+click gesture, scrolling
+ * the viewer to whatever the cursor is on.
+ *
+ * Without it that direction would be mouse-only, unreachable to anyone
+ * navigating by keyboard — the viewer→editor direction has had a keyboard
+ * path (Cmd/Ctrl+Enter on a focused element) all along. `Mod-Enter` would be
+ * the symmetric chord but CodeMirror's default keymap binds it to
+ * `insertBlankLine`; `Mod-Alt-p` is unbound there and matches the VS Code
+ * extension's default keybinding for the same action, so the two editors
+ * agree on at least one way to ask.
+ */
+const REVEAL_IN_VIEWER_KEY = "Mod-Alt-p";
 
 /**
  * Imperative handle exposed on the ref of `<DoenetEditor>`. Provides
@@ -77,21 +123,65 @@ export type DoenetEditorHandle = {
     updateRenderedView: () => void;
 };
 
+export type ViewerLocation = "start" | "end" | "top" | "bottom";
+
+/**
+ * `left` and `right` name the sides `start` and `end` fall on in a
+ * left-to-right document, which is what they have always meant here: the two
+ * panels are placed in DOM order and mirror with the writing direction.
+ */
+export function normalizeViewerLocation(
+    location: ViewerLocation | "left" | "right",
+): ViewerLocation {
+    if (location === "left") {
+        return "start";
+    }
+    if (location === "right") {
+        return "end";
+    }
+    return location;
+}
+
 type EditorViewerProps = {
     doenetML: string;
     activityId?: string;
     prefixForIds?: string;
     doenetViewerUrl?: string;
-    darkMode?: "dark" | "light";
+    doenetImagesUrl?: string;
+    darkMode?: ResolvedTheme;
+    /** BCP-47 tag for the previewed content's language. See `DoenetViewer`. */
+    documentLocale?: string | null;
+    /** BCP-47 tag for the chrome's language. Defaults to `documentLocale`. */
+    uiLocale?: string | null;
+    /**
+     * FTL catalogs keyed by locale, overriding what ships. See `DoenetViewer`.
+     */
+    localeResources?: Record<string, string> | null;
+    styleOverrides?: ReaderStyleOverrides | null;
     showAnswerResponseButton?: boolean;
     answerResponseCounts?: Record<string, number>;
     width?: string;
     height?: string;
     showViewer?: boolean;
-    viewerLocation?: "left" | "right" | "top" | "bottom";
+    /**
+     * Which side of the editor the viewer sits on. `start` and `end` follow
+     * the writing direction: the viewer panel is laid out in DOM order, so in
+     * a right-to-left document `start` is the right-hand side, the way every
+     * other pane in the editor mirrors.
+     *
+     * `left` and `right` are the former names of `start` and `end`, still
+     * accepted so hosts passing them keep the layout they had.
+     */
+    viewerLocation?: ViewerLocation | "left" | "right";
     doenetmlChangeCallback?: Function;
     immediateDoenetmlChangeCallback?: Function;
     documentStructureCallback?: Function;
+    /**
+     * Forwarded to the embedded `DocViewer` (#1709): the failure
+     * counterpart of its initialization signal, so a host that schedules
+     * this editor's boot can free the slot when the core cannot start.
+     */
+    coreStartFailedCallback?: Function;
     diagnosticsSummaryCallback?: (
         diagnosticsSummary: DiagnosticsSummary,
         doenetML: string,
@@ -106,7 +196,7 @@ type EditorViewerProps = {
      * Used by the footer to decide whether to reserve space on its right edge
      * for the virtual keyboard's open-keyboard tab. Mirrors the same prop on
      * `DoenetEditor`. Has no effect when the footer doesn't touch the
-     * container's right edge (default `viewerLocation="right"` with the
+     * container's trailing edge (default `viewerLocation="end"` with the
      * viewer shown).
      */
     addVirtualKeyboard?: boolean;
@@ -129,6 +219,35 @@ type EditorViewerProps = {
     initialOpenTab?: DiagnosticsTabId | null;
 };
 
+type TabVisibilityOptions = Pick<
+    EditorViewerProps,
+    "showDiagnostics" | "showResponses" | "showHelp"
+>;
+
+function firstEnabledTab({
+    showDiagnostics,
+    showResponses,
+    showHelp,
+}: TabVisibilityOptions): DiagnosticsTabId | null {
+    if (showHelp) return "help";
+    if (showDiagnostics) return "errors";
+    if (showResponses) return "responses";
+    return null;
+}
+
+function isTabEnabled(
+    tabId: DiagnosticsTabId,
+    { showDiagnostics, showResponses, showHelp }: TabVisibilityOptions,
+) {
+    if (tabId === "responses") {
+        return showResponses;
+    }
+    if (tabId === "help") {
+        return showHelp;
+    }
+    return showDiagnostics;
+}
+
 /**
  * Combined DoenetML editor/viewer shell with diagnostics, responses, formatting, and variants.
  */
@@ -141,16 +260,22 @@ export const EditorViewer = React.forwardRef<
         activityId: specifiedActivityId,
         prefixForIds = "",
         doenetViewerUrl,
+        doenetImagesUrl,
         darkMode = "light",
+        documentLocale,
+        uiLocale,
+        localeResources,
+        styleOverrides,
         showAnswerResponseButton = false,
         answerResponseCounts = {},
         width = "100%",
         height = "500px",
         showViewer = true,
-        viewerLocation = "right",
+        viewerLocation = "end",
         doenetmlChangeCallback,
         immediateDoenetmlChangeCallback,
         documentStructureCallback,
+        coreStartFailedCallback,
         diagnosticsSummaryCallback,
         id: specifiedId,
         readOnly = false,
@@ -167,14 +292,6 @@ export const EditorViewer = React.forwardRef<
     },
     ref,
 ) {
-    //Win, Mac or Linux
-    let platform = "Linux";
-    if (navigator.platform.indexOf("Win") != -1) {
-        platform = "Win";
-    } else if (navigator.platform.indexOf("Mac") != -1) {
-        platform = "Mac";
-    }
-
     if (readOnly) {
         showFormatter = false;
     }
@@ -187,8 +304,15 @@ export const EditorViewer = React.forwardRef<
     const [activityId, setActivityId] = useState(specifiedActivityId ?? id);
 
     const [codeChanged, setCodeChanged] = useState(false);
+    const panelLocation = normalizeViewerLocation(viewerLocation);
+
     const [documentInteracted, setDocumentInteracted] = useState(false);
-    const [updateWord, setUpdateWord] = useState("Reset");
+    // Which of the two states the button is in, not the word it shows. The
+    // word is translated at render, so a language change mid-session cannot
+    // leave the previous language's word sitting in state (#1580).
+    const [updateAction, setUpdateAction] = useState<"reset" | "update">(
+        "reset",
+    );
 
     const codeChangedRef = useRef(false); //To keep value up to date in the code mirror function
     codeChangedRef.current = codeChanged;
@@ -206,21 +330,12 @@ export const EditorViewer = React.forwardRef<
 
     const [viewerResetNum, setViewerResetNum] = useState(0);
 
-    const [variants, setVariants] = useState({
+    const [variants, setVariants] = useState<VariantsState>({
         index: 1,
         numVariants: 1,
         allPossibleVariants: ["a"],
     });
-
-    // First enabled tab in the canonical order (help → errors → responses), or
-    // `null` if no tabs are enabled. Used both for the `initialOpenTab` fallback
-    // and as the tab store's `defaultSelectedId` when the panel mounts closed.
-    function firstEnabledTab(): DiagnosticsTabId | null {
-        if (showHelp) return "help";
-        if (showDiagnostics) return "errors";
-        if (showResponses) return "responses";
-        return null;
-    }
+    const tabVisibility = { showDiagnostics, showResponses, showHelp };
 
     // Resolve `initialOpenTab` once at mount:
     //  - `null`               → panel closed at mount
@@ -241,19 +356,13 @@ export const EditorViewer = React.forwardRef<
         }
         if (initialOpenTab === undefined) {
             return {
-                resolvedInitialOpenTab: firstEnabledTab(),
+                resolvedInitialOpenTab: firstEnabledTab(tabVisibility),
                 initialOpenTabWarning: null,
             };
         }
-        const tabEnabled =
-            initialOpenTab === "responses"
-                ? showResponses
-                : initialOpenTab === "help"
-                  ? showHelp
-                  : showDiagnostics;
-        if (!tabEnabled) {
+        if (!isTabEnabled(initialOpenTab, tabVisibility)) {
             return {
-                resolvedInitialOpenTab: firstEnabledTab(),
+                resolvedInitialOpenTab: firstEnabledTab(tabVisibility),
                 initialOpenTabWarning: `DoenetEditor: initialOpenTab="${initialOpenTab}" is not enabled (showDiagnostics=${showDiagnostics}, showResponses=${showResponses}, showHelp=${showHelp}); falling back to default.`,
             };
         }
@@ -309,6 +418,16 @@ export const EditorViewer = React.forwardRef<
     // JSON-RPC cancellation (issue #1086 / Option 4).
     const helpRequestIdRef = useRef(0);
 
+    // Click-to-navigate: the underlying CodeMirror `EditorView`, populated
+    // once it mounts, so a Cmd/Ctrl+click in the viewer can imperatively
+    // move the editor's cursor/selection, and a Cmd/Ctrl+click in the
+    // editor can be resolved to a source offset that the viewer scrolls to
+    // (via `scrollToSourceOffset`).
+    const editorViewRef = useRef<EditorView | null>(null);
+    const [scrollToSourceOffset, setScrollToSourceOffset] = useState<
+        number | null
+    >(null);
+
     // Wall-clock time of the most recent source-change reset.  Used by
     // `runHelpRequest` to retry on a brief delay if a help RPC arrives
     // before the LSP server has finished processing the source update.
@@ -325,7 +444,9 @@ export const EditorViewer = React.forwardRef<
     // store's selectedId is unobservable — `undefined` is fine.
     const tabStore = useTabStore({
         defaultSelectedId:
-            resolvedInitialOpenTab ?? firstEnabledTab() ?? undefined,
+            resolvedInitialOpenTab ??
+            firstEnabledTab(tabVisibility) ??
+            undefined,
     });
     const selectedTabId = tabStore.useState("selectedId");
     const isAccessibilityReportOpen =
@@ -359,12 +480,14 @@ export const EditorViewer = React.forwardRef<
         [activateTab],
     );
 
-    // Shared between the "Update" button click, the Ctrl/Cmd-S keyboard
-    // shortcut, and the imperative `updateRenderedView()` ref method. Reads
-    // via refs and early-returns when nothing has changed so the programmatic
-    // call is a true no-op (no spurious `setResponses([])` re-render). For
-    // the button this guard is invisible (the button is disabled when both
-    // `codeChanged` and `documentInteracted` are false).
+    // Shared between the viewer-controls button and the imperative
+    // `updateRenderedView()` ref method. Reads via refs and early-returns when
+    // nothing has changed so the programmatic call is a true no-op (no
+    // spurious `setResponses([])` re-render). When source is unchanged but the
+    // rendered document has been interacted with, this remounts the viewer to
+    // clear that interaction state. The Ctrl/Cmd-S shortcut reuses this helper
+    // only when `codeChangedRef.current` is true so the shortcut mirrors
+    // "Update", not "Reset".
     const updateViewer = useCallback(() => {
         if (!codeChangedRef.current && !documentInteractedRef.current) {
             return;
@@ -397,13 +520,7 @@ export const EditorViewer = React.forwardRef<
         ref,
         () => ({
             openDiagnosticsTab(tabId: DiagnosticsTabId) {
-                const tabEnabled =
-                    tabId === "responses"
-                        ? showResponses
-                        : tabId === "help"
-                          ? showHelp
-                          : showDiagnostics;
-                if (!tabEnabled) {
+                if (!isTabEnabled(tabId, tabVisibility)) {
                     console.warn(
                         `DoenetEditor: openDiagnosticsTab("${tabId}") ignored — tab is not enabled (showDiagnostics=${showDiagnostics}, showResponses=${showResponses}, showHelp=${showHelp}).`,
                     );
@@ -445,11 +562,103 @@ export const EditorViewer = React.forwardRef<
         setReceivedDiagnosticsFromViewer(true);
     }
 
+    // The language the whole editor speaks — the footer, the diagnostics
+    // panel, the variant picker, the hover over a squiggle, all of it.
+    //
+    // That language is whichever one the viewer below resolved, not the one
+    // the surrounding host chrome uses. The panel lists diagnostics that were
+    // rendered down there, where an authored `<document lang>` is known, and
+    // the hover renders the same diagnostics a second time — so binding only
+    // those to it would leave "Line #2" in English beside a Spanish message.
+    // One scope for the editor, decided once (#1580): a footer in one language
+    // above a panel in another reads worse than either choice on its own.
+    //
+    // Until the source has been parsed there is nothing to report, so the
+    // props-only answer the surrounding chrome uses stands in.
+    const [viewerUiLocale, setViewerUiLocale] = useState<string | null>(null);
+    const hostUiLocale = useUiLocale();
+    const editorLocale = viewerUiLocale ?? hostUiLocale;
+    // `editorLocale` can be a language the props never named — the viewer
+    // reports it back after parsing an authored `<document lang>` — so the
+    // catalog for it is loaded here rather than only at the props. The load is
+    // shared with the viewer's, which asked for the same tag.
+    const availableCatalogs = useLocaleCatalogs(
+        [editorLocale],
+        localeResources,
+    );
+    // Bound to `translate` on purpose: `lint:i18n` only recognizes call sites
+    // through a translator named `t` or `translate`, so the keys reached below
+    // would otherwise read as orphans.
+    const translate = useChromeTranslator(editorLocale, availableCatalogs);
+    const formatDiagnostic = useDiagnosticFormatter(translate, editorLocale);
+
+    const accessibilityHeadings = useMemo(
+        () => ({
+            level1: translate(
+                "accessibility-heading-level-1",
+                undefined,
+                "WCAG AA Accessibility Violation",
+            ),
+            level2: translate(
+                "accessibility-heading-level-2",
+                undefined,
+                "Accessibility alert",
+            ),
+        }),
+        [translate],
+    );
+
+    const severityHeadings = useMemo<Record<SeverityHeadingKey, string>>(
+        () => ({
+            error: translate("diagnostic-heading-error", undefined, "Error"),
+            warning: translate(
+                "diagnostic-heading-warning",
+                undefined,
+                "Warning",
+            ),
+            information: translate(
+                "diagnostic-heading-information",
+                undefined,
+                "Info",
+            ),
+            hint: translate("diagnostic-heading-hint", undefined, "Hint"),
+        }),
+        [translate],
+    );
+
+    // What the editor says about a diagnostic: the message and, above it, the
+    // severity word. Rebuilt whenever the translator behind it is, which is
+    // how a language settled after the editor was already up reaches the
+    // tooltips — `CodeMirror` reads this through a ref and redraws the
+    // diagnostics on screen rather than rebuilding its extension set, so a
+    // new object costs nothing beyond that redraw.
+    const diagnosticPresentation = useMemo<DiagnosticPresentation>(
+        () => ({
+            formatMessage: ({ message, code, args }) =>
+                formatDiagnostic({
+                    message,
+                    // The LSP allows a numeric `code`; a Doenet diagnostic
+                    // code is always a string, and anything else names no
+                    // catalog message, so it is dropped rather than coerced
+                    // into a lookup that cannot succeed.
+                    code: typeof code === "string" ? code : undefined,
+                    args: args as DiagnosticArgs | undefined,
+                }),
+            severityHeading: (severity) => severityHeadings[severity],
+        }),
+        [formatDiagnostic, severityHeadings],
+    );
+
+    // The accessibility headings travel to the language server rather than
+    // being asked for at draw time, because they arrive as each diagnostic's
+    // `source`. So a language change has to resend them, which the dependency
+    // on `accessibilityHeadings` below does.
     useEffect(() => {
         const additionalDiagnostics = toAdditionalDiagnosticsForLsp({
             diagnostics: [...initialDiagnostics, ...diagnostics],
             showInfoAnnotations,
             showAccessibilityAnnotations,
+            accessibilityHeadings,
         });
 
         lspRef.current?.lsp.sendAdditionalDiagnostics(
@@ -461,6 +670,7 @@ export const EditorViewer = React.forwardRef<
         diagnostics,
         showInfoAnnotations,
         showAccessibilityAnnotations,
+        accessibilityHeadings,
     ]);
 
     const {
@@ -545,10 +755,14 @@ export const EditorViewer = React.forwardRef<
         function submittedResponseListener(event: any) {
             if (event.data.subject == "SPLICE.sendEvent") {
                 const data = event.data.data;
+                if (data.activityId !== activityId) {
+                    return;
+                }
+
                 if (data.verb !== "experienced" && data.verb !== "isVisible") {
                     setDocumentInteracted(true);
                     if (!codeChangedRef.current) {
-                        setUpdateWord("Reset");
+                        setUpdateAction("reset");
                     }
                 }
                 if (data.verb === "submitted") {
@@ -597,7 +811,7 @@ export const EditorViewer = React.forwardRef<
         return () => {
             removeEventListener("message", submittedResponseListener);
         };
-    }, [showViewer]);
+    }, [activityId]);
 
     useEffect(() => {
         editorDoenetMLRef.current = initialDoenetML;
@@ -634,7 +848,7 @@ export const EditorViewer = React.forwardRef<
 
             if (!codeChangedRef.current) {
                 setCodeChanged(true);
-                setUpdateWord("Update");
+                setUpdateAction("update");
             }
 
             immediateDoenetmlChangeCallbackRef.current?.(value);
@@ -758,6 +972,7 @@ export const EditorViewer = React.forwardRef<
         (selection: EditorSelection) => {
             const offset = selection.main.head;
             lastCursorOffsetRef.current = offset;
+
             window.clearTimeout(cursorDebounceTimer.current);
             // Skip the RPC when no one's looking — the help-becoming-visible
             // effect below will compute on demand for the current cursor.
@@ -834,19 +1049,30 @@ export const EditorViewer = React.forwardRef<
 
     useEffect(() => {
         const handleEditorKeyDown = (event: KeyboardEvent) => {
-            if (
-                (platform == "Mac" && event.metaKey && event.code === "KeyS") ||
-                (platform != "Mac" && event.ctrlKey && event.code === "KeyS")
-            ) {
+            if (isSaveShortcutKeydown(event)) {
                 event.preventDefault();
                 event.stopPropagation();
-                updateViewer();
+                // Ctrl/Cmd-S mirrors "Update", not "Reset": still suppress the
+                // browser save dialog, but only flush pending source edits.
+                if (codeChangedRef.current) {
+                    updateViewer();
+                }
             }
         };
 
         let codeEditorContainer = document.getElementById(id);
+        let viewerPanelContainer = viewerContainer.current;
         if (showViewer) {
             codeEditorContainer?.addEventListener(
+                "keydown",
+                handleEditorKeyDown,
+            );
+            // Also listen on the viewer panel so the shortcut works when focus
+            // is in the rendered document. The viewer container has
+            // tabIndex={-1}, so clicking non-focusable content (e.g. plain
+            // text) keeps focus within it rather than falling back to
+            // document.body, which would bypass this listener.
+            viewerPanelContainer?.addEventListener(
                 "keydown",
                 handleEditorKeyDown,
             );
@@ -854,6 +1080,10 @@ export const EditorViewer = React.forwardRef<
 
         return () => {
             codeEditorContainer?.removeEventListener(
+                "keydown",
+                handleEditorKeyDown,
+            );
+            viewerPanelContainer?.removeEventListener(
                 "keydown",
                 handleEditorKeyDown,
             );
@@ -885,17 +1115,104 @@ export const EditorViewer = React.forwardRef<
         };
     }, []);
 
+    // `scrollToSourceOffset` is a one-shot request, not a lasting position:
+    // clear it once the viewer has acted on it — a child's effects flush
+    // before its parent's, so `DocViewer` has already seen this value — so
+    // that repeating the gesture on the same spot (after scrolling the
+    // viewer away by hand, say) scrolls back instead of being swallowed as
+    // an unchanged state value.
+    useEffect(() => {
+        if (scrollToSourceOffset != null) {
+            setScrollToSourceOffset(null);
+        }
+    }, [scrollToSourceOffset]);
+
+    /**
+     * The two pieces of the editor→viewer gesture that have to reach inside
+     * CodeMirror: the keyboard equivalent of the Cmd/Ctrl+click, and the
+     * suppression of CodeMirror's own reading of that modifier as "add
+     * another selection range".
+     *
+     * Built once: `extraExtensions` feeds a `React.memo`'d component, so a
+     * fresh array each render would rebuild the editor's extensions every
+     * time. The empty dep list is honest — the only value captured is
+     * `setScrollToSourceOffset`, whose identity React guarantees.
+     */
+    const editorExtensions = useMemo<Extension[]>(
+        () => [
+            NO_MOUSE_MULTIPLE_SELECTIONS,
+            keymap.of([
+                {
+                    key: REVEAL_IN_VIEWER_KEY,
+                    run: (view) => {
+                        setScrollToSourceOffset(view.state.selection.main.head);
+                        // Handled, so CodeMirror stops here and the chord
+                        // never reaches the browser.
+                        return true;
+                    },
+                },
+            ]),
+        ],
+        [],
+    );
+
+    /**
+     * Editor→viewer navigation: Cmd/Ctrl+click on a spot in the editor
+     * scrolls the viewer to the element rendered from that source offset —
+     * the same explicit go-to-definition-style gesture the viewer uses in
+     * the other direction, so plain clicks and typing never move the
+     * viewer.
+     *
+     * Bound to a `display: contents` wrapper (so it stays out of layout)
+     * rather than to the `EditorView`'s DOM: the view is only available
+     * through a ref that CodeMirror fills in imperatively, with no render
+     * to hang a listener-attaching effect off. Listening in the capture
+     * phase keeps the click visible even if something inside CodeMirror
+     * stops its propagation; the offset comes from the pointer
+     * coordinates, so it doesn't matter whether CodeMirror has already
+     * moved the cursor. `posAtCoords` clips to the content area, so clicks
+     * past the end of a line or in the gutter still resolve; its `null`
+     * return is reserved for cases a click can't produce.
+     *
+     * The click's effect on the editor's own selection is left entirely to
+     * CodeMirror — `NO_MOUSE_MULTIPLE_SELECTIONS` is what makes that a
+     * plain cursor move rather than an added range.
+     */
+    function handleEditorClickCapture(e: React.MouseEvent) {
+        if (!hasNavigationModifier(e)) {
+            return;
+        }
+        const view = editorViewRef.current;
+        if (!view) {
+            return;
+        }
+        const pos = view.posAtCoords({ x: e.clientX, y: e.clientY });
+        if (pos == null) {
+            return;
+        }
+        setScrollToSourceOffset(pos);
+    }
+
     const codeMirror = (
-        <CodeMirror
-            value={editorDoenetML}
-            readOnly={readOnly}
-            onBlur={onBlur}
-            onChange={onEditorChange}
-            onCursorChange={onCursorChange}
-            onSelectedCompletionChange={onSelectedCompletionChange}
-            languageServerRef={lspRef}
-            doenetWorkerUrl={doenetGlobalConfig.doenetWorkerUrl}
-        />
+        <div
+            style={{ display: "contents" }}
+            onClickCapture={handleEditorClickCapture}
+        >
+            <CodeMirror
+                value={editorDoenetML}
+                readOnly={readOnly}
+                onBlur={onBlur}
+                onChange={onEditorChange}
+                onCursorChange={onCursorChange}
+                onSelectedCompletionChange={onSelectedCompletionChange}
+                languageServerRef={lspRef}
+                editorViewRef={editorViewRef}
+                doenetWorkerUrl={doenetGlobalConfig.doenetWorkerUrl}
+                darkMode={darkMode}
+                diagnosticPresentation={diagnosticPresentation}
+                extraExtensions={editorExtensions}
+            />
+        </div>
     );
 
     const editorAndCollapsiblePanel =
@@ -951,8 +1268,8 @@ export const EditorViewer = React.forwardRef<
                 reserveKeyboardButtonSpace={
                     addVirtualKeyboard &&
                     (!showViewer ||
-                        viewerLocation === "left" ||
-                        viewerLocation === "top")
+                        panelLocation === "start" ||
+                        panelLocation === "top")
                 }
                 diagnosticsSummary={{
                     warningsCount,
@@ -989,16 +1306,18 @@ export const EditorViewer = React.forwardRef<
 
     if (!showViewer) {
         return (
-            <div
-                style={{
-                    display: "flex",
-                    width: width,
-                    height: height,
-                    border: border,
-                    boxSizing: "border-box",
-                }}
-            >
-                {editorPanel}
+            <div data-theme={darkMode} style={{ display: "contents" }}>
+                <div
+                    style={{
+                        display: "flex",
+                        width: width,
+                        height: height,
+                        border: border,
+                        boxSizing: "border-box",
+                    }}
+                >
+                    {editorPanel}
+                </div>
             </div>
         );
     }
@@ -1013,15 +1332,42 @@ export const EditorViewer = React.forwardRef<
         }
     }
 
+    /**
+     * Click-to-navigate: move the code editor's cursor/selection to a
+     * rendered element's source position and scroll it to the center of the
+     * editor's viewport (falling back to as-centered-as-possible near the
+     * start/end of the document). Plain `scrollIntoView: true` on the
+     * transaction only scrolls the minimum distance needed, landing the
+     * line at whichever edge (top or bottom) it happened to enter from —
+     * `EditorView.scrollIntoView`'s `y: "center"` effect is what actually
+     * centers it.
+     */
+    function handleSourcePositionClick(position: SourcePosition) {
+        const view = editorViewRef.current;
+        if (!view) {
+            return;
+        }
+        // The position indexes into the last-compiled source
+        // (`viewerDoenetML`), but the editor may hold newer, shorter text —
+        // the viewer only recompiles on an explicit update. Clamp so the
+        // dispatch below can't throw a selection-out-of-range error.
+        const offset = Math.min(position.start.offset, view.state.doc.length);
+        view.dispatch({
+            selection: EditorSelection.cursor(offset),
+            effects: EditorView.scrollIntoView(offset, {
+                y: "center",
+            }),
+        });
+    }
+
     const viewerPanel = (
-        <div className="viewer-panel" id={id + "-viewer"}>
+        <div className="viewer-panel" id={id + "-viewer-panel"}>
             <ViewerControlsBar
                 id={id}
                 readOnly={readOnly}
                 codeChanged={codeChanged}
                 documentInteracted={documentInteracted}
-                platform={platform as "Mac" | "Win" | "Linux"}
-                updateWord={updateWord}
+                updateAction={updateAction}
                 onUpdateViewer={updateViewer}
                 variants={variants}
                 setVariants={setVariants}
@@ -1030,8 +1376,14 @@ export const EditorViewer = React.forwardRef<
                 accessibilityLevel2Count={accessibilityLevel2Count}
                 isAccessibilityReportOpen={isAccessibilityReportOpen}
                 onToggleAccessibilityReport={toggleAccessibilityReport}
+                darkMode={darkMode}
             />
-            <div className="viewer" id={id + "-viewer"} ref={viewerContainer}>
+            <div
+                className="viewer"
+                id={id + "-viewer"}
+                ref={viewerContainer}
+                tabIndex={-1}
+            >
                 <DocViewer
                     doenetML={viewerDoenetML}
                     flags={{
@@ -1060,31 +1412,55 @@ export const EditorViewer = React.forwardRef<
                     documentStructureCallback={
                         documentStructureThenChangeCallback
                     }
+                    coreStartFailedCallback={coreStartFailedCallback}
                     doenetViewerUrl={doenetViewerUrl}
+                    doenetImagesUrl={doenetImagesUrl}
                     darkMode={darkMode}
+                    documentLocale={documentLocale}
+                    uiLocale={uiLocale}
+                    // The prop, not the merged `availableCatalogs`: the viewer
+                    // is where `editorLocale` came from, so feeding catalogs
+                    // loaded for it back in would be a loop. The viewer runs
+                    // `useLocaleCatalogs` itself, and both calls share one
+                    // request, so nothing is fetched twice.
+                    localeResources={localeResources}
+                    resolvedUiLocaleCallback={setViewerUiLocale}
+                    styleOverrides={styleOverrides}
                     showAnswerResponseButton={showAnswerResponseButton}
                     answerResponseCounts={answerResponseCounts}
                     fetchExternalDoenetML={fetchExternalDoenetML}
                     requestScrollTo={requestScrollTo}
+                    onSourcePositionClick={handleSourcePositionClick}
+                    scrollToSourceOffset={scrollToSourceOffset}
                 />
             </div>
         </div>
     );
 
-    const viewerFirst = viewerLocation === "left" || viewerLocation === "top";
+    const viewerFirst = panelLocation === "start" || panelLocation === "top";
 
     return (
-        <ResizablePanelPair
-            panelA={viewerFirst ? viewerPanel : editorPanel}
-            panelB={viewerFirst ? editorPanel : viewerPanel}
-            preferredDirection={
-                viewerLocation === "bottom" || viewerLocation === "top"
-                    ? "vertical"
-                    : "horizontal"
-            }
-            width={width}
-            height={height}
-            border={border}
-        />
+        // A third provider, between the one `doenetml.tsx` mounts from the
+        // props and the one `DocViewer` mounts once it has parsed the source.
+        // Everything the editor draws reads `editorLocale` from here; the
+        // viewer nests its own inside and wins for the document itself, which
+        // is the same split as before — the two only ever differ while the
+        // first parse is still in flight.
+        <I18nProvider translate={translate} locale={editorLocale}>
+            <div data-theme={darkMode} style={{ display: "contents" }}>
+                <ResizablePanelPair
+                    panelA={viewerFirst ? viewerPanel : editorPanel}
+                    panelB={viewerFirst ? editorPanel : viewerPanel}
+                    preferredDirection={
+                        panelLocation === "bottom" || panelLocation === "top"
+                            ? "vertical"
+                            : "horizontal"
+                    }
+                    width={width}
+                    height={height}
+                    border={border}
+                />
+            </div>
+        </I18nProvider>
     );
 });

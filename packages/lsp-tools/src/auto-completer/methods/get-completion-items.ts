@@ -3,7 +3,12 @@ import {
     ATTR_VALUE_CHAR,
     scanBareValueRun,
 } from "../../doenet-source-object/methods/attribute-helpers";
-import type { CompletionContext } from "./get-completion-context";
+import {
+    isParenthesizedRefMacro,
+    segmentFitsBareMacro,
+    type CompletionContext,
+    type RefMemberCompletionContext,
+} from "./get-completion-context";
 import type {
     CompletionItem,
     MarkupContent,
@@ -32,7 +37,7 @@ import {
 // CodeMirror plugin forwards it through.
 type DoenetCompletionItem = CompletionItem & { displayLabel?: string };
 
-// Keep these aligned with parser grammar in `packages/parser/src/macros/macros.peggy`:
+// Keep aligned with parser grammar in `packages/parser/src/macros/macros.peggy`:
 // - SimpleIdent = [a-zA-Z_][a-zA-Z0-9_]*
 const SIMPLE_IDENTIFIER_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -89,6 +94,58 @@ function createTextEditRange(
             character: end.column - 1,
         },
     };
+}
+
+type CompletionTextEditOffsets = {
+    sourceObj: DoenetSourceObject;
+    startOffset: number;
+    endOffset: number;
+};
+
+/**
+ * Preserve the schema/context-help ordering within each bucket, but put items
+ * whose match text starts with the typed text ahead of mid-string matches.
+ */
+function getPrefixAwareSortText(
+    matchText: string,
+    typedTextLower: string,
+    baseSortText?: string,
+): string | undefined {
+    if (!typedTextLower) {
+        return baseSortText;
+    }
+    const prefixBucket = matchText.toLowerCase().startsWith(typedTextLower)
+        ? "0"
+        : "1";
+    return `${prefixBucket}:${baseSortText ?? matchText.toLowerCase()}`;
+}
+
+function createCloseTagCompletionItem(
+    elementName: string,
+    editOffsets?: CompletionTextEditOffsets,
+): CompletionItem {
+    const item: CompletionItem = {
+        label: `/${elementName}>`,
+        kind: CompletionItemKind.Property,
+    };
+    if (editOffsets) {
+        item.textEdit = {
+            range: createTextEditRange(
+                editOffsets.sourceObj,
+                editOffsets.startOffset,
+                editOffsets.endOffset,
+            ),
+            newText: `</${elementName}>`,
+        };
+        // VS Code uses `filterText` (falling back to `label`) to decide
+        // which items to show as the user types.  The textEdit range starts
+        // at the `<` character, so the "typed prefix" VS Code compares
+        // against is e.g. `<`, `</`, `</t` — none of which is a prefix of
+        // the label `"/text>"`.  Setting filterText to the full close tag
+        // ensures the item keeps appearing after each additional keystroke.
+        item.filterText = `</${elementName}>`;
+    }
+    return item;
 }
 
 /**
@@ -205,6 +262,24 @@ function createSnippetCompletionItems(
     }>,
     startOffset: number,
     endOffset: number,
+    /**
+     * Prefix prepended to `snippet.key` when building `filterText`.
+     *
+     * When the textEdit range starts at `<` (i.e. the user typed `<`), VS Code
+     * computes the filter prefix as the text in the range — e.g. `<ans` after
+     * typing `<ans`.  Without the `<` prefix, `filterText = "answer-labeled"`
+     * would not match the filter prefix `<ans` and the snippet would disappear
+     * from the list.  Passing `"<"` here makes `filterText = "<answer-labeled"`,
+     * which starts with `<ans` and keeps the item visible.
+     *
+     * CodemirrorLSP plugin strips the leading `<` before applying its own
+     * substring filter, so `"<answer-labeled".includes("ans")` still matches.
+     *
+     * Default `""` (no prefix) is correct for explicit Ctrl+Space invocations
+     * where the textEdit range is empty (starts at cursor) and the filter prefix
+     * is the bare typed word without a leading `<`.
+     */
+    filterTextPrefix: string = "",
 ): CompletionItem[] {
     return snippets.map((snippet) => {
         const { formattedSnippet, indentSize } = formatSnippetWithIndent(
@@ -230,7 +305,7 @@ function createSnippetCompletionItems(
                 range: createTextEditRange(sourceObj, startOffset, endOffset),
                 newText: formattedSnippet,
             },
-            filterText: snippet.key,
+            filterText: filterTextPrefix + snippet.key,
             ...(completionData
                 ? {
                       data: completionData,
@@ -268,6 +343,7 @@ function createDynamicSnippetCompletionItems(
     startOffset: number,
     endOffset: number,
     typedPrefix = "",
+    filterTextPrefix = "",
 ): CompletionItem[] {
     if (!allowedElementNames.includes("annotations")) {
         return [];
@@ -284,7 +360,7 @@ function createDynamicSnippetCompletionItems(
 
     if (
         typedPrefix &&
-        !dynamicSnippet.key.toLowerCase().startsWith(typedPrefix.toLowerCase())
+        !dynamicSnippet.key.toLowerCase().includes(typedPrefix.toLowerCase())
     ) {
         return [];
     }
@@ -294,6 +370,7 @@ function createDynamicSnippetCompletionItems(
         [dynamicSnippet],
         startOffset,
         endOffset,
+        filterTextPrefix,
     );
 }
 
@@ -330,9 +407,15 @@ function createElementAndSnippetCompletionItems(
     );
     const sortTextByKey = sortTextLookup(ranked);
 
+    // Match element names that *contain* the typed text (not just a prefix), so
+    // `<num` also surfaces `isNumber`. Prefix-aware `sortText` keeps prefix
+    // matches before mid-name matches for LSP clients that honor server sort
+    // keys; CodeMirror's matcher also scores prefix matches higher. Keeping
+    // this a substring (rather than full subsequence) match keeps the
+    // suggestions predictable for short tag names.
     const schemaItems: DoenetCompletionItem[] = allowedElementNames
         .filter((name) =>
-            prefixLower ? name.toLowerCase().startsWith(prefixLower) : true,
+            prefixLower ? name.toLowerCase().includes(prefixLower) : true,
         )
         .map((name) => {
             const item: DoenetCompletionItem = {
@@ -368,8 +451,12 @@ function createElementAndSnippetCompletionItems(
             if (effectiveEntry?.summary) {
                 item.documentation = asMarkdown(effectiveEntry.summary);
             }
-            const sortText = sortTextByKey.get(`elem:${name.toLowerCase()}`);
-            if (sortText !== undefined) {
+            const sortText = getPrefixAwareSortText(
+                name,
+                prefixLower,
+                sortTextByKey.get(`elem:${name.toLowerCase()}`),
+            );
+            if (sortText) {
                 item.sortText = sortText;
             }
             return item;
@@ -379,20 +466,32 @@ function createElementAndSnippetCompletionItems(
         new Set(allowedElementNames),
         typedPrefix,
     );
+    // When the textEdit range starts at `<` (insertLeadingBracket=false, meaning
+    // the user typed `<`), VS Code computes the filter prefix from the range text
+    // (e.g. `<ans`). Prepend `<` to filterText so items match that prefix while
+    // still matching the bare typed word in codemirror (which uses substring).
+    const snippetFilterTextPrefix = insertLeadingBracket ? "" : "<";
     const snippetItems = createSnippetCompletionItems(
         autoCompleter.sourceObj,
         snippets,
         startOffset,
         endOffset,
+        snippetFilterTextPrefix,
     );
     for (const item of snippetItems) {
         // Snippet labels are unique snippet keys; look up sortText by the
         // same key the ranker emits.
+        const snippetKey = item.label as string;
         const sortText = sortTextByKey.get(
-            `snippet:${(item.label as string).toLowerCase()}`,
+            `snippet:${snippetKey.toLowerCase()}`,
         );
-        if (sortText !== undefined) {
-            item.sortText = sortText;
+        const prefixAwareSortText = getPrefixAwareSortText(
+            snippetKey,
+            prefixLower,
+            sortText,
+        );
+        if (prefixAwareSortText) {
+            item.sortText = prefixAwareSortText;
         }
     }
 
@@ -403,6 +502,7 @@ function createElementAndSnippetCompletionItems(
         startOffset,
         endOffset,
         typedPrefix,
+        snippetFilterTextPrefix,
     );
 
     return [...schemaItems, ...snippetItems, ...dynamicSnippetItems];
@@ -460,12 +560,56 @@ function createReferenceCompletionItems(
 }
 
 /**
- * Segment insertion policy for ref completion after `$` and `.`:
+ * Segment insertion policy for ref completion after `$`:
  * - Simple identifiers insert as-is.
- * - Hyphenated or otherwise non-simple identifiers insert parenthesized.
+ * - Hyphenated or otherwise non-simple identifiers insert parenthesized, since
+ *   the bare `$name` form only accepts SimpleIdent.
+ *
+ * `indexSuffix` (`[]`) belongs to the segment, so it goes *inside* those
+ * parentheses: `$(foo-bar[])`, never `$(foo-bar)[]`, which would end the macro
+ * before its index.
+ *
+ * This is for the name right after the `$`, where wrapping the segment wraps
+ * the whole macro. A *member* cannot be wrapped this way — `$P.(my-p)` is not
+ * a reference — so members go through {@link rewriteAsParenthesizedMacro}.
  */
-function toRefSegmentInsertText(label: string) {
-    return SIMPLE_IDENTIFIER_REGEX.test(label) ? label : `(${label})`;
+function toRefSegmentInsertText(label: string, indexSuffix = "") {
+    return SIMPLE_IDENTIFIER_REGEX.test(label)
+        ? `${label}${indexSuffix}`
+        : `(${label}${indexSuffix})`;
+}
+
+/**
+ * Rewrite a bare `$P.my` into `$(P.my-p)` so a member whose name needs the
+ * richer `$(…)` identifier syntax can still be completed.
+ *
+ * The bare form's path segments are SimpleIdent, with no room for a hyphen,
+ * and there is no `$P.(my-p)` form to fall back on. What is expressible is the
+ * parenthesized macro, so accepting such a member replaces the macro typed so
+ * far rather than just the member prefix.
+ *
+ * That reach back to the `$` is why the item needs a `filterText`. A client
+ * filters an item by matching the text from the start of its edit to the
+ * cursor — here `$base.my`, not `my` — against `filterText`, falling back to
+ * the label. Left to the label, every rewriting item would be filtered out of
+ * the menu (the same reason `createCloseTagCompletionItem` carries one), so
+ * the filter text spells the path as the author typed it.
+ */
+function rewriteAsParenthesizedMacro(
+    item: CompletionItem,
+    sourceObj: DoenetSourceObject,
+    macroStartOffset: number,
+    pathSoFar: string,
+    endOffset: number,
+): CompletionItem {
+    return {
+        ...item,
+        filterText: `$${pathSoFar}${item.label}`,
+        textEdit: {
+            range: createTextEditRange(sourceObj, macroStartOffset, endOffset),
+            newText: `$(${pathSoFar}${item.label})`,
+        },
+    };
 }
 
 /**
@@ -523,7 +667,6 @@ function createPropertyCompletionItems(
     startOffset: number,
     endOffset: number,
     componentType: string,
-    toNewText: (label: string) => string = (label) => label,
     propertyDescriptions?: Map<string, string>,
 ): CompletionItem[] {
     return labels.map((label) => {
@@ -537,7 +680,7 @@ function createPropertyCompletionItems(
                     startOffset,
                     endOffset,
                 ),
-                newText: toNewText(label),
+                newText: label,
             },
         };
         const description = propertyDescriptions?.get(label);
@@ -562,16 +705,8 @@ function indexAliasCompletionItems(
     autoCompleter: AutoCompleter,
     containerNode: DastElement | null,
     unresolvedPathParts: string[],
-    completionContext: CompletionContext & {
-        cursorPos: "refMember";
-        pathParts: string[];
-        pathPartHasIndex: boolean[];
-        rawPathParts: string[];
-        typedPrefix: string;
-        replaceFromOffset: number;
-    },
+    completionContext: RefMemberCompletionContext,
     offset: number,
-    toRefMemberInsertText: (name: string) => string,
 ): CompletionItem[] | null {
     if (!containerNode || unresolvedPathParts.length === 0) return null;
 
@@ -657,9 +792,72 @@ function indexAliasCompletionItems(
                 completionContext.replaceFromOffset,
                 offset,
             ),
-            newText: toRefMemberInsertText(label),
+            newText: label,
         },
     }));
+}
+
+/**
+ * The lone "wrap in quotes" option offered for a bare value typed after `=`
+ * (e.g. `name=foo` previews `name="foo"`, and accepting it replaces the bare
+ * run with the quoted version).
+ *
+ * Returns `[]` — no menu at all — when the cursor is already inside `"..."`,
+ * or sits at `=` with no value typed yet, so an expert who reflexively types
+ * `"` after `=` never sees a flicker and a bare `=` doesn't pop a useless menu.
+ */
+function createQuoteWrapCompletionItems({
+    sourceObj,
+    isInsideQuotes,
+    isBareValueAfterEquals,
+    equalsOffset,
+    typedValueStart,
+    typedValuePrefix,
+    endOffset,
+}: {
+    sourceObj: DoenetSourceObject;
+    isInsideQuotes: boolean;
+    isBareValueAfterEquals: boolean;
+    equalsOffset: number;
+    typedValueStart: number;
+    typedValuePrefix: string;
+    endOffset: number;
+}): DoenetCompletionItem[] {
+    if (
+        isInsideQuotes ||
+        !isBareValueAfterEquals ||
+        typedValuePrefix.length === 0
+    ) {
+        return [];
+    }
+    // The replacement range starts right after `=` so any whitespace between
+    // `=` and the bare value is swallowed by the edit.
+    const range = createTextEditRange(sourceObj, equalsOffset + 1, endOffset);
+    return [
+        {
+            label: typedValuePrefix,
+            displayLabel: `"${typedValuePrefix}"`,
+            kind: CompletionItemKind.Value,
+            filterText: typedValuePrefix,
+            textEdit: {
+                range,
+                newText: `"${typedValuePrefix}"`,
+            },
+            // Marker telling the CodeMirror plugin to treat this option as a
+            // live preview: it must set `filter: false` on the result, anchor
+            // `from` at `bareValueStartOffset`, and refresh the option's text
+            // from the live document on every keystroke. Without this, the
+            // cached `label`/`displayLabel` go stale (CodeMirror filters the
+            // option out the moment the typed prefix exceeds the cached label
+            // length) and `from` lands at the start of the typed word rather
+            // than at the `=` this edit reaches back to.
+            data: {
+                livePreviewQuoteWrap: {
+                    bareValueStartOffset: typedValueStart,
+                },
+            } satisfies CompletionSnippetCompletionItemData,
+        },
+    ];
 }
 
 /**
@@ -708,14 +906,6 @@ export async function getCompletionItems(
         offset = this.sourceObj.rowColToOffset(offset);
     }
 
-    // Ensure the per-instance `<module>` attribute allowlist is up to date
-    // for the current source revision before the attribute-name branch
-    // consults it.  Coalesces with the matching call in `getSchemaViolations`
-    // (validation typically runs first), so back-to-back validation +
-    // completion between edits costs at most one resolver round-trip per
-    // `<module copy=…>` site total.
-    await this._refreshModuleInstanceAttributes();
-
     const prevChar = this.sourceObj.source.charAt(offset - 1);
     const prevPrevChar = this.sourceObj.source.charAt(offset - 2);
 
@@ -728,6 +918,17 @@ export async function getCompletionItems(
     const showElementMenu = hasLeadingLt || explicit;
     const elementMenuStart = hasLeadingLt ? offset - 1 : offset;
     const insertLeadingBracket = !hasLeadingLt;
+    // Always provide a textEdit range for close-tag completions so that
+    // VS Code (which re-triggers completion on `/`) inserts the correct
+    // text.  When `hasLeadingLt`, the range covers the `<` (offset-1 →
+    // offset), and `newText` starts with `</`, replacing the whole thing.
+    // When there is no leading `<` (explicit Ctrl+Space invoke), the range
+    // is empty (cursor → cursor) so `</tag>` is inserted verbatim.
+    const closeTagEditOffsets: CompletionTextEditOffsets = {
+        sourceObj: this.sourceObj,
+        startOffset: elementMenuStart,
+        endOffset: offset,
+    };
     let prevNonWhitespaceCharOffset = offset - 1;
     while (
         this.sourceObj.source
@@ -762,13 +963,12 @@ export async function getCompletionItems(
 
         // `$name` form only supports SimpleIdent. When a suggestion needs
         // richer Ident syntax (e.g. hyphen), insert parentheses so `$f`
-        // can become `$(foo-bar)`.
-        const toRefNameInsertText = (name: string) => {
-            if (isParenthesizedContext) {
-                return name;
-            }
-            return toRefSegmentInsertText(name);
-        };
+        // can become `$(foo-bar)`. Inside `$(` the author has already opened
+        // them, so every name goes in as typed.
+        const toRefNameInsertText = (name: string, indexSuffix = "") =>
+            isParenthesizedContext
+                ? `${name}${indexSuffix}`
+                : toRefSegmentInsertText(name, indexSuffix);
 
         const addressableNames = this.sourceObj
             .getAddressableNamesAtOffset(offset)
@@ -845,9 +1045,7 @@ export async function getCompletionItems(
         for (const name of filteredNames) {
             const info = referentInfoByName.get(name);
             if (!info?.takesIndex) continue;
-            const insertText = isParenthesizedContext
-                ? `${name}[]`
-                : `${toRefSegmentInsertText(name)}[]`;
+            const insertText = toRefNameInsertText(name, "[]");
             const item: CompletionItem = {
                 label: `${name}[]`,
                 kind: CompletionItemKind.Reference,
@@ -858,7 +1056,9 @@ export async function getCompletionItems(
                 },
                 data: {
                     snippetCursor: {
-                        caretOffset: insertText.length - 1,
+                        // Between the brackets, which the closing `)` follows
+                        // in the parenthesized form.
+                        caretOffset: insertText.lastIndexOf("]"),
                     },
                 } satisfies CompletionSnippetCompletionItemData,
             };
@@ -874,12 +1074,38 @@ export async function getCompletionItems(
     if (allowRefCompletion && completionContext.cursorPos === "refMember") {
         // Resolve the ref chain up to the container of the member currently
         // being typed, then merge named descendants with schema properties.
-        const source = this.sourceObj.source;
-        const isParenthesizedMemberContext =
-            source.charAt(completionContext.replaceFromOffset - 1) === "(" &&
-            source.charAt(completionContext.replaceFromOffset - 2) === ".";
-        const toRefMemberInsertText = (name: string) =>
-            isParenthesizedMemberContext ? name : toRefSegmentInsertText(name);
+        // A member is typed into one of two macro forms. Inside `$(P.` every
+        // name is expressible as typed, hyphens included. In the bare `$P.`
+        // form the segments are SimpleIdent, so a name with a hyphen only
+        // fits once the whole macro becomes `$(P.my-p)` — which is what
+        // accepting it rewrites, since `$P.(my-p)` is not a reference.
+        const { macroStartOffset, pathStartOffset } = completionContext;
+        const isParenthesizedMacro = isParenthesizedRefMacro(completionContext);
+        const pathSoFar = this.sourceObj.source.slice(
+            pathStartOffset,
+            completionContext.replaceFromOffset,
+        );
+        // A segment already typed can be the one that doesn't fit: after
+        // `$s.sub-sec.`, the bare form ended back at `$s.sub`, so every
+        // member offered here has to rewrite, whatever its own name is.
+        const typedPathFitsBareMacro = completionContext.rawPathParts
+            .slice(0, -1)
+            .every(segmentFitsBareMacro);
+        const applyMemberInsertionPolicy = (items: CompletionItem[]) =>
+            isParenthesizedMacro
+                ? items
+                : items.map((item) =>
+                      typedPathFitsBareMacro &&
+                      segmentFitsBareMacro(String(item.label))
+                          ? item
+                          : rewriteAsParenthesizedMacro(
+                                item,
+                                this.sourceObj,
+                                macroStartOffset,
+                                pathSoFar,
+                                offset,
+                            ),
+                  );
 
         const resolved = await this.resolveRefMemberContainerAtOffset(
             offset,
@@ -903,9 +1129,8 @@ export async function getCompletionItems(
                 resolved.unresolvedPathParts,
                 completionContext,
                 offset,
-                toRefMemberInsertText,
             );
-            if (aliasItems) return aliasItems;
+            if (aliasItems) return applyMemberInsertionPolicy(aliasItems);
             return [];
         }
 
@@ -969,14 +1194,13 @@ export async function getCompletionItems(
             }
         }
 
-        return [
+        return applyMemberInsertionPolicy([
             ...createReferenceCompletionItems(
                 this,
                 filteredDescendantNames,
                 completionContext.replaceFromOffset,
                 offset,
                 "Descendant reference name",
-                toRefMemberInsertText,
             ),
             ...createPropertyCompletionItems(
                 this,
@@ -984,10 +1208,9 @@ export async function getCompletionItems(
                 completionContext.replaceFromOffset,
                 offset,
                 resolvedNode.name,
-                toRefMemberInsertText,
                 propertyDescriptions,
             ),
-        ];
+        ]);
     }
 
     if (!containingNode && cursorPosition === "unknown" && showElementMenu) {
@@ -1000,6 +1223,82 @@ export async function getCompletionItems(
             null,
             insertLeadingBracket,
         );
+    }
+
+    // The author typed `<` (or invoked completion explicitly) immediately
+    // before an existing element — the cursor sits exactly on that element's
+    // opening `<`. They are inserting a new element in front of it, so offer
+    // what can go in the surrounding container. Error recovery parses the
+    // half-typed `<` + following tag as a complete element, which otherwise
+    // leaves the cursor classified as that element's body/unknown with no
+    // menu, so the popup never opens when typing a tag name before another
+    // tag (#1328).
+    //
+    // Use the element that *starts* at the cursor as the signal rather than
+    // `containingElement.node`: the latter's classification varies with
+    // error-recovery state (especially at the top level, where the cursor
+    // before a tag reports `{ node: null }`), whereas the element starting at
+    // the offset is reliable.
+    //
+    // Skip this when the cursor is at `openTagName` (`<nu|<text>`): there the
+    // author is typing the *name* of the element before the tag, so the
+    // openTagName branch below should offer element names filtered by the
+    // typed prefix rather than the surrounding container's full menu. Without
+    // this guard, explicit Ctrl+Space (which sets `showElementMenu`) would
+    // fire this branch and offer the half-typed element's close tag instead.
+    const elementStartingAtCursor = this.sourceObj.nodeAtOffset(offset, {
+        type: "element",
+        side: "right",
+    }) as DastElement | null;
+    if (
+        showElementMenu &&
+        cursorPosition !== "openTagName" &&
+        elementStartingAtCursor &&
+        elementStartingAtCursor.position?.start?.offset === offset
+    ) {
+        // Error recovery can wrap the cursor's position in a half-typed,
+        // empty-named element (the very `<` the author just typed). Climb past
+        // any such placeholder to the real container so the menu reflects the
+        // right set of allowed children.
+        let containerParent = this.sourceObj.getParent(elementStartingAtCursor);
+        while (
+            containerParent?.type === "element" &&
+            containerParent.name === ""
+        ) {
+            containerParent = this.sourceObj.getParent(containerParent);
+        }
+        const containerElement =
+            containerParent?.type === "element" ? containerParent : null;
+        const allowedElementNames = containerElement
+            ? this._getAllowedChildren(
+                  containerElement.name,
+                  this.sourceObj.getParentElementName(containerElement),
+              )
+            : this.schemaTopAllowedElements;
+        const completionItems = createElementAndSnippetCompletionItems(
+            this,
+            allowedElementNames,
+            elementMenuStart,
+            offset,
+            "",
+            containerElement,
+            insertLeadingBracket,
+        );
+        if (
+            containerElement &&
+            !this.sourceObj.isCompleteElement(containerElement).closed
+        ) {
+            // Match the normal body completion path for unclosed containers:
+            // first offer the parent close tag, then child elements.
+            return [
+                createCloseTagCompletionItem(
+                    containerElement.name,
+                    closeTagEditOffsets,
+                ),
+                ...completionItems,
+            ];
+        }
+        return completionItems;
     }
 
     if (!element && containingNode && containingNode.type === "text") {
@@ -1028,12 +1327,26 @@ export async function getCompletionItems(
     }
 
     if (cursorPosition === "closeTagName") {
-        // We're in the close tag name. Suggest the close tag name.
+        // Cursor is inside a partially-typed closing tag name (e.g. `</te|`).
+        // Scan backward from cursor to find the `<` so the textEdit can
+        // replace the entire `</...` prefix, not just what was typed after `/`.
+        // Without a textEdit, VS Code inserts at the cursor and duplicates
+        // the already-typed characters.
+        const src = this.sourceObj.source;
+        let ltPos = offset - 1;
+        while (ltPos >= 0 && src.charAt(ltPos) !== "<") {
+            ltPos--;
+        }
+        const closeTagNameEditOffsets: CompletionTextEditOffsets | undefined =
+            ltPos >= 0
+                ? {
+                      sourceObj: this.sourceObj,
+                      startOffset: ltPos,
+                      endOffset: offset,
+                  }
+                : undefined;
         return [
-            {
-                label: `/${element.name}>`,
-                kind: CompletionItemKind.Property,
-            },
+            createCloseTagCompletionItem(element.name, closeTagNameEditOffsets),
         ];
     }
 
@@ -1068,10 +1381,7 @@ export async function getCompletionItems(
         }
         // We are the child of a non-closed tag. Suggest the close tag or allowed children
         return [
-            {
-                label: `/${element.name}>`,
-                kind: CompletionItemKind.Property,
-            },
+            createCloseTagCompletionItem(element.name, closeTagEditOffsets),
             ...completionItems,
         ];
     }
@@ -1086,16 +1396,20 @@ export async function getCompletionItems(
             (cursorPosition === "unknown" &&
                 this.sourceObj.source.charAt(offset).match(/(\s|\n)/)))
     ) {
+        // Provide a textEdit so VS Code replaces the `</` prefix instead of
+        // appending after the `/` (which would produce `<//text>`).
         return [
-            {
-                label: `/${element.name}>`,
-                kind: CompletionItemKind.Property,
-            },
+            createCloseTagCompletionItem(element.name, {
+                sourceObj: this.sourceObj,
+                startOffset: offset - 2,
+                endOffset: offset,
+            }),
         ];
     }
 
     if (cursorPosition === "openTagName") {
-        // We're in the open tag name. Suggest everything that starts with the current text.
+        // We're in the open tag name. Suggest element names and snippets whose
+        // keys contain the current text.
         const currentText = element.name.toLowerCase();
         const parent = this.sourceObj.getParent(element);
 
@@ -1158,6 +1472,14 @@ export async function getCompletionItems(
         !isBareValueAfterEquals &&
         prevNonWhitespaceChar !== "="
     ) {
+        // Only attribute-name completions consult the per-instance
+        // `<module copy|extend=...>` allowlist, so defer the refresh until
+        // we know we are in that branch. This keeps unrelated completion
+        // triggers (notably close-tag flows in VS Code) off the resolver path.
+        // Coalesces with the matching call in `getSchemaViolations`, so
+        // back-to-back validation + completion between edits still costs at
+        // most one resolver round-trip per `<module copy=…>` site total.
+        await this._refreshModuleInstanceAttributes();
         const elmName = this.normalizeElementName(element.name);
         const ownEntry = this.schemaElementsByName[elmName];
         const helpEntry = this.resolveEffectiveSchemaElement(
@@ -1262,59 +1584,19 @@ export async function getCompletionItems(
         // shape for boolean primitives, but the consumer stays agnostic.
         const optionsWithDescriptions = allowedAttribute?.autocompleteValues;
         const plainValues = allowedAttribute?.values;
+        const quoteWrapArgs = {
+            sourceObj: this.sourceObj,
+            isInsideQuotes: cursorPosition === "attributeValue",
+            isBareValueAfterEquals,
+            equalsOffset: equalsScan,
+            typedValueStart,
+            typedValuePrefix,
+            endOffset: offset,
+        };
         if (!optionsWithDescriptions && !plainValues) {
-            // Free-text attribute: no enum to suggest. We still offer a single
-            // "wrap in quotes" hint *iff* the author has typed a bare value
-            // after `=` (e.g. `name=foo`). The hint's displayLabel previews
-            // the corrected form `"foo"`, and accepting the suggestion
-            // replaces the bare run with the quoted version. We deliberately
-            // skip the hint when:
-            //   * the cursor is right at `=` with no typed value yet
-            //     (`isBareValueAfterEquals` is false), and
-            //   * the cursor is already inside `"..."`
-            //     (`cursorPosition === "attributeValue"`),
-            // so an expert who reflexively types `"` after `=` never sees a
-            // flicker, and a bare `=` doesn't pop a useless menu.
-            if (
-                cursorPosition !== "attributeValue" &&
-                isBareValueAfterEquals &&
-                typedValuePrefix.length > 0
-            ) {
-                const range = createTextEditRange(
-                    this.sourceObj,
-                    equalsScan + 1,
-                    offset,
-                );
-                return [
-                    {
-                        label: typedValuePrefix,
-                        displayLabel: `"${typedValuePrefix}"`,
-                        kind: CompletionItemKind.Value,
-                        filterText: typedValuePrefix,
-                        textEdit: {
-                            range,
-                            newText: `"${typedValuePrefix}"`,
-                        },
-                        // Marker telling the CodeMirror plugin to treat this
-                        // option as a live preview: it must set `filter: false`
-                        // on the result, anchor `from` at `bareValueStartOffset`,
-                        // and refresh the option's text from the live document
-                        // on every keystroke. Without this, the cached
-                        // `label`/`displayLabel` go stale (CodeMirror filters
-                        // the option out the moment the typed prefix exceeds
-                        // the cached label length) and the plugin's default
-                        // `prefixMatch` anchors `from` past the first typed
-                        // character (because the apply text starts with `"`,
-                        // which the user has not actually typed).
-                        data: {
-                            livePreviewQuoteWrap: {
-                                bareValueStartOffset: typedValueStart,
-                            },
-                        } satisfies CompletionSnippetCompletionItemData,
-                    },
-                ];
-            }
-            return [];
+            // Free-text attribute: no enum to suggest, so the "wrap in quotes"
+            // hint for a bare value is the only help there is to offer.
+            return createQuoteWrapCompletionItems(quoteWrapArgs);
         }
         // Quotes get added via `textEdit.newText` when the cursor is anchored
         // to an `=` rather than already inside `"..."`. The display label and
@@ -1340,23 +1622,35 @@ export async function getCompletionItems(
         // typing `fu` still ranks `full` correctly. Inside `"..."` we omit
         // `displayLabel` so the dropdown matches what actually gets inserted.
         if (optionsWithDescriptions) {
-            return optionsWithDescriptions
-                .filter(({ value }) => matchesPrefix(value))
-                .map(({ value, description }) => ({
-                    label: value,
-                    kind: CompletionItemKind.Value,
-                    filterText: value,
-                    documentation: asMarkdown(description),
-                    ...(quotedRange
-                        ? {
-                              displayLabel: `"${value}"`,
-                              textEdit: {
-                                  range: quotedRange,
-                                  newText: `"${value}"`,
-                              },
-                          }
-                        : {}),
-                }));
+            const matching = optionsWithDescriptions.filter(({ value }) =>
+                matchesPrefix(value),
+            );
+            // A suggestion list doesn't constrain the attribute, so a bare
+            // value it doesn't contain is not a mistake — `<document lang=de`
+            // gets the free-text quote hint rather than an empty menu. For a
+            // closed enum an unmatched value *is* a mistake, and offering to
+            // quote it would only make the wrong value look blessed.
+            if (
+                matching.length === 0 &&
+                allowedAttribute?.suggestedValuesOnly
+            ) {
+                return createQuoteWrapCompletionItems(quoteWrapArgs);
+            }
+            return matching.map(({ value, description }) => ({
+                label: value,
+                kind: CompletionItemKind.Value,
+                filterText: value,
+                documentation: asMarkdown(description),
+                ...(quotedRange
+                    ? {
+                          displayLabel: `"${value}"`,
+                          textEdit: {
+                              range: quotedRange,
+                              newText: `"${value}"`,
+                          },
+                      }
+                    : {}),
+            }));
         }
         return (plainValues ?? [])
             .filter((value) => matchesPrefix(value))

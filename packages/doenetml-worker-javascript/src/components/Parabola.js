@@ -1,3 +1,4 @@
+import { returnGraphicalStyleDescriptionDefinitions } from "@doenet/utils";
 import {
     returnNumberDisplayAttributeComponentShadowing,
     returnNumberDisplayStateVariableDefinitions,
@@ -5,6 +6,7 @@ import {
 import Curve from "./Curve";
 import GraphicalComponent from "./abstract/GraphicalComponent";
 import me from "math-expressions";
+import { codedDiagnostic } from "../utils/diagnostics";
 
 export default class Parabola extends Curve {
     static componentType = "parabola";
@@ -67,28 +69,13 @@ export default class Parabola extends Curve {
         stateVariableDefinitions.graphXmin =
             curveStateVariableDefinitions.graphXmin;
 
-        stateVariableDefinitions.styleDescription =
-            curveStateVariableDefinitions.styleDescription;
-
-        stateVariableDefinitions.styleDescriptionWithNoun = {
-            description: 'Style description including the word "parabola".',
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                styleDescription: {
-                    dependencyType: "stateVariable",
-                    variableName: "styleDescription",
-                },
+        Object.assign(
+            stateVariableDefinitions,
+            returnGraphicalStyleDescriptionDefinitions({
+                kind: "stroke",
+                noun: "parabola",
             }),
-            definition: function ({ dependencyValues }) {
-                let styleDescriptionWithNoun =
-                    dependencyValues.styleDescription + " parabola";
-
-                return { setValue: { styleDescriptionWithNoun } };
-            },
-        };
+        );
 
         stateVariableDefinitions.curveType = {
             forRenderer: true,
@@ -683,11 +670,10 @@ export default class Parabola extends Curve {
 
                         return { setValue: { a, b, c, realValued } };
                     } else {
-                        let warning = {
-                            message:
-                                "Haven't implemented parabola with vertex through more than 1 point.",
+                        let warning = codedDiagnostic({
                             type: "warning",
-                        };
+                            code: "doenet-w0049",
+                        });
                         return {
                             setValue: {
                                 a: NaN,
@@ -863,11 +849,10 @@ export default class Parabola extends Curve {
 
                     return { setValue: { a, b, c, realValued } };
                 } else {
-                    let warning = {
-                        message:
-                            "Haven't implemented parabola through more than 3 points.",
+                    let warning = codedDiagnostic({
                         type: "warning",
-                    };
+                        code: "doenet-w0050",
+                    });
                     return {
                         setValue: {
                             a: NaN,

@@ -35,6 +35,34 @@ type GraphControlsClassificationTestItem =
           addControls: string;
       };
 
+type GraphLimitsAndScales = {
+    xMin: number;
+    xMax: number;
+    yMin: number;
+    yMax: number;
+    xScale: number;
+    yScale: number;
+};
+
+async function checkGraphLimitsAndScales(
+    core: PublicDoenetMLCore,
+    resolvePathToNodeIdx: ResolvePathToNodeIdx,
+    expected: GraphLimitsAndScales,
+    graphName = "g",
+) {
+    const stateVariables = await core.returnAllStateVariables(false, true);
+    const graph = stateVariables[await resolvePathToNodeIdx(graphName)];
+
+    expect({
+        xMin: graph.stateValues.xMin,
+        xMax: graph.stateValues.xMax,
+        yMin: graph.stateValues.yMin,
+        yMax: graph.stateValues.yMax,
+        xScale: graph.stateValues.xScale,
+        yScale: graph.stateValues.yScale,
+    }).eqls(expected);
+}
+
 describe("Graph tag tests @group2", async () => {
     it("functions adapted to curves in graph", async () => {
         let { core, resolvePathToNodeIdx } = await createTestCore({
@@ -431,6 +459,386 @@ describe("Graph tag tests @group2", async () => {
             core,
         });
         await checkLimits(-5, 10, -10, 0);
+    });
+
+    it("set xScale and yScale keeps midpoint, changes limits symmetrically", async () => {
+        let { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <graph name="g" />
+
+    <p>Change xScale: <mathInput name="xScaleInput" bindValueTo="$g.xScale" /></p>
+    <p>Change yScale: <mathInput name="yScaleInput" bindValueTo="$g.yScale" /></p>
+    `,
+        });
+
+        // defaults: xMin=-10, xMax=10 (midpoint 0, xScale 20); same for y
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: -10,
+            xMax: 10,
+            yMin: -10,
+            yMax: 10,
+            xScale: 20,
+            yScale: 20,
+        });
+
+        // set xScale to 10: midpoint 0 preserved, limits become [-5, 5]
+        await updateMathInputValue({
+            latex: "10",
+            componentIdx: await resolvePathToNodeIdx("xScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: -5,
+            xMax: 5,
+            yMin: -10,
+            yMax: 10,
+            xScale: 10,
+            yScale: 20,
+        });
+
+        // set yScale to 40: midpoint 0 preserved, limits become [-20, 20]
+        await updateMathInputValue({
+            latex: "40",
+            componentIdx: await resolvePathToNodeIdx("yScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: -5,
+            xMax: 5,
+            yMin: -20,
+            yMax: 20,
+            xScale: 10,
+            yScale: 40,
+        });
+    });
+
+    it("set xScale and yScale keeps non-zero midpoint", async () => {
+        let { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <graph name="g" xmin="2" xmax="8" ymin="-3" ymax="7" />
+
+    <p>Change xScale: <mathInput name="xScaleInput" bindValueTo="$g.xScale" /></p>
+    <p>Change yScale: <mathInput name="yScaleInput" bindValueTo="$g.yScale" /></p>
+    `,
+        });
+
+        // xMidpoint = 5, yMidpoint = 2
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: 2,
+            xMax: 8,
+            yMin: -3,
+            yMax: 7,
+            xScale: 6,
+            yScale: 10,
+        });
+
+        // set xScale to 4: midpoint 5 preserved -> [3, 7]
+        await updateMathInputValue({
+            latex: "4",
+            componentIdx: await resolvePathToNodeIdx("xScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: 3,
+            xMax: 7,
+            yMin: -3,
+            yMax: 7,
+            xScale: 4,
+            yScale: 10,
+        });
+
+        // set yScale to 20: midpoint 2 preserved -> [-8, 12]
+        await updateMathInputValue({
+            latex: "20",
+            componentIdx: await resolvePathToNodeIdx("yScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: 3,
+            xMax: 7,
+            yMin: -8,
+            yMax: 12,
+            xScale: 4,
+            yScale: 20,
+        });
+    });
+
+    it("set xScale and yScale with identicalAxisScales adjusts limits", async () => {
+        let { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <graph name="g" identicalAxisScales />
+
+    <p>Change xScale: <mathInput name="xScaleInput" bindValueTo="$g.xScale" /></p>
+    <p>Change yScale: <mathInput name="yScaleInput" bindValueTo="$g.yScale" /></p>
+    `,
+        });
+
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: -10,
+            xMax: 10,
+            yMin: -10,
+            yMax: 10,
+            xScale: 20,
+            yScale: 20,
+        });
+
+        // set xScale to 10: x midpoint 0 preserved -> [-5, 5]
+        await updateMathInputValue({
+            latex: "10",
+            componentIdx: await resolvePathToNodeIdx("xScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: -5,
+            xMax: 5,
+            yMin: -10,
+            yMax: 10,
+            xScale: 10,
+            yScale: 20,
+        });
+
+        // set yScale to 8: y midpoint 0 preserved -> [-4, 4]
+        await updateMathInputValue({
+            latex: "8",
+            componentIdx: await resolvePathToNodeIdx("yScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: -5,
+            xMax: 5,
+            yMin: -4,
+            yMax: 4,
+            xScale: 10,
+            yScale: 8,
+        });
+    });
+
+    it("set xScale and yScale respect fixAxes", async () => {
+        let { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <graph name="g" fixAxes />
+
+    <p>Change xScale: <mathInput name="xScaleInput" bindValueTo="$g.xScale" /></p>
+    <p>Change yScale: <mathInput name="yScaleInput" bindValueTo="$g.yScale" /></p>
+    `,
+        });
+
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: -10,
+            xMax: 10,
+            yMin: -10,
+            yMax: 10,
+            xScale: 20,
+            yScale: 20,
+        });
+
+        await updateMathInputValue({
+            latex: "10",
+            componentIdx: await resolvePathToNodeIdx("xScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: -10,
+            xMax: 10,
+            yMin: -10,
+            yMax: 10,
+            xScale: 20,
+            yScale: 20,
+        });
+
+        await updateMathInputValue({
+            latex: "30",
+            componentIdx: await resolvePathToNodeIdx("yScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: -10,
+            xMax: 10,
+            yMin: -10,
+            yMax: 10,
+            xScale: 20,
+            yScale: 20,
+        });
+    });
+
+    it("set xScale and yScale rejects non-finite values", async () => {
+        let { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <graph name="g" xmin="2" xmax="8" ymin="-3" ymax="7" />
+
+    <p>Change xScale: <mathInput name="xScaleInput" bindValueTo="$g.xScale" /></p>
+    <p>Change yScale: <mathInput name="yScaleInput" bindValueTo="$g.yScale" /></p>
+    `,
+        });
+
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: 2,
+            xMax: 8,
+            yMin: -3,
+            yMax: 7,
+            xScale: 6,
+            yScale: 10,
+        });
+
+        await updateMathInputValue({
+            latex: "\\infty",
+            componentIdx: await resolvePathToNodeIdx("xScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: 2,
+            xMax: 8,
+            yMin: -3,
+            yMax: 7,
+            xScale: 6,
+            yScale: 10,
+        });
+
+        await updateMathInputValue({
+            latex: "-\\infty",
+            componentIdx: await resolvePathToNodeIdx("yScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(core, resolvePathToNodeIdx, {
+            xMin: 2,
+            xMax: 8,
+            yMin: -3,
+            yMax: 7,
+            xScale: 6,
+            yScale: 10,
+        });
+    });
+
+    it("set xScale and yScale rejects non-positive values", async () => {
+        let { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <graph name="g" xmin="2" xmax="8" ymin="-3" ymax="7" />
+
+    <p>Change xScale: <mathInput name="xScaleInput" bindValueTo="$g.xScale" /></p>
+    <p>Change yScale: <mathInput name="yScaleInput" bindValueTo="$g.yScale" /></p>
+    `,
+        });
+
+        const initialValues = {
+            xMin: 2,
+            xMax: 8,
+            yMin: -3,
+            yMax: 7,
+            xScale: 6,
+            yScale: 10,
+        };
+        await checkGraphLimitsAndScales(
+            core,
+            resolvePathToNodeIdx,
+            initialValues,
+        );
+
+        // zero scale is rejected (would make xMin === xMax)
+        await updateMathInputValue({
+            latex: "0",
+            componentIdx: await resolvePathToNodeIdx("xScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(
+            core,
+            resolvePathToNodeIdx,
+            initialValues,
+        );
+
+        // negative scale is rejected (would make yMin > yMax)
+        await updateMathInputValue({
+            latex: "-4",
+            componentIdx: await resolvePathToNodeIdx("yScaleInput"),
+            core,
+        });
+        await checkGraphLimitsAndScales(
+            core,
+            resolvePathToNodeIdx,
+            initialValues,
+        );
+    });
+
+    it("set xScale and yScale through graph-parent limits", async () => {
+        let { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <graph name="g" xmin="1" xmax="7" ymin="-5" ymax="3">
+        <graph name="child" />
+    </graph>
+
+    <p>Change child xScale: <mathInput name="childXscaleInput" bindValueTo="$child.xScale" /></p>
+    <p>Change child yScale: <mathInput name="childYscaleInput" bindValueTo="$child.yScale" /></p>
+    `,
+        });
+
+        const initialValues = {
+            xMin: 1,
+            xMax: 7,
+            yMin: -5,
+            yMax: 3,
+            xScale: 6,
+            yScale: 8,
+        };
+        await checkGraphLimitsAndScales(
+            core,
+            resolvePathToNodeIdx,
+            initialValues,
+        );
+        await checkGraphLimitsAndScales(
+            core,
+            resolvePathToNodeIdx,
+            initialValues,
+            "child",
+        );
+
+        await updateMathInputValue({
+            latex: "10",
+            componentIdx: await resolvePathToNodeIdx("childXscaleInput"),
+            core,
+        });
+        const afterXscale = {
+            xMin: -1,
+            xMax: 9,
+            yMin: -5,
+            yMax: 3,
+            xScale: 10,
+            yScale: 8,
+        };
+        await checkGraphLimitsAndScales(
+            core,
+            resolvePathToNodeIdx,
+            afterXscale,
+        );
+        await checkGraphLimitsAndScales(
+            core,
+            resolvePathToNodeIdx,
+            afterXscale,
+            "child",
+        );
+
+        await updateMathInputValue({
+            latex: "2",
+            componentIdx: await resolvePathToNodeIdx("childYscaleInput"),
+            core,
+        });
+        const afterYscale = {
+            xMin: -1,
+            xMax: 9,
+            yMin: -2,
+            yMax: 0,
+            xScale: 10,
+            yScale: 2,
+        };
+        await checkGraphLimitsAndScales(
+            core,
+            resolvePathToNodeIdx,
+            afterYscale,
+        );
+        await checkGraphLimitsAndScales(
+            core,
+            resolvePathToNodeIdx,
+            afterYscale,
+            "child",
+        );
     });
 
     it("show grid", async () => {
@@ -899,6 +1307,204 @@ describe("Graph tag tests @group2", async () => {
             stateVariables[await resolvePathToNodeIdx("sg5")].stateValues
                 .numbers,
         ).eqls([((3 * Math.PI) / 5) * 2, ((1.5 * Math.E) / 6) * 3]);
+    });
+
+    it("an unusable grid value warns instead of crashing", async () => {
+        // `grid` takes two positive numbers separated by a space. Everything
+        // here is a way of getting that wrong, including values whose pieces
+        // `me.fromText` cannot parse at all: `grid="(1, 2)"` splits on its
+        // space into `(1,` and `2)`, which used to throw out of the state
+        // variable and take down the whole document.
+        const unusableValues = [
+            "(1, 2)",
+            "(1,2) (3,4)",
+            "1, 2",
+            "0 1",
+            "1 -2",
+            "foo bar",
+            "1",
+            "",
+        ];
+
+        for (const gridValue of unusableValues) {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML: `<graph name="g" grid="${gridValue}" />`,
+            });
+
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            expect(
+                stateVariables[await resolvePathToNodeIdx("g")].stateValues
+                    .grid,
+                `grid="${gridValue}"`,
+            ).eq("none");
+
+            const diagnostics = getDiagnosticsByType(core);
+            expect(diagnostics.errors.length, `grid="${gridValue}"`).eq(0);
+            expect(diagnostics.warnings.length, `grid="${gridValue}"`).eq(1);
+            expect(diagnostics.warnings[0].code, `grid="${gridValue}"`).eq(
+                "doenet-w0119",
+            );
+            expect(
+                diagnostics.warnings[0].message,
+                `grid="${gridValue}"`,
+            ).contain(`cannot interpret grid="${gridValue}"`);
+        }
+    });
+
+    it("a usable grid value warns about nothing", async () => {
+        // The value each of these resolves to is what the definition produced
+        // before it was refactored into a single product loop.
+        const usableValues: [string, string | number[]][] = [
+            ["none", "none"],
+            ["medium", "medium"],
+            ["dense", "dense"],
+            ["true", "medium"],
+            ["false", "none"],
+            ["MEDIUM", "medium"],
+            ["1 pi/2", [1, Math.PI / 2]],
+            ["  2   3  ", [2, 3]],
+            ["2/3 3/4", [2 / 3, 3 / 4]],
+        ];
+
+        for (const [gridValue, expectedGrid] of usableValues) {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML: `<graph name="g" grid="${gridValue}" />`,
+            });
+
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            expect(
+                stateVariables[await resolvePathToNodeIdx("g")].stateValues
+                    .grid,
+                `grid="${gridValue}"`,
+            ).eqls(expectedGrid);
+
+            expect(
+                getDiagnosticsByType(core).warnings.length,
+                `grid="${gridValue}"`,
+            ).eq(0);
+        }
+
+        // A bare `grid` carries no value of its own, so it never reaches the
+        // pieces the definition splits apart. It is still `medium`.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `<graph name="g" grid />`,
+        });
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("g")].stateValues.grid,
+        ).eq("medium");
+        expect(getDiagnosticsByType(core).warnings.length).eq(0);
+    });
+
+    it("a grid value from a reference stays quiet", async () => {
+        // An unusable value coming from a reference is normally an input the
+        // reader has not filled in yet, so it must not warn on load — only a
+        // value the author spelled out in full does. A reference is also how a
+        // graph gets a grid the reader chooses, so an unusable one is not even
+        // reliably a mistake: `$ti` below is unusable until the reader types
+        // `dense` into it.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <mathInput name="gx" />
+    <mathInput name="gy" />
+    <graph name="g" grid="$gx $gy" />
+    <graph name="g2" grid="2$gx 3$gy" />
+    <textInput name="ti" />
+    <graph name="g3" grid="$ti" />
+    `,
+        });
+
+        let stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("g")].stateValues.grid,
+        ).eq("none");
+        expect(
+            stateVariables[await resolvePathToNodeIdx("g2")].stateValues.grid,
+        ).eq("none");
+        expect(
+            stateVariables[await resolvePathToNodeIdx("g3")].stateValues.grid,
+        ).eq("none");
+        expect(getDiagnosticsByType(core).warnings.length).eq(0);
+
+        // Filling the inputs in still produces the grid it always did.
+        await updateMathInputValue({
+            latex: "3",
+            componentIdx: await resolvePathToNodeIdx("gx"),
+            core,
+        });
+        await updateMathInputValue({
+            latex: "1.5",
+            componentIdx: await resolvePathToNodeIdx("gy"),
+            core,
+        });
+
+        stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("g")].stateValues.grid,
+        ).eqls([3, 1.5]);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("g2")].stateValues.grid,
+        ).eqls([6, 4.5]);
+        expect(getDiagnosticsByType(core).warnings.length).eq(0);
+
+        // A reader who types a value the graph cannot use gets no grid and
+        // still no warning: the mistake is not the author's to fix.
+        await updateMathInputValue({
+            latex: "-1",
+            componentIdx: await resolvePathToNodeIdx("gx"),
+            core,
+        });
+
+        stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("g")].stateValues.grid,
+        ).eq("none");
+        expect(getDiagnosticsByType(core).warnings.length).eq(0);
+
+        // A single reference is the one way an author gets a reader-chosen
+        // `none`/`medium`/`dense`, so it must not be reported as unusable just
+        // because it cannot be split into two spacings.
+        await updateTextInputValue({
+            text: "dense",
+            componentIdx: await resolvePathToNodeIdx("ti"),
+            core,
+        });
+
+        stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("g3")].stateValues.grid,
+        ).eq("dense");
+        expect(getDiagnosticsByType(core).warnings.length).eq(0);
+    });
+
+    it("a grid the attribute cannot hold is not quoted back at the author", async () => {
+        // A `<point>` is not something a text attribute can hold, so it never
+        // reaches the grid definition: it is dropped from the attribute's
+        // children and from its value alike, leaving an empty value behind.
+        // Core already reports the attribute's format; quoting the remnant of
+        // the dropped child back as if the author had typed it would be a
+        // second warning saying something that was never written.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `<point name="p" /><graph name="g" grid="$p" />`,
+        });
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("g")].stateValues.grid,
+        ).eq("none");
+
+        const warnings = getDiagnosticsByType(core).warnings;
+        expect(warnings.length).eq(1);
+        expect(warnings[0].code).eq("doenet-w0106");
+        expect(warnings[0].message).contain(
+            "Invalid format for attribute grid of `<graph>`",
+        );
     });
 
     it("correctly shadow references to number list grid", async () => {
@@ -1602,55 +2208,6 @@ describe("Graph tag tests @group2", async () => {
             stateVariables[await resolvePathToNodeIdx("pdc5d")].stateValues
                 .text,
         ).eq("-45.03233, 8.28572, -5.58234, 7.8371");
-    });
-
-    it("pegboard", async () => {
-        let { core, resolvePathToNodeIdx } = await createTestCore({
-            doenetML: `
-    <graph>
-      <pegboard />
-    </graph>
-    
-    <graph>
-      <pegboard dx="3" dy="2" xoffset="1" yoffset="-1" />
-    </graph>
-    `,
-        });
-
-        // not sure what to test as don't know how to check renderer...
-        let stateVariables = await core.returnAllStateVariables(false, true);
-        expect(
-            stateVariables[await resolvePathToNodeIdx("_pegboard1")].stateValues
-                .dx,
-        ).eq(1);
-        expect(
-            stateVariables[await resolvePathToNodeIdx("_pegboard1")].stateValues
-                .dy,
-        ).eq(1);
-        expect(
-            stateVariables[await resolvePathToNodeIdx("_pegboard1")].stateValues
-                .xoffset,
-        ).eq(0);
-        expect(
-            stateVariables[await resolvePathToNodeIdx("_pegboard1")].stateValues
-                .yoffset,
-        ).eq(0);
-        expect(
-            stateVariables[await resolvePathToNodeIdx("_pegboard2")].stateValues
-                .dx,
-        ).eq(3);
-        expect(
-            stateVariables[await resolvePathToNodeIdx("_pegboard2")].stateValues
-                .dy,
-        ).eq(2);
-        expect(
-            stateVariables[await resolvePathToNodeIdx("_pegboard2")].stateValues
-                .xoffset,
-        ).eq(1);
-        expect(
-            stateVariables[await resolvePathToNodeIdx("_pegboard2")].stateValues
-                .yoffset,
-        ).eq(-1);
     });
 
     it("show border", async () => {

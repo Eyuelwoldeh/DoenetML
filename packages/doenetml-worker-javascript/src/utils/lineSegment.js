@@ -1,0 +1,172 @@
+import me from "math-expressions";
+import { toNumberOrNaN } from "./math";
+
+export function directionFromSlope(slope) {
+    if (slope === Infinity || slope === -Infinity) {
+        return [0, Math.sign(slope)];
+    }
+    if (!Number.isFinite(slope)) {
+        return null;
+    }
+
+    let theta = Math.atan(slope);
+    return [Math.cos(theta), Math.sin(theta)];
+}
+
+/**
+ * A coordinate as a number, `NaN` when it is not one.
+ *
+ * `NaN` is what every caller of this file's helpers is written against, and
+ * what `evaluate_to_constant()` answers for an expression that is not a
+ * constant. `toNumberOrNaN` is still needed for a *complex* value. When the
+ * engine answered `null` here instead, `null` was `0` to arithmetic, so a blank
+ * or symbolic endpoint made `dx`/`dy` zero and took the *identical endpoints*
+ * branch rather than the no-slope one.
+ */
+function getNumericValue(mathOrNumber) {
+    return toNumberOrNaN(
+        mathOrNumber instanceof me.class
+            ? mathOrNumber.evaluate_to_constant()
+            : mathOrNumber,
+    );
+}
+
+export function getNumericEndpointPair(
+    desiredUnconstrainedEndpoints,
+    currentEndpoints,
+    numDimensions = 2,
+    pointInds = [0, 1],
+) {
+    return pointInds.map((pointInd) =>
+        Array.from({ length: numDimensions }, (_, dim) => {
+            let key = pointInd + "," + dim;
+            if (key in desiredUnconstrainedEndpoints) {
+                return getNumericValue(desiredUnconstrainedEndpoints[key]);
+            }
+            return getNumericValue(currentEndpoints[pointInd][dim]);
+        }),
+    );
+}
+
+function getSlopeAndSignedLength(endpoint1, endpoint2, fallbackSlope) {
+    const dx = endpoint2[0] - endpoint1[0];
+    const dy = endpoint2[1] - endpoint1[1];
+
+    if (dx === 0 && dy === 0) {
+        return {
+            slope: fallbackSlope,
+            signedLength: 0,
+        };
+    }
+
+    if (dx === 0) {
+        return {
+            slope: dy > 0 ? Infinity : -Infinity,
+            // For vertical segments, canonicalize interactions so slope encodes
+            // up vs down and the defining length stays non-negative.
+            signedLength: Math.abs(dy),
+        };
+    }
+
+    return {
+        slope: dy / dx,
+        signedLength: Math.hypot(dx, dy) * Math.sign(dx),
+    };
+}
+
+export function getDirectionComponent(dim, dirX, dirY) {
+    let dimNumber = Number(dim);
+    if (dimNumber === 0) {
+        return dirX;
+    }
+    if (dimNumber === 1) {
+        return dirY;
+    }
+    return 0;
+}
+
+// Resolve the configured slope: the slope attribute's value when present,
+// otherwise the essential slope maintained for the parameterization.
+export function getConfiguredSlope(globalDependencyValues) {
+    return globalDependencyValues.slopeAttr !== null
+        ? globalDependencyValues.slopeAttr.stateValues.value
+        : globalDependencyValues.essentialSlope;
+}
+
+// Resolve the configured signed length: the length attribute's value when
+// present, otherwise the essential signed length maintained for the
+// parameterization.
+export function getConfiguredSignedLength(globalDependencyValues) {
+    return globalDependencyValues.lengthAttr !== null
+        ? globalDependencyValues.lengthAttr.stateValues.value
+        : globalDependencyValues.essentialSignedLength;
+}
+
+export function addSlopeAndLengthInstructions({
+    instructions,
+    globalDependencyValues,
+    endpoint1,
+    endpoint2,
+}) {
+    const fallbackSlope = getConfiguredSlope(globalDependencyValues);
+
+    const { slope, signedLength } = getSlopeAndSignedLength(
+        endpoint1,
+        endpoint2,
+        fallbackSlope,
+    );
+
+    if (globalDependencyValues.slopeAttr !== null) {
+        instructions.push({
+            setDependency: "slopeAttr",
+            desiredValue: slope,
+            variableIndex: 0,
+        });
+    } else {
+        instructions.push({
+            setDependency: "essentialSlope",
+            desiredValue: slope,
+        });
+    }
+
+    if (globalDependencyValues.lengthAttr !== null) {
+        instructions.push({
+            setDependency: "lengthAttr",
+            desiredValue: signedLength,
+            variableIndex: 0,
+        });
+    } else {
+        instructions.push({
+            setDependency: "essentialSignedLength",
+            desiredValue: signedLength,
+        });
+    }
+}
+
+export function addMidpointInstructions({
+    instructions,
+    dependencyNamesByKey,
+    midpointCoords,
+}) {
+    // The midpoint dependency is per dimension, not per endpoint: for a given
+    // dim both endpoints' keys point at the same midpoint coordinate, so a
+    // single lookup suffices.
+    for (let dim = 0; dim < midpointCoords.length; dim++) {
+        const midpointDependencyName =
+            dependencyNamesByKey["0," + dim]?.midpointCoord;
+
+        if (midpointDependencyName !== undefined) {
+            instructions.push({
+                setDependency: midpointDependencyName,
+                desiredValue: me.fromAst(midpointCoords[dim]),
+                variableIndex: 0,
+            });
+        }
+    }
+}
+
+export function mergePointCoords(pointCoords, currentPoint, numDimensions) {
+    return Array.from({ length: numDimensions }, (_, dim) =>
+        pointCoords[dim] !== undefined ? pointCoords[dim] : currentPoint[dim],
+    );
+}

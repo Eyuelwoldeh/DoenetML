@@ -162,15 +162,52 @@ export async function deriveChildResultsFromDefiningChildren({
                 let attributeForComponentType =
                     parent.ancestors[0].componentClass.componentType;
                 core.unmatchedChildren[parent.componentIdx] = {
-                    message: `Invalid format for attribute ${parent.doenetAttributes.isAttributeChildFor} of \`<${attributeForComponentType}>\`.`,
+                    code: "doenet-w0106",
+                    args: {
+                        attribute: parent.doenetAttributes.isAttributeChildFor,
+                        componentType: attributeForComponentType,
+                    },
                 };
+            } else if (
+                childGroupResults.unmatchedChildren.every(
+                    (child: any) =>
+                        typeof child !== "string" &&
+                        // A child with no `componentType` at all is not an
+                        // internal component but a malformed one, which the
+                        // author did write and does need to hear about.
+                        typeof child.componentType === "string" &&
+                        child.componentType.startsWith("_"),
+                )
+            ) {
+                // Nothing to say: an author never writes a `_copy` or an
+                // `_error`, so naming one as an invalid child sends them
+                // looking for markup that is not theirs. Clear any record a
+                // previous derive of this same parent left, so that "nothing to
+                // say" means the map says nothing — every other branch of this
+                // function either writes the entry or deletes it, and a branch
+                // that did neither would let a stale message through.
+                //
+                // This arises when a composite child has not been given its
+                // chance to expand. Every component is first derived with
+                // `expandComposites: false`, and a composite is deliberately
+                // not matched against `_base` so that it must expand first, so
+                // the record below is made for every tree and then retracted by
+                // the re-derive that `expandCompositesOfDescendants` triggers.
+                // That pass reaches a component's attributes and children, but
+                // an index's contents hang off `refResolution.originalPath`,
+                // which is neither — so for those the record was never
+                // retracted and arrived at the end of the load beside the
+                // genuine diagnostic. Where a composite *does* expand, what
+                // gets reported is its expansion (`<graph>`, `<p>`) rather than
+                // the `_copy`, which is why suppressing this loses nothing.
+                delete core.unmatchedChildren[parent.componentIdx];
             } else {
                 core.unmatchedChildren[parent.componentIdx] = {
-                    message: `Invalid children for \`<${
-                        parent.componentType
-                    }>\`: Found invalid children: ${unmatchedChildrenTypes.join(
-                        ", ",
-                    )}`,
+                    code: "doenet-w0107",
+                    args: {
+                        componentType: parent.componentType,
+                        children: unmatchedChildrenTypes.join(", "),
+                    },
                 };
             }
         }
@@ -359,15 +396,13 @@ export function findChildGroupNoAdapters({
                 }
                 // don't match composites to the base component
                 // so that they will expand
-                if (
-                    !(
-                        typeFromGroup === "_base" &&
-                        core.componentInfoObjects.isInheritedComponentType({
-                            inheritedComponentType: componentType,
-                            baseComponentType: "_composite",
-                        })
-                    )
-                ) {
+                if (!(
+                    typeFromGroup === "_base" &&
+                    core.componentInfoObjects.isInheritedComponentType({
+                        inheritedComponentType: componentType,
+                        baseComponentType: "_composite",
+                    })
+                )) {
                     parentClass.childGroupOfComponentType[componentType] =
                         group.group;
 
@@ -477,6 +512,23 @@ export async function substituteAdapter({
     if (originalChild.componentIdx != undefined) {
         newSerializedChild = originalChild.getAdapter(adapterIndUsed);
         newSerializedChild.componentIdx = core._components.length;
+        // An adapter is built here, at run time, long after the walk that
+        // gives every component the document builds an identifier derived
+        // from where it sits in it. Without an id of its own it falls back to
+        // its build index, which moves whenever anything ahead of it does --
+        // and an adapter does hold a reader's work. A `<boolean>` written in
+        // a `<graph>` is adapted to a `<text>`, and a `<text>` in a graph is
+        // dragged by the reader; its `anchor` is theirs, is saved, and under
+        // a build index came back on nothing at all after an edit above it
+        // (Doenet/DoenetML#1944).
+        //
+        // What identifies an adapter is the component it adapts and which of
+        // that component's adapters was used -- both of which a rebuild
+        // reproduces, because the adapted component is itself keyed by the
+        // document. `@@adapt<n>` cannot collide with a document-derived path:
+        // an attribute segment is `@<name>`, and the only other `@@` form is
+        // a reference path's index, whose segment is digits and dots.
+        newSerializedChild.stateId = `${originalChild.stateId}@@adapt${adapterIndUsed}`;
         core._components[core._components.length] = undefined;
     } else {
         // XXX: how does this work with the new componentIdx approach?

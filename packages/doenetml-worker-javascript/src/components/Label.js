@@ -11,6 +11,8 @@ import {
 } from "../utils/graphical";
 import { textFromChildren } from "../utils/text";
 import { latexToText, textToLatex } from "../utils/math";
+import { codedDiagnostic } from "../utils/diagnostics";
+import { addClickTargetStateVariableDefinition } from "../utils/triggering";
 
 export default class Label extends InlineComponent {
     constructor(args) {
@@ -28,6 +30,7 @@ export default class Label extends InlineComponent {
         summary: "A label for an input, answer, button, or graphical object",
     };
     static rendererType = "label";
+    static renderChildren = true;
 
     static includeBlankStringChildren = true;
 
@@ -66,6 +69,16 @@ export default class Label extends InlineComponent {
             createComponentOfType: "number",
             createStateVariable: "layer",
             defaultValue: 0,
+            public: true,
+            forRenderer: true,
+        };
+
+        attributes.maskLabel = {
+            description:
+                "Whether to give the label an opaque background so it stays legible when it overlaps an axis, grid line, or another object.",
+            createComponentOfType: "boolean",
+            createStateVariable: "maskLabel",
+            defaultValue: false,
             public: true,
             forRenderer: true,
         };
@@ -534,23 +547,26 @@ export default class Label extends InlineComponent {
 
                 if (hasForAttribute) {
                     if (isGraphicalLabel) {
-                        diagnostics.push({
-                            message:
-                                "The `for` attribute on graphical `<label>` is ignored.",
-                            type: "warning",
-                        });
+                        diagnostics.push(
+                            codedDiagnostic({
+                                type: "warning",
+                                code: "doenet-w0021",
+                            }),
+                        );
                     } else if (forResolutions.length !== 1) {
-                        diagnostics.push({
-                            message:
-                                "The `for` attribute on `<label>` must resolve to exactly one component.",
-                            type: "warning",
-                        });
+                        diagnostics.push(
+                            codedDiagnostic({
+                                type: "warning",
+                                code: "doenet-w0022",
+                            }),
+                        );
                     } else if (forResolutions[0].unresolvedPath !== null) {
-                        diagnostics.push({
-                            message:
-                                "The `for` attribute on `<label>` could not be resolved to a component.",
-                            type: "warning",
-                        });
+                        diagnostics.push(
+                            codedDiagnostic({
+                                type: "warning",
+                                code: "doenet-w0023",
+                            }),
+                        );
                     } else {
                         targetComponentIdx = forResolutions[0].componentIdx;
                     }
@@ -699,11 +715,12 @@ export default class Label extends InlineComponent {
                     }
 
                     if (answerHasAuthoredInputChildrenForLabel) {
-                        diagnostics.push({
-                            message:
-                                "The `for` attribute on `<label>` references an `<answer>` with explicitly authored inputs; reference the input directly.",
-                            type: "warning",
-                        });
+                        diagnostics.push(
+                            codedDiagnostic({
+                                type: "warning",
+                                code: "doenet-w0024",
+                            }),
+                        );
 
                         return {
                             setValue: { forTargetInputComponentIdx: null },
@@ -711,11 +728,12 @@ export default class Label extends InlineComponent {
                         };
                     }
 
-                    diagnostics.push({
-                        message:
-                            "The `for` attribute on `<label>` references an `<answer>` without an input to label.",
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0025",
+                        }),
+                    );
 
                     return {
                         setValue: { forTargetInputComponentIdx: null },
@@ -723,11 +741,12 @@ export default class Label extends InlineComponent {
                     };
                 }
 
-                diagnostics.push({
-                    message:
-                        "The `for` attribute on `<label>` must reference an input or an answer.",
-                    type: "warning",
-                });
+                diagnostics.push(
+                    codedDiagnostic({
+                        type: "warning",
+                        code: "doenet-w0026",
+                    }),
+                );
 
                 return {
                     setValue: { forTargetInputComponentIdx: null },
@@ -738,9 +757,9 @@ export default class Label extends InlineComponent {
 
         // This renderer id is only meaningful for single-control targets where
         // the renderer can expose a concrete DOM control id such as `${id}_input`.
-        // Grouped widgets like non-inline choiceInput and matrixInput still need
-        // the input component identity above, but they are labeled through
-        // `aria-labelledby` rather than `htmlFor`.
+        // Grouped widgets like non-inline choiceInput, matrixInput, and
+        // fractionInput still need the input component identity above, but they
+        // are labeled through `aria-labelledby` rather than `htmlFor`.
         stateVariableDefinitions.forTargetRendererId = {
             forRenderer: true,
             stateVariablesDeterminingDependencies: [
@@ -829,9 +848,10 @@ export default class Label extends InlineComponent {
 
         // Group targets are widgets that should consume an external label via
         // `aria-labelledby` on the group container instead of `htmlFor` on a
-        // single DOM control. Today that applies to matrixInput and non-inline
-        // choiceInput. Inline choiceInput remains a single control because the
-        // react-select input exposes a concrete input id.
+        // single DOM control. Today that applies to matrixInput,
+        // fractionInput, and non-inline choiceInput. Inline choiceInput remains
+        // a single control because the react-select input exposes a concrete
+        // input id.
         stateVariableDefinitions.forTargetIsGroup = {
             forRenderer: true,
             stateVariablesDeterminingDependencies: [
@@ -872,6 +892,10 @@ export default class Label extends InlineComponent {
                     componentInfoObjects.isInheritedComponentType({
                         inheritedComponentType: inputIdentity.componentType,
                         baseComponentType: "matrixInput",
+                    }) ||
+                    componentInfoObjects.isInheritedComponentType({
+                        inheritedComponentType: inputIdentity.componentType,
+                        baseComponentType: "fractionInput",
                     })
                 ) {
                     forTargetIsGroup = true;
@@ -888,6 +912,8 @@ export default class Label extends InlineComponent {
                 return { setValue: { forTargetIsGroup } };
             },
         };
+
+        addClickTargetStateVariableDefinition(stateVariableDefinitions);
 
         return stateVariableDefinitions;
     }

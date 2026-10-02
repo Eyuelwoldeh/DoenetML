@@ -7,28 +7,53 @@ import React, {
     useContext,
     useEffect,
 } from "react";
+import { createPortal } from "react-dom";
+import JXG from "jsxgraph";
 import useDoenetRenderer, {
     UseDoenetRendererProps,
 } from "../useDoenetRenderer";
 import { MathField } from "./mathquill/types";
 import { EditableMathField } from "./mathquill/EditableMathField";
 import "./mathquill/mathquill.css";
-import { DEFAULT_MATH_INPUT_FUNCTION_NAMES } from "@doenet/utils";
+import {
+    DEFAULT_MATH_INPUT_FUNCTION_NAMES,
+    hasCoarsePrimaryPointer,
+    subscribeToPrimaryPointerType,
+    toNumberOrNaN,
+} from "@doenet/utils";
+import {
+    getVirtualKeyboardTrayElement,
+    isInVirtualKeyboardTray,
+} from "@doenet/virtual-keyboard";
 import { DescriptionPopover } from "./utils/Description";
+import { useRenderedLabel } from "./utils/inputLabel";
 import * as Ariakit from "@ariakit/react";
 
 import { MathJax } from "better-react-mathjax";
 
 import "./mathInput.css";
-import { FocusedMathInputContext } from "../../doenetml";
+import {
+    FocusedMathInputContext,
+    LegacyKeyboardTrayContext,
+} from "../../doenetml";
 import { useAppSelector } from "../../state";
 import { keyboardSlice } from "../../state/slices/keyboard";
 import {
     calculateValidationState,
     createCheckWorkComponent,
 } from "./utils/checkWork";
-import { addValidationStateToShortDescription } from "./utils/description";
+import { addValidationStateToShortDescription } from "./utils/validationState";
 import { useSubmitActionWithDelay } from "./utils/useSubmitActionWithDelay";
+import { BoardContext, TEXT_LAYER_OFFSET } from "./graph";
+import me from "math-expressions";
+import {
+    getPositionFromAnchorByCoordinate,
+    POINTER_DRAG_THRESHOLD,
+} from "./utils/graph";
+import { JXGObject } from "./jsxgraph-distrib/types";
+import { useChromeLangDir, useContentT, useT } from "../../utils/i18n";
+import { useInMathSlot, useMathSlotEditing } from "./utils/mathInputSlots";
+import { useMathJaxOutOfTabOrder } from "./utils/useMathJaxOutOfTabOrder";
 
 const PREVIEW_UPDATE_DELAY_MS = 500;
 const PARSE_ERROR_PLACEHOLDER_LATEX = "\uff3f";
@@ -52,6 +77,30 @@ const PARSE_ERROR_PLACEHOLDER_LATEX = "\uff3f";
 const EMPTY_AUTO_OPERATOR_NAMES_SENTINEL = "a-";
 
 /**
+ * How soon after a math input gives up its claim on the virtual keyboard a
+ * press on a keyboard tray predating this change must reach it for that press
+ * to be read as the cause of the blur — which is what lets such a tray still
+ * type into the input, and give it back the caret its press took (see
+ * `KeyCommand`).
+ *
+ * A bound is needed because nothing else separates that blur from the reader
+ * leaving the input of their own accord and reaching for the tray afterwards,
+ * and acting in the latter case would put a character into an input the reader
+ * has left and pull the caret back to it. The viewers contemporary with such a
+ * tray drew the same line, at 100 ms between the blur and the tray's own
+ * timestamp; this measures instead from the blur to the message being handled,
+ * so it allows for the `postMessage` hop and the render that follows, while
+ * staying well inside the time it takes a reader to leave an input and press a
+ * key.
+ *
+ * A press that misses the window does nothing at all, which is the same
+ * nothing the reader would have got before this accommodation existed: the
+ * bound can only decline a press, never send one to an input other than the
+ * one whose blur it is being matched against.
+ */
+const LEGACY_TRAY_RECLAIM_WINDOW_MS = 300;
+
+/**
  * Encapsulates math input preview popover state and interaction behavior.
  *
  * The preview is shown only when preview is enabled, the current raw renderer
@@ -69,6 +118,7 @@ function useMathInputPreview({
     errorMessageRawRenderer,
     focused,
     previewUpdateDelayMs,
+    placement,
     onEscapeFromPreview,
 }: {
     id: string;
@@ -78,6 +128,8 @@ function useMathInputPreview({
     errorMessageRawRenderer: string | null;
     focused: boolean;
     previewUpdateDelayMs: number;
+    /** Which side of the field the preview opens on. */
+    placement: Ariakit.PopoverStoreProps["placement"];
     onEscapeFromPreview: () => void;
 }) {
     const [interactingWithPreview, setInteractingWithPreview] = useState(false);
@@ -92,7 +144,7 @@ function useMathInputPreview({
 
     const previewRef = useRef<HTMLDivElement | null>(null);
     const previewPopover = Ariakit.usePopoverStore({
-        placement: "right",
+        placement,
     });
 
     const previewId = `${id}-preview`;
@@ -277,6 +329,14 @@ function MathInputPreviewPopover({
     immediateValueLatex: string;
     errorMessageRawRenderer: string | null;
 }) {
+    const t = useT();
+
+    // The parse-error message is chrome — the reader's language inside the
+    // document's box — while the raw expression quoted after it is what the
+    // user typed. Re-declared as one run so its trailing colon stays against
+    // the label, and empty unless the two directions disagree.
+    const chromeLangDir = useChromeLangDir();
+
     if (!showPreview) {
         return null;
     }
@@ -289,7 +349,11 @@ function MathInputPreviewPopover({
         <Ariakit.Popover
             store={preview.previewPopover}
             className="description-popover mathInputPreviewPopover"
-            aria-label="math expression preview"
+            aria-label={t(
+                "math-input-preview-region",
+                undefined,
+                "math expression preview",
+            )}
             gutter={8}
             flip="top bottom left"
             fitViewport
@@ -306,15 +370,37 @@ function MathInputPreviewPopover({
             <div
                 id={preview.previewId}
                 className="mathInputPreviewContent"
+                // The preview is notation, like the field it previews, and it
+                // is this div that scrolls a long expression — the popover
+                // does not portal, so inside a right-to-left document it
+                // would otherwise become an RTL scroll container: it opens
+                // showing the tail of the expression, and `scrollLeft` runs
+                // from the negatives up to zero, which turns Home and End in
+                // `handlePreviewKeyDown` into two ways of showing the same
+                // end. MathJax pins `mjx-math` itself, but that is the
+                // content, not the container that scrolls it. The parse-error
+                // branch is left to inherit: it is wrapping prose, and the
+                // chrome half of it re-declares itself below when it
+                // disagrees with the document.
+                dir={showParseErrorMessage ? undefined : "ltr"}
                 tabIndex={0}
-                aria-label="Preview"
+                aria-label={t("math-input-preview", undefined, "Preview")}
                 onFocus={() => preview.setInteractingWithPreview(true)}
                 onBlur={() => preview.setInteractingWithPreview(false)}
                 onKeyDown={preview.handlePreviewKeyDown}
             >
                 {showParseErrorMessage ? (
-                    <div className="mathInputPreviewErrorMessage">
-                        <strong>Invalid expression:</strong>{" "}
+                    <div
+                        className="mathInputPreviewErrorMessage"
+                        {...chromeLangDir}
+                    >
+                        <strong>
+                            {t(
+                                "math-input-invalid-expression",
+                                undefined,
+                                "Invalid expression:",
+                            )}
+                        </strong>{" "}
                         {errorMessageRawRenderer}
                     </div>
                 ) : (
@@ -328,44 +414,27 @@ function MathInputPreviewPopover({
 }
 
 /**
- * Computes blur-transition context used by `handleBlur`.
- *
- * Determines whether a blur was likely caused by the virtual keyboard handoff
- * and whether focus moved into the preview region, which allows the input blur
- * to be treated as non-final while preview interaction continues.
+ * Whether the reader's primary pointing device is coarse, re-evaluated if that
+ * changes (a tablet gaining a trackpad).
  */
-function getBlurTransitionContext({
-    relatedTarget,
-    previewRef,
-    lastBlurTime,
-    lastKeyboardAccessTime,
-}: {
-    relatedTarget: EventTarget | null;
-    previewRef: React.RefObject<HTMLDivElement | null>;
-    lastBlurTime: number;
-    lastKeyboardAccessTime: number;
-}) {
-    // If the blur was immediately preceded by a keyboard access,
-    // we conclude that the blur was caused by the keyboard access.
-    // If not, we currently indicate the blur was not caused by a keyboard access,
-    // though we'll also check if there is a keyboard access following the blur.
-    const keyboardCausedBlur =
-        Math.abs(lastKeyboardAccessTime - lastBlurTime) < 100;
-
-    const focusMovedToPreview =
-        relatedTarget instanceof Node &&
-        previewRef.current?.contains(relatedTarget);
-
-    return {
-        keyboardCausedBlur,
-        focusMovedToPreview,
-    };
+function useHasCoarsePrimaryPointer(): boolean {
+    return React.useSyncExternalStore(
+        subscribeToPrimaryPointerType,
+        hasCoarsePrimaryPointer,
+        // Server snapshot: assume a conventional pointer device.
+        () => false,
+    );
 }
 
 interface MathInputSVs {
     [key: string]: any;
     hidden: boolean;
     disabled: boolean;
+    fixed: boolean;
+    fixLocation: boolean;
+    draggable: boolean;
+    anchor: any;
+    positionFromAnchor: any;
     label: string;
     labelHasLatex: boolean;
     labelPosition: string;
@@ -380,6 +449,7 @@ interface MathInputSVs {
     shortDescription: string;
     showCheckWork: boolean;
     showPreview: boolean;
+    includeValidationStateInShortDescription?: boolean;
     // Optional because `_matrixComponentInput` reuses this renderer
     // (`rendererType = "mathInput"`) without defining the SV; the
     // `??` fallback below handles the absent case.
@@ -389,14 +459,46 @@ interface MathInputSVs {
 export default function MathInput(props: UseDoenetRendererProps) {
     let { id, SVs, children, actions, ignoreUpdate, callAction } =
         useDoenetRenderer<MathInputSVs>(props);
+    const renderedLabel = useRenderedLabel({ SVs, children });
+
+    // The check-work button and the validation state announced on the input
+    // both follow the document's language, not the reader's — see
+    // `useContentT`.
+    const tContent = useContentT();
 
     // @ts-ignore
     MathInput.baseStateVariable = "rawRendererValue";
+    // @ts-ignore
+    MathInput.ignoreActionsWithoutCore = (actionName: string) =>
+        actionName === "moveInput";
 
     const virtualKeyboardEvents = useAppSelector(
         keyboardSlice.selectors.keyboardInput,
     );
+    const systemKeyboardRequested = useAppSelector(
+        keyboardSlice.selectors.systemKeyboardRequested,
+    );
     const focusedMathInput = useContext(FocusedMathInputContext);
+    const legacyKeyboardTray = useContext(LegacyKeyboardTrayContext);
+
+    // Inside an expression there is no room for anything but the field itself:
+    // a visible label drawn among the symbols would read as part of the math.
+    // The expression names the field instead, through its short description.
+    // Read here, with the other hooks, so it is read on every render whether
+    // or not the field goes on to draw anything.
+    const inMathSlot = useInMathSlot();
+
+    // Telling the slot when the field is being edited is what has the
+    // expression re-typeset in step with each keystroke. Outside a slot these
+    // are no-ops.
+    const slotEditing = useMathSlotEditing();
+
+    // A label that is itself math is typeset by MathJax, which gives it a tab
+    // stop. Inside a slot the label is out of sight, so that stop would land
+    // on nothing a keyboard user can see; the ref is attached only there.
+    const slotRootRef = useRef<HTMLSpanElement>(null);
+    useMathJaxOutOfTabOrder(slotRootRef);
+
     const [mathField, setMathField] = useState<MathField | null>(null);
     // `EditableMathField`'s `handlers.enter` callback can hold stale captures.
     // Keep the latest MathField instance in a ref for enter handling.
@@ -405,15 +507,71 @@ export default function MathInput(props: UseDoenetRendererProps) {
     const [focused, setFocused] = useState(false);
     const textareaRef = useRef<HTMLTextAreaElement | null>(null); // Ref to keep track of the mathInput's disabled state
 
-    const lastKeyboardAccessTime = useRef(0);
-    const lastBlurTime = useRef(0);
-    const keyboardCausedBlur = useRef(false);
+    // On a touch device the Doenet keyboard and the device's own on-screen
+    // keyboard compete for the same screen, so only one of them may be in
+    // play. The Doenet keyboard has it unless the reader closes the tray,
+    // which is how they ask for the device's keyboard back. Deciding this from
+    // the outset, rather than waiting for the tray to open, is what stops the
+    // system keyboard from appearing at the first math input a reader taps.
+    const coarsePointer = useHasCoarsePrimaryPointer();
+    const suppressSystemKeyboard = coarsePointer && !systemKeyboardRequested;
+
+    useEffect(() => {
+        const textarea = textareaRef.current;
+        if (!textarea) {
+            return;
+        }
+        // `inputmode="none"` keeps focus, the caret, selection, and any
+        // physical keyboard working while telling the device not to raise its
+        // on-screen keyboard — the standard way to run a custom math keyboard
+        // on the web (issue #1692). Supported by Chrome/Android 66+, Safari
+        // iOS 12.2+, and Firefox for Android; ignored by desktop browsers,
+        // which is harmless because it is only ever set on touch devices.
+        //
+        // Changing this while the input is focused does not retract a system
+        // keyboard that is already up: reopening it, or dismissing it, needs a
+        // fresh tap on the input, because iOS raises the keyboard only during
+        // a user gesture and this runs after one.
+        textarea.inputMode = suppressSystemKeyboard ? "none" : "text";
+    }, [suppressSystemKeyboard, mathField]);
+
+    // Detaches the watcher that `watchForFocusLeavingTray` installs on the
+    // tray, which lives outside this input's DOM and so outlives it otherwise.
+    const stopWatchingTrayHandoff = useRef<(() => void) | null>(null);
+    useEffect(() => () => stopWatchingTrayHandoff.current?.(), []);
 
     const rendererValue = useRef(SVs.rawRendererValue);
 
     // Keep this in a ref so `handlePressEnter` always sees current state.
     const showCheckWork = useRef(SVs.showCheckWork);
     showCheckWork.current = SVs.showCheckWork;
+
+    // ===== In-graph rendering state =====
+    // When a <mathInput> is placed inside a <graph>, we mount the MathQuill
+    // field (via createPortal) into an empty JSXGraph `text` element so it can
+    // be anchored and dragged on the board. These hooks/refs support that path;
+    // they are inert when `board` is null (the normal inline case).
+    const board = useContext(BoardContext);
+
+    const textJXG = useRef<JXGObject | null>(null);
+    const anchorPointJXG = useRef<JXGObject | null>(null);
+    const anchorRel = useRef<[string, string] | null>(null);
+
+    const pointerAtDown = useRef<[number, number] | null>(null);
+    const pointAtDown = useRef<[number, number, number] | null>(null);
+    const dragged = useRef(false);
+
+    const calculatedX = useRef<number | null>(null);
+    const calculatedY = useRef<number | null>(null);
+
+    const lastPositionFromCore = useRef<number[] | null>(null);
+    const previousPositionFromAnchor = useRef<any>(null);
+
+    const fixed = useRef(false);
+    const fixLocation = useRef(false);
+
+    fixed.current = SVs.fixed;
+    fixLocation.current = !SVs.draggable || SVs.fixLocation || SVs.fixed;
 
     const preview = useMathInputPreview({
         id,
@@ -423,6 +581,9 @@ export default function MathInput(props: UseDoenetRendererProps) {
         errorMessageRawRenderer: SVs.errorMessageRawRenderer,
         focused,
         previewUpdateDelayMs: PREVIEW_UPDATE_DELAY_MS,
+        // Beside the field is where the rest of the equation is, once the
+        // field is inside one.
+        placement: inMathSlot ? "top" : "right",
         onEscapeFromPreview: () => {
             textareaRef.current?.focus();
         },
@@ -474,6 +635,11 @@ export default function MathInput(props: UseDoenetRendererProps) {
     const submitActionWithPendingRef = useRef(submitActionWithPending);
     submitActionWithPendingRef.current = submitActionWithPending;
 
+    // For the same reason: `handlers.edit` is bound once, so a size report
+    // from it would otherwise go to the slot this field sat in at that render.
+    const slotEditingRef = useRef(slotEditing);
+    slotEditingRef.current = slotEditing;
+
     const handlePressEnter = React.useCallback(() => {
         if (!mathFieldRef.current) {
             return;
@@ -483,7 +649,6 @@ export default function MathInput(props: UseDoenetRendererProps) {
             action: actions.updateValue,
             baseVariableValue: rendererValue.current,
         });
-
         if (
             showCheckWork.current &&
             validationState.current === "unvalidated"
@@ -492,117 +657,249 @@ export default function MathInput(props: UseDoenetRendererProps) {
         }
     }, [callAction]);
 
+    /**
+     * Whether the keys the virtual keyboard has just sent belong to `input`.
+     *
+     * Ordinarily that is simply whether `input` holds the claim — a record
+     * that deliberately outlives `document.activeElement` moving into the
+     * tray, so that the keyboard can be operated from the keyboard.
+     *
+     * A tray from before it learned to decline focus leaves no claim to read,
+     * having blurred the input as it was pressed, so its keys are matched to
+     * the release of the claim that same press caused: this input's, to
+     * nothing else in the document, and still fresh. Each key is judged on its
+     * own, and only against the release it can plausibly have caused, so a key
+     * that arrives long after the reader left an input types nowhere. A press
+     * of such a tray that carried no key is judged the same way: what it owes
+     * the input — the caret it took — is owed to whichever input its keys
+     * would have gone to.
+     */
+    function claimsVirtualKeyboardKeys(input: HTMLElement) {
+        if (focusedMathInput.current === input) {
+            return true;
+        }
+        const { announced, release } = legacyKeyboardTray.current;
+        return (
+            announced &&
+            focusedMathInput.current === null &&
+            release?.input === input &&
+            Date.now() - release.releasedAt < LEGACY_TRAY_RECLAIM_WINDOW_MS
+        );
+    }
+
     React.useEffect(() => {
-        if (!mathField || focusedMathInput.current !== mathField.el()) {
-            // If we aren't the focused math input, ignore the events
+        // An `accessed` message means the tray driving us predates the tray
+        // declining focus (see `KeyCommand`). Only such a tray sends it, so
+        // seeing one settles which tray this page is under for good — and
+        // until one is seen, none of the accommodation below applies, which is
+        // what keeps it out of current pairings entirely.
+        if (virtualKeyboardEvents.some((event) => event.type === "accessed")) {
+            legacyKeyboardTray.current.announced = true;
+        }
+
+        if (!mathField || !claimsVirtualKeyboardKeys(mathField.el())) {
+            // These keys belong to a different input, or to none.
             return;
         }
         for (const event of virtualKeyboardEvents) {
             if (event.type === "keystroke" && event.command === "Enter") {
-                // The "Enter" key was pressed
-                callAction({
-                    action: actions.updateValue,
-                    baseVariableValue: rendererValue.current,
-                });
-
-                if (
-                    showCheckWork.current &&
-                    validationState.current === "unvalidated"
-                ) {
-                    submitActionWithPendingRef.current();
-                }
+                // The tray's Enter key is the keyboard's Enter key: it
+                // commits and submits, in one place.
+                handlePressEnter();
                 continue;
             }
-            if (event.type === "accessed") {
-                // Record when the virtual keyboard was accessed.
-                lastKeyboardAccessTime.current = event.timestamp || 0;
-
-                // If keyboard access immediately follows blur, treat that blur as
-                // keyboard-caused (handoff), not user intent to leave the field.
-                if (
-                    Math.abs(
-                        lastKeyboardAccessTime.current - lastBlurTime.current,
-                    ) < 100
-                ) {
-                    keyboardCausedBlur.current = true;
-                }
-            }
-            if (keyboardCausedBlur.current) {
-                switch (event.type) {
-                    case "accessed":
-                        // Already handled
-                        break;
-                    case "cmd":
-                        mathField.cmd(event.command);
-                        break;
-                    case "write":
-                        mathField.write(event.command);
-                        break;
-                    case "keystroke":
-                        mathField.keystroke(event.command);
-                        break;
-                    case "type":
-                        mathField.typedText(event.command);
-                        break;
-                    default:
-                        console.warn(
-                            `Unknown event type: ${event.type} in MathInput`,
-                            event,
-                        );
-                        break;
-                }
+            switch (event.type) {
+                case "accessed":
+                case "keyboardChoice":
+                    // Not key presses, and both are dealt with before they get
+                    // here: `accessed` above, `keyboardChoice` on its way to
+                    // the store. See `KeyCommand`.
+                    break;
+                case "cmd":
+                    mathField.cmd(event.command);
+                    break;
+                case "write":
+                    mathField.write(event.command);
+                    break;
+                case "keystroke":
+                    mathField.keystroke(event.command);
+                    break;
+                case "type":
+                    mathField.typedText(event.command);
+                    break;
+                default:
+                    console.warn(
+                        `Unknown event type: ${event.type} in MathInput`,
+                        event,
+                    );
+                    break;
             }
         }
-        if (keyboardCausedBlur.current) {
-            // If the keyboard caused the blur, return focus to the mathField
+        // Normally no refocusing: the tray declines focus, so this input still
+        // has it, and when the reader has instead tabbed into the tray, pulling
+        // focus back would make the keyboard impossible to operate by keyboard.
+        // Refocusing on every key is also what re-summoned Android's system
+        // keyboard over the tray (issue #1692).
+        //
+        // The exception is a tray old enough to have taken focus when it was
+        // pressed: whatever the press was reaching for, it left the reader
+        // with no caret, so put it back, as that tray's contemporaries did.
+        // Every press of such a tray took it, and not only the ones that carry
+        // a key: the reader who opens the tray while editing an input is still
+        // editing it, and would otherwise find the first key they then press
+        // typing nowhere. So the condition is which tray sent this batch, not
+        // what the batch contained — and since no current tray announces
+        // itself, no current pairing refocuses at all.
+        //
+        // Giving the caret back is a real focus move the reader can see, not a
+        // claim recorded on their behalf: the input holds the keyboard
+        // afterwards because it holds the caret, and gives it up the moment
+        // the reader takes the caret elsewhere. So the worst a misjudged press
+        // can do — the freshness bound in `claimsVirtualKeyboardKeys` is all
+        // that separates the blur such a press causes from the reader leaving
+        // of their own accord — is move the caret in plain sight.
+        //
+        // Where the caret has not in fact been taken, there is nothing to give
+        // back: a reader who moved into a tray in this document did so
+        // deliberately and keeps focus there, and one whose input still has
+        // focus needs nothing.
+        const activeElement =
+            textareaRef.current?.ownerDocument.activeElement ?? null;
+        if (
+            legacyKeyboardTray.current.announced &&
+            activeElement !== textareaRef.current &&
+            !isInVirtualKeyboardTray(activeElement)
+        ) {
             mathField.focus();
         }
     }, [virtualKeyboardEvents]);
 
     function onFocusChanged(focused: boolean) {
         setFocused(focused);
+        // This is the boundary the expression around this field follows: a
+        // blur that hands focus to the keyboard tray does not come through
+        // here, so the expression keeps re-typesetting in step while the
+        // reader types on the tray, and stops when focus finally leaves.
+        slotEditing.setEditing(focused);
         callAction({
             action: actions.focusChanged,
             args: { focused },
         });
     }
 
-    const handleFocus = (e: React.FocusEvent) => {
-        if (mathField) {
-            focusedMathInput.current = mathField.el();
-        }
+    const handleFocus: FocusEventHandler<HTMLElement> = (e) => {
+        // Claim the virtual keyboard's keys for this input.
+        //
+        // `e.currentTarget` rather than `mathField.el()`, even though they are
+        // the same element — MathQuill is built on it, and hands it back from
+        // `el()`. The two are not available at the same time, though: MathQuill
+        // creates the textarea while initializing, so a reader can focus it
+        // before React has committed the `mathField` state that initializing
+        // produced. Reading the element off the event closes that window;
+        // taking it from `mathField` dropped the claim, and the keyboard then
+        // typed nowhere until the reader left the input and came back.
+        focusedMathInput.current = e.currentTarget;
         onFocusChanged(true);
     };
 
-    const handleBlur: FocusEventHandler<HTMLElement> = (e) => {
-        lastBlurTime.current = +new Date();
+    /**
+     * Finishes a blur that has taken focus away from this input for good: stop
+     * claiming the virtual keyboard's keys, commit the value, and drop the
+     * focused styling. `nextFocused` is where focus has gone, if anywhere.
+     */
+    function endEditing(nextFocused: EventTarget | null) {
+        stopWatchingTrayHandoff.current?.();
 
-        const {
-            keyboardCausedBlur: nextKeyboardCausedBlur,
-            focusMovedToPreview,
-        } = getBlurTransitionContext({
-            relatedTarget: e.relatedTarget,
-            previewRef: preview.previewRef,
-            lastBlurTime: lastBlurTime.current,
-            lastKeyboardAccessTime: lastKeyboardAccessTime.current,
-        });
-
-        keyboardCausedBlur.current = nextKeyboardCausedBlur;
-
-        if (!keyboardCausedBlur.current) {
-            // For a genuine blur (not virtual-keyboard handoff), commit and unfocus.
-            callAction({
-                action: actions.updateValue,
-                baseVariableValue: rendererValue.current,
-            });
-            onFocusChanged(false);
-
-            // Keep preview open when keyboard focus tabs from the input into the
-            // preview region.
-            if (focusMovedToPreview) {
-                preview.setInteractingWithPreview(true);
-            }
+        if (mathField && focusedMathInput.current === mathField.el()) {
+            focusedMathInput.current = null;
+            // A blur with nowhere to hand focus on to is the shape of the one
+            // an old keyboard tray causes, since it takes focus in the
+            // embedding page and `relatedTarget` does not cross that boundary.
+            // Record it so a key from such a tray can be recognized as coming
+            // from the press that caused it; a blur that named where focus
+            // went is the reader moving somewhere in this document, and leaves
+            // nothing for a key to come back to. See
+            // `claimsVirtualKeyboardKeys`.
+            legacyKeyboardTray.current.release =
+                nextFocused === null
+                    ? { input: mathField.el(), releasedAt: Date.now() }
+                    : null;
         }
+
+        callAction({
+            action: actions.updateValue,
+            baseVariableValue: rendererValue.current,
+        });
+        onFocusChanged(false);
+
+        // Keep preview open when keyboard focus tabs from the input into the
+        // preview region.
+        if (
+            nextFocused instanceof Node &&
+            preview.previewRef.current?.contains(nextFocused)
+        ) {
+            preview.setInteractingWithPreview(true);
+        }
+    }
+
+    /**
+     * After focus has been handed from this input to the keyboard tray, waits
+     * for it to leave the tray again and finishes the blur unless it comes back
+     * here.
+     *
+     * The tray is not part of this input's DOM, so focus leaving it raises no
+     * further event on the input: without this the input would stay styled as
+     * focused, with its value uncommitted, until the reader returned to it and
+     * left it properly.
+     */
+    function watchForFocusLeavingTray() {
+        const tray = getVirtualKeyboardTrayElement();
+        if (!tray) {
+            return;
+        }
+
+        function handleTrayFocusOut(event: FocusEvent) {
+            const nextFocused = event.relatedTarget;
+            if (isInVirtualKeyboardTray(nextFocused)) {
+                // Focus is only moving between the tray's own keys.
+                return;
+            }
+            stopWatchingTrayHandoff.current?.();
+            if (
+                nextFocused instanceof Node &&
+                mathField?.el().contains(nextFocused)
+            ) {
+                // Focus came back here; `handleFocus` takes it from there.
+                return;
+            }
+            endEditing(nextFocused);
+        }
+
+        stopWatchingTrayHandoff.current?.();
+        tray.addEventListener("focusout", handleTrayFocusOut);
+        stopWatchingTrayHandoff.current = () => {
+            tray.removeEventListener("focusout", handleTrayFocusOut);
+            stopWatchingTrayHandoff.current = null;
+        };
+    }
+
+    const handleBlur: FocusEventHandler<HTMLElement> = (e) => {
+        const relatedTarget = e.relatedTarget;
+
+        if (isInVirtualKeyboardTray(relatedTarget)) {
+            // The reader moved focus into the virtual keyboard in order to type
+            // with it, so this input is still the one being edited: stay
+            // registered as the target of its keys, and neither commit the
+            // value nor drop the focused styling. Pressing a key does not reach
+            // here at all — the tray cancels the default action of the pointer
+            // press, so focus never leaves the input; only deliberate keyboard
+            // navigation into the tray produces this blur, and the editing
+            // ends when focus leaves the tray for somewhere that is not here.
+            watchForFocusLeavingTray();
+            return;
+        }
+
+        endEditing(relatedTarget);
     };
 
     const onChangeHandler = (text: string) => {
@@ -626,7 +923,288 @@ export default function MathInput(props: UseDoenetRendererProps) {
         }
     };
 
-    if (SVs.hidden) {
+    // On unmount, tear down the JSXGraph text element (if we created one).
+    useEffect(() => {
+        return () => {
+            if (textJXG.current !== null) {
+                deleteTextJXG();
+            }
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
+    // Stop pointer/mouse/touch starts on the in-graph field from reaching the
+    // board's drag handler, so clicking to edit never starts a drag. This uses
+    // NATIVE, bubble-phase listeners on the field element (mirroring JSXGraph's
+    // own native-input trick): JSXGraph attaches its `pointerdown`/`mousedown`/
+    // `touchstart` handlers on the board container in the bubble phase, so a
+    // bubble-phase `stopPropagation` on this descendant fires first and stops
+    // the drag — while the event has already reached MathQuill so the field
+    // still focuses and places its cursor. React's capture-phase handlers can't
+    // be used: React dispatches them at the root during the native capture
+    // phase, so `stopPropagation` there halts the event before it ever reaches
+    // MathQuill (which is why clicking focused but typing did nothing).
+    const graphFieldRefCallback = React.useCallback(
+        (node: HTMLDivElement | null) => {
+            if (!node) {
+                return;
+            }
+            const stop = (e: Event) => e.stopPropagation();
+            node.addEventListener("pointerdown", stop);
+            node.addEventListener("mousedown", stop);
+            node.addEventListener("touchstart", stop);
+            return () => {
+                node.removeEventListener("pointerdown", stop);
+                node.removeEventListener("mousedown", stop);
+                node.removeEventListener("touchstart", stop);
+            };
+        },
+        [],
+    );
+
+    function createTextJXGForMath() {
+        if (board === null) {
+            return null;
+        }
+
+        let jsxTextAttributes: Record<string, any> = {
+            visible: !SVs.hidden,
+            fixed: fixed.current,
+            layer: TEXT_LAYER_OFFSET,
+            highlight: !fixLocation.current,
+            // Keep parsing off: JSXGraph must never interpret or rewrite the
+            // element's content (we own it through the portal).
+            parse: false,
+        };
+
+        let newAnchorPointJXG: JXGObject;
+
+        try {
+            let anchor = me.fromAst(SVs.anchor);
+            let anchorCoords = [
+                toNumberOrNaN(anchor.get_component(0).evaluate_to_constant()),
+                toNumberOrNaN(anchor.get_component(1).evaluate_to_constant()),
+            ];
+
+            if (!Number.isFinite(anchorCoords[0])) {
+                anchorCoords[0] = 0;
+                jsxTextAttributes["visible"] = false;
+            }
+            if (!Number.isFinite(anchorCoords[1])) {
+                anchorCoords[1] = 0;
+                jsxTextAttributes["visible"] = false;
+            }
+
+            newAnchorPointJXG = board.create("point", anchorCoords, {
+                visible: false,
+            });
+        } catch (e) {
+            jsxTextAttributes["visible"] = false;
+            newAnchorPointJXG = board.create("point", [0, 0], {
+                visible: false,
+            });
+            return;
+        }
+
+        jsxTextAttributes.anchor = newAnchorPointJXG;
+
+        let { anchorx, anchory } = getPositionFromAnchorByCoordinate(
+            SVs.positionFromAnchor,
+        );
+        jsxTextAttributes.anchorx = anchorx;
+        jsxTextAttributes.anchory = anchory;
+        anchorRel.current = [anchorx, anchory];
+
+        // Create the text element with EMPTY content. JSXGraph produces an
+        // absolutely-positioned `rendNode` div and keeps it positioned each
+        // frame, but because the content stays "" forever its
+        // `htmlStr !== content` guard never fires — so it never writes
+        // innerHTML and never clobbers the portaled MathQuill DOM.
+        // NEVER call setText/.set(value) on this element.
+        let newTextJXG: JXGObject = board.create(
+            "text",
+            [0, 0, ""],
+            jsxTextAttributes,
+        );
+        newTextJXG.isDraggable = !fixLocation.current;
+
+        // Hand-rolled drag handlers mirroring textInput.tsx (we can't reuse
+        // attachAnchoredGraphDragHandlers, which requires focused/clicked
+        // actions the input components don't define).
+        newTextJXG.on("down", function (e: any) {
+            (document.activeElement as HTMLElement | null)?.blur();
+
+            pointerAtDown.current = [e.x, e.y];
+            pointAtDown.current = [...newAnchorPointJXG.coords.scrCoords];
+            dragged.current = false;
+        });
+
+        newTextJXG.on("hit", function () {
+            dragged.current = false;
+        });
+
+        newTextJXG.on("up", function () {
+            if (dragged.current) {
+                callAction({
+                    action: actions.moveInput,
+                    args: {
+                        x: calculatedX.current,
+                        y: calculatedY.current,
+                    },
+                });
+                dragged.current = false;
+            }
+        });
+
+        newTextJXG.on("keyfocusout", function () {
+            if (dragged.current) {
+                callAction({
+                    action: actions.moveInput,
+                    args: {
+                        x: calculatedX.current,
+                        y: calculatedY.current,
+                    },
+                });
+                dragged.current = false;
+            }
+        });
+
+        newTextJXG.on("drag", function (e: any) {
+            let viaPointer = e.type === "pointermove";
+
+            // Protect against very small unintended drags
+            if (
+                !viaPointer ||
+                Math.abs(e.x - pointerAtDown.current![0]) >
+                    POINTER_DRAG_THRESHOLD ||
+                Math.abs(e.y - pointerAtDown.current![1]) >
+                    POINTER_DRAG_THRESHOLD
+            ) {
+                dragged.current = true;
+            }
+
+            let [xMin, yMax, xMax, yMin] = board.getBoundingBox();
+            let width = newTextJXG.size[0] / board.unitX;
+            let height = newTextJXG.size[1] / board.unitY;
+
+            let anchorx = anchorRel.current?.[0] || 0;
+            let anchory = anchorRel.current?.[1] || 0;
+
+            let offsetx = 0;
+            if (anchorx === "middle") {
+                offsetx = -width / 2;
+            } else if (anchorx === "right") {
+                offsetx = -width;
+            }
+            let offsety = 0;
+            if (anchory === "middle") {
+                offsety = -height / 2;
+            } else if (anchory === "top") {
+                offsety = -height;
+            }
+
+            let xminAdjusted = xMin + 0.04 * (xMax - xMin) - offsetx - width;
+            let xmaxAdjusted = xMax - 0.04 * (xMax - xMin) - offsetx;
+            let yminAdjusted = yMin + 0.04 * (yMax - yMin) - offsety - height;
+            let ymaxAdjusted = yMax - 0.04 * (yMax - yMin) - offsety;
+
+            if (viaPointer && pointAtDown.current && pointerAtDown.current) {
+                // the reason we calculate point position with this algorithm,
+                // rather than using .X() and .Y() directly
+                // is that attributes .X() and .Y() are affected by the
+                // .setCoordinates function called in update().
+                // Due to this dependence, the location of .X() and .Y()
+                // can be affected by constraints of objects that the points depends on,
+                // leading to a different location on up than on drag
+                // (as dragging uses the mouse location)
+                var o = board.origin.scrCoords;
+
+                calculatedX.current =
+                    (pointAtDown.current[1] +
+                        e.x -
+                        pointerAtDown.current[0] -
+                        o[1]) /
+                    board.unitX;
+
+                calculatedY.current =
+                    (o[2] -
+                        (pointAtDown.current[2] +
+                            e.y -
+                            pointerAtDown.current[1])) /
+                    board.unitY;
+            } else {
+                calculatedX.current =
+                    newAnchorPointJXG.X() +
+                    newTextJXG.relativeCoords.usrCoords[1];
+                calculatedY.current =
+                    newAnchorPointJXG.Y() +
+                    newTextJXG.relativeCoords.usrCoords[2];
+            }
+
+            calculatedX.current = Math.min(
+                xmaxAdjusted,
+                Math.max(xminAdjusted, calculatedX.current),
+            );
+            calculatedY.current = Math.min(
+                ymaxAdjusted,
+                Math.max(yminAdjusted, calculatedY.current),
+            );
+
+            callAction({
+                action: actions.moveInput,
+                args: {
+                    x: calculatedX.current,
+                    y: calculatedY.current,
+                    transient: true,
+                    skippable: true,
+                },
+            });
+
+            newTextJXG.relativeCoords.setCoordinates(
+                JXG.COORDS_BY_USER,
+                [0, 0],
+            );
+            newAnchorPointJXG.coords.setCoordinates(
+                JXG.COORDS_BY_USER,
+                lastPositionFromCore.current,
+            );
+        });
+
+        newTextJXG.on("keydown", function (e: any) {
+            if (e.key === "Enter") {
+                if (dragged.current) {
+                    callAction({
+                        action: actions.moveInput,
+                        args: {
+                            x: calculatedX.current,
+                            y: calculatedY.current,
+                        },
+                    });
+                    dragged.current = false;
+                }
+            }
+        });
+
+        textJXG.current = newTextJXG;
+        anchorPointJXG.current = newAnchorPointJXG;
+        previousPositionFromAnchor.current = SVs.positionFromAnchor;
+    }
+
+    function deleteTextJXG() {
+        if (!textJXG.current) {
+            return;
+        }
+        textJXG.current.off("down");
+        textJXG.current.off("hit");
+        textJXG.current.off("up");
+        textJXG.current.off("keyfocusout");
+        textJXG.current.off("drag");
+        textJXG.current.off("keydown");
+        board?.removeObject(textJXG.current);
+        textJXG.current = null;
+    }
+
+    if (SVs.hidden && !board) {
         return null;
     }
 
@@ -652,11 +1230,13 @@ export default function MathInput(props: UseDoenetRendererProps) {
 
     let mathInputWrapperCursor = "allowed";
     if (SVs.disabled) {
-        // Disable the mathInput
-        mathInputStyle.borderColor = getComputedStyle(
-            document.documentElement,
-        ).getPropertyValue("--mainGray");
-        mathInputStyle.backgroundColor = "rgba(239, 239, 239, 0.3)";
+        // Disabled state: border and background both use --revealButtonSurface
+        // so the border blends into the background (muted, flat appearance).
+        // In light mode --revealButtonSurface is #e3e3e3, same as --mainGray,
+        // which already produced this effect.  Setting the border explicitly
+        // here makes dark mode match: #3a3a3a border on #3a3a3a background.
+        mathInputStyle.borderColor = "var(--revealButtonSurface)";
+        mathInputStyle.backgroundColor = "var(--revealButtonSurface)";
         mathInputStyle.pointerEvents = "none";
         mathInputWrapperCursor = "not-allowed";
     }
@@ -665,15 +1245,6 @@ export default function MathInput(props: UseDoenetRendererProps) {
         // Update the mathInput ref's disabled state
         textareaRef.current.disabled = SVs.disabled;
     }
-
-    const checkWorkComponent = createCheckWorkComponent(
-        SVs,
-        id,
-        validationState.current,
-        submitActionWithPending,
-        SVs.forceFullCheckWorkButton,
-        isPending,
-    );
 
     let label: React.ReactNode = SVs.label;
     const inputKey = `${id}_input`;
@@ -686,6 +1257,9 @@ export default function MathInput(props: UseDoenetRendererProps) {
                 {label}
             </MathJax>
         );
+    }
+    if (renderedLabel) {
+        label = renderedLabel;
     }
 
     let shortDescription = SVs.shortDescription || undefined;
@@ -701,8 +1275,10 @@ export default function MathInput(props: UseDoenetRendererProps) {
             ? `${id}-short-description`
             : undefined;
 
-    // description will be the one non-null child
-    const descriptionChild = children.find((child) => child);
+    // description will be the one non-null child other than the label
+    const descriptionChild = children.find(
+        (child, ind) => child && ind !== SVs.labelChildInd,
+    );
 
     let descriptionId: string | undefined = undefined;
     let description: React.ReactNode | null = null;
@@ -734,20 +1310,266 @@ export default function MathInput(props: UseDoenetRendererProps) {
             mathInputStyle.borderColor = "var(--mainOrange)";
             mathInputStyle.outlineColor = "var(--mainOrange)";
         }
-        shortDescription = addValidationStateToShortDescription(
-            validationState.current,
-            shortDescription,
+        if (SVs.includeValidationStateInShortDescription !== false) {
+            shortDescription = addValidationStateToShortDescription(
+                validationState.current,
+                shortDescription,
+                tContent,
+            );
+        }
+    }
+
+    const ariaDescription =
+        hasExplicitLabel && shortDescription ? shortDescription : undefined;
+
+    // The MathQuill field, shared verbatim by the inline and in-graph branches
+    // so both paths carry identical config, a11y wiring, and change handling.
+    const mathFieldElement = (
+        <EditableMathField
+            style={mathInputStyle}
+            latex={rendererValue.current}
+            // ACCESSIBILITY: Pass label IDs (internal + external) so they are prepended
+            // to the textarea's aria-labelledby (which includes MathQuill's auto-generated
+            // math speech ID). This ensures explicit labels are announced before math descriptions.
+            labelIds={
+                hasLabel
+                    ? [labelId, ...externalLabelRendererIds]
+                    : externalLabelRendererIds
+            }
+            shortDescriptionId={shortDescriptionId}
+            // Supplementary annotations (not primary labels)
+            aria-description={ariaDescription}
+            aria-details={ariaDetailsIds || undefined}
+            config={{
+                autoCommands:
+                    "alpha beta gamma delta epsilon zeta eta mu nu xi omega rho sigma tau phi chi psi omega iota kappa lambda Gamma Delta Xi Omega Sigma Phi Psi Omega Lambda sqrt pi Pi theta Theta integral infinity forall exists",
+                autoOperatorNames,
+                handlers: {
+                    enter: handlePressEnter,
+                },
+                substituteTextarea: function () {
+                    textareaRef.current = document.createElement("textarea");
+                    textareaRef.current.id = inputKey;
+                    textareaRef.current.disabled = SVs.disabled;
+                    // MathQuill puts these on the textarea it would have built
+                    // itself, so a substitute has to repeat them. They matter
+                    // most on phones, whose keyboards would otherwise
+                    // capitalize and autocorrect mathematics.
+                    textareaRef.current.setAttribute("autocapitalize", "off");
+                    textareaRef.current.setAttribute("autocomplete", "off");
+                    textareaRef.current.setAttribute("autocorrect", "off");
+                    textareaRef.current.spellcheck = false;
+                    textareaRef.current.addEventListener("keydown", (event) => {
+                        if (event.key === "Escape") {
+                            // Match preview Escape behavior: dismiss the
+                            // popover until the next user interaction.
+                            preview.dismissPreview();
+                        }
+                    });
+                    return textareaRef.current;
+                },
+            }}
+            onChange={(mField: any) => {
+                // The field has already been redrawn at its new size.
+                slotEditingRef.current.resized();
+                onChangeHandler(mField.latex());
+            }}
+            onBlur={handleBlur}
+            onFocus={handleFocus}
+            mathquillDidMount={(mf: any) => {
+                setMathField(mf);
+                // When rendered in a graph, the JSXGraph text element hosting the
+                // portaled field starts with empty content, so its measured size is
+                // near-zero until MathQuill fills it. Force one size refresh so drag
+                // clamping reflects the real field box. (`needsSizeUpdate`/
+                // `updateSize` exist on JSXGraph text elements but aren't in the
+                // legacy JXGObject typing, hence the cast.)
+                if (board && textJXG.current) {
+                    const textEl = textJXG.current as any;
+                    textEl.needsSizeUpdate = true;
+                    textEl.updateSize?.();
+                    board.updateRenderer();
+                }
+            }}
+        />
+    );
+
+    // ===== In-graph branch =====
+    // Mount the shared field into the JSXGraph text element's rendNode via a
+    // portal. Native bubble-phase listeners on the field region stop pointer/
+    // mouse/touch starts from reaching the board's drag handler, so clicking to
+    // edit never starts a board drag (see `graphFieldRefCallback`); the label/
+    // grip handle omits them so it stays grabbable for dragging.
+    if (board) {
+        let anchorCoords: number[];
+        try {
+            let anchor = me.fromAst(SVs.anchor);
+            anchorCoords = [
+                toNumberOrNaN(anchor.get_component(0).evaluate_to_constant()),
+                toNumberOrNaN(anchor.get_component(1).evaluate_to_constant()),
+            ];
+        } catch (e) {
+            anchorCoords = [NaN, NaN];
+        }
+
+        lastPositionFromCore.current = anchorCoords;
+
+        if (textJXG.current === null) {
+            createTextJXGForMath();
+        } else if (anchorPointJXG.current) {
+            // NOTE: never call setText/.set here — the JXG content must stay ""
+            // forever so JSXGraph never overwrites the portaled MathQuill DOM.
+            textJXG.current.relativeCoords.setCoordinates(
+                JXG.COORDS_BY_USER,
+                [0, 0],
+            );
+            anchorPointJXG.current.coords.setCoordinates(
+                JXG.COORDS_BY_USER,
+                anchorCoords,
+            );
+
+            let visible = !SVs.hidden;
+
+            if (
+                Number.isFinite(anchorCoords[0]) &&
+                Number.isFinite(anchorCoords[1])
+            ) {
+                let actuallyChangedVisibility =
+                    textJXG.current.visProp["visible"] !== visible;
+                textJXG.current.visProp["visible"] = visible;
+                textJXG.current.visPropCalc["visible"] = visible;
+
+                if (actuallyChangedVisibility) {
+                    // this function is incredibly slow, so don't run it if not necessary
+                    textJXG.current.setAttribute({ visible });
+                }
+            } else {
+                textJXG.current.visProp["visible"] = false;
+                textJXG.current.visPropCalc["visible"] = false;
+            }
+
+            textJXG.current.visProp.highlight = !fixLocation.current;
+            textJXG.current.visProp.fixed = fixed.current;
+            textJXG.current.isDraggable = !fixLocation.current;
+
+            textJXG.current.needsUpdate = true;
+
+            if (SVs.positionFromAnchor !== previousPositionFromAnchor.current) {
+                let { anchorx, anchory } = getPositionFromAnchorByCoordinate(
+                    SVs.positionFromAnchor,
+                );
+                textJXG.current.visProp.anchorx = anchorx;
+                textJXG.current.visProp.anchory = anchory;
+                anchorRel.current = [anchorx, anchory];
+                previousPositionFromAnchor.current = SVs.positionFromAnchor;
+                textJXG.current.fullUpdate();
+            } else {
+                textJXG.current.update();
+            }
+
+            anchorPointJXG.current.needsUpdate = true;
+            anchorPointJXG.current.update();
+            board.updateRenderer();
+        }
+
+        // Label & drag handle placement inside the graph. The handle sits beside
+        // the field (before it by default, or after it when
+        // `labelPosition="end"`), never above it.
+        // - A label (when present) is shown beside the field and, when the input
+        //   is draggable, doubles as the grab region (mirroring native
+        //   <textInput>). It keeps `id={labelId}` so the field's aria-labelledby
+        //   reference resolves inside the portal.
+        // - When there is no label but the input is draggable, show a small grip
+        //   so there is still something to grab.
+        // - When the input is not draggable, show no grip and no drag cursor.
+        const draggableInGraph = !fixLocation.current;
+        let graphHandle: React.ReactNode = null;
+        if (hasLabel) {
+            graphHandle = (
+                <label
+                    id={labelId}
+                    htmlFor={inputKey}
+                    className={
+                        "mathInputGraphHandle" +
+                        (draggableInGraph ? " mathInputGraphDraggable" : "")
+                    }
+                >
+                    {label}
+                </label>
+            );
+        } else if (draggableInGraph) {
+            graphHandle = (
+                <div
+                    className="mathInputGraphHandle mathInputGraphGrip mathInputGraphDraggable"
+                    aria-hidden="true"
+                >
+                    ⠿
+                </div>
+            );
+        }
+
+        const labelAtEnd = hasLabel && SVs.labelPosition === "end";
+
+        return (
+            <>
+                <span id={id} />
+                {textJXG.current?.rendNode &&
+                    createPortal(
+                        <div className="mathInputGraphWrapper">
+                            {/* Visually hidden span referenced by aria-labelledby when shortDescription is the fallback label */}
+                            {shortDescriptionId && (
+                                <span
+                                    id={shortDescriptionId}
+                                    className="visually-hidden"
+                                >
+                                    {shortDescription}
+                                </span>
+                            )}
+                            {!labelAtEnd && graphHandle}
+                            <div
+                                className="mathInputGraphField"
+                                ref={graphFieldRefCallback}
+                            >
+                                {mathFieldElement}
+                            </div>
+                            {labelAtEnd && graphHandle}
+                        </div>,
+                        textJXG.current.rendNode,
+                    )}
+            </>
         );
     }
 
+    // ===== Inline (non-graph) branch =====
+
+    const checkWorkComponent = createCheckWorkComponent(
+        SVs,
+        id,
+        validationState.current,
+        submitActionWithPending,
+        SVs.forceFullCheckWorkButton,
+        isPending,
+        tContent,
+    );
+
+    // Inside an expression the label stays in the document, out of sight, so
+    // `aria-labelledby` names the field from it exactly as it does elsewhere —
+    // a label that is itself math is then spoken as MathJax reads it.
     const labelComponent = hasLabel ? (
         <label
             id={labelId}
             htmlFor={inputKey}
-            style={{
-                marginRight: SVs.labelPosition === "right" ? undefined : "2px",
-                marginLeft: SVs.labelPosition === "right" ? "2px" : undefined,
-            }}
+            className={inMathSlot ? "visually-hidden" : undefined}
+            style={
+                inMathSlot
+                    ? undefined
+                    : {
+                          marginInlineEnd:
+                              SVs.labelPosition === "end" ? undefined : "2px",
+                          marginInlineStart:
+                              SVs.labelPosition === "end" ? "2px" : undefined,
+                      }
+            }
         >
             {label}
         </label>
@@ -779,57 +1601,7 @@ export default function MathInput(props: UseDoenetRendererProps) {
                     display: "block",
                 }}
             >
-                <EditableMathField
-                    style={mathInputStyle}
-                    latex={rendererValue.current}
-                    // ACCESSIBILITY: Pass label IDs (internal + external) so they are prepended
-                    // to the textarea's aria-labelledby (which includes MathQuill's auto-generated
-                    // math speech ID). This ensures explicit labels are announced before math descriptions.
-                    labelIds={
-                        hasLabel
-                            ? [labelId, ...externalLabelRendererIds]
-                            : externalLabelRendererIds
-                    }
-                    shortDescriptionId={shortDescriptionId}
-                    // Supplementary annotations (not primary labels)
-                    aria-description={
-                        hasExplicitLabel ? shortDescription : undefined
-                    }
-                    aria-details={ariaDetailsIds || undefined}
-                    config={{
-                        autoCommands:
-                            "alpha beta gamma delta epsilon zeta eta mu nu xi omega rho sigma tau phi chi psi omega iota kappa lambda Gamma Delta Xi Omega Sigma Phi Psi Omega Lambda sqrt pi Pi theta Theta integral infinity forall exists",
-                        autoOperatorNames,
-                        handlers: {
-                            enter: handlePressEnter,
-                        },
-                        substituteTextarea: function () {
-                            textareaRef.current =
-                                document.createElement("textarea");
-                            textareaRef.current.id = inputKey;
-                            textareaRef.current.disabled = SVs.disabled;
-                            textareaRef.current.addEventListener(
-                                "keydown",
-                                (event) => {
-                                    if (event.key === "Escape") {
-                                        // Match preview Escape behavior: dismiss the
-                                        // popover until the next user interaction.
-                                        preview.dismissPreview();
-                                    }
-                                },
-                            );
-                            return textareaRef.current;
-                        },
-                    }}
-                    onChange={(mField: any) => {
-                        onChangeHandler(mField.latex());
-                    }}
-                    onBlur={handleBlur}
-                    onFocus={handleFocus}
-                    mathquillDidMount={(mf: any) => {
-                        setMathField(mf);
-                    }}
-                />
+                {mathFieldElement}
             </Ariakit.PopoverAnchor>
             <MathInputPreviewPopover
                 preview={preview}
@@ -848,6 +1620,7 @@ export default function MathInput(props: UseDoenetRendererProps) {
         <React.Fragment>
             <span
                 id={id}
+                ref={inMathSlot ? slotRootRef : undefined}
                 // `display: inline` keeps the label and input row as ordinary
                 // inline content so the whole input flows with its paragraph:
                 // text before and after the input wraps together with the label
@@ -863,7 +1636,7 @@ export default function MathInput(props: UseDoenetRendererProps) {
                     display: "inline",
                 }}
             >
-                {SVs.labelPosition === "right" ? (
+                {SVs.labelPosition === "end" ? (
                     <>
                         {inputRow}
                         {labelComponent}

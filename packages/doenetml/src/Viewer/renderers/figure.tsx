@@ -4,13 +4,16 @@ import useDoenetRenderer, {
 } from "../useDoenetRenderer";
 import { useRecordVisibilityChanges } from "../../utils/visibility";
 import Measure from "react-measure";
+import { getBlockMarginWithOptionalTopSuppression } from "./utils/nonInlineMediaLayout";
 
 interface FigureSVs {
     [key: string]: any;
     hidden: boolean;
     captionChildName?: any;
     figureName: string;
+    figureNamePrefix: string;
     suppressFigureNameInCaption: boolean;
+    renderInlineForListItem: boolean;
 }
 
 export default React.memo(function Figure(props: UseDoenetRendererProps) {
@@ -55,16 +58,22 @@ export default React.memo(function Figure(props: UseDoenetRendererProps) {
     }
 
     if (!SVs.suppressFigureNameInCaption) {
-        let figureName = <strong>{SVs.figureName}</strong>;
-        if (captionChild) {
-            caption = (
-                <div>
-                    {figureName}: {captionChild}
-                </div>
-            );
-        } else {
-            caption = <div>{figureName}</div>;
-        }
+        // The separator belongs to the name the worker composed, not to this
+        // JSX — see the same change in `table.tsx` (#1582). Which of the two
+        // names to print is decided here rather than taken from the worker's
+        // answer alone, because a caption child can exist without this
+        // renderer finding a node for it, and a dangling ": " would show.
+        const figureName = (
+            <strong>
+                {captionChild ? SVs.figureNamePrefix : SVs.figureName}
+            </strong>
+        );
+        caption = (
+            <div>
+                {figureName}
+                {captionChild}
+            </div>
+        );
     } else {
         if (captionChild) {
             caption = <div>{captionChild}</div>;
@@ -124,7 +133,11 @@ export default React.memo(function Figure(props: UseDoenetRendererProps) {
     return (
         <figure
             id={id}
-            style={{ margin: "12px 0" }}
+            style={{
+                margin: getBlockMarginWithOptionalTopSuppression({
+                    suppressTopMargin: SVs.renderInlineForListItem,
+                }),
+            }}
             ref={ref}
             aria-labelledby={id + "_caption"}
         >

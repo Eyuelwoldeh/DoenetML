@@ -1,32 +1,36 @@
 import * as Ariakit from "@ariakit/react";
 import React, { useEffect, useState } from "react";
 import { BsCaretDownFill, BsCaretUpFill } from "react-icons/bs";
+import type { ResolvedTheme } from "../utils/theme";
+import { useT } from "../utils/i18n";
 import "./variant-select.css";
 
 export default function VariantSelect({
-    size = "sm",
-    menuWidth,
+    darkMode = "light",
     array = [],
     onChange = () => {},
     syncIndex, //Optional attribute to keep several variant selects in sync
 }: {
-    size: "sm" | "md" | "lg";
-    menuWidth: string;
+    darkMode?: ResolvedTheme;
     array: string[];
     onChange: (index: number) => void;
     syncIndex?: number;
 }) {
+    const t = useT();
     const [index, setIndex] = useState(0);
-    const [value, setValue] = useState(array[index]);
     const [inputValue, setInputValue] = useState("");
+    const value = array[index] ?? "";
 
-    const [showTooltip, setShowTooltip] = useState(false);
-    const [menuIsOpen, setMenuIsOpen] = useState(false);
+    function selectIndex(nextIndex: number) {
+        setIndex(nextIndex);
+        setInputValue("");
+        onChange(nextIndex);
+    }
 
     useEffect(() => {
         if (syncIndex != undefined && index != syncIndex - 1) {
             setIndex(syncIndex - 1);
-            setValue(array[syncIndex - 1]);
+            setInputValue("");
         }
     }, [index, syncIndex, array]);
 
@@ -47,28 +51,31 @@ export default function VariantSelect({
                 >
                     <Ariakit.SelectProvider
                         value={value}
-                        defaultValue={value}
                         setValue={(val) => {
-                            const index = array.indexOf(val);
-                            setIndex(index);
-                            setValue(val);
-                            setInputValue("");
-                            onChange(index);
+                            const nextIndex = array.indexOf(val);
+                            if (nextIndex !== -1) {
+                                selectIndex(nextIndex);
+                            }
                         }}
                     >
                         <Ariakit.Select
-                            className="button select-button"
-                            title="Variant"
+                            className="doenet-ui-button button select-button"
+                            title={t("editor-variant", undefined, "Variant")}
                         />
                         <Ariakit.SelectPopover
                             gutter={4}
                             sameWidth
+                            data-theme={darkMode}
                             className="popover"
                         >
                             <div className="combobox-wrapper">
                                 <Ariakit.Combobox
                                     autoSelect
-                                    placeholder="Filter..."
+                                    placeholder={t(
+                                        "editor-variant-filter",
+                                        undefined,
+                                        "Filter...",
+                                    )}
                                     className="combobox"
                                 />
                             </div>
@@ -87,37 +94,37 @@ export default function VariantSelect({
                 </Ariakit.ComboboxProvider>
             </div>
             <Ariakit.Button
-                title="Select next variant"
+                title={t(
+                    "editor-variant-next",
+                    undefined,
+                    "Select next variant",
+                )}
                 data-test="Next Variant"
-                className="button prev-next-button"
+                className="doenet-ui-button button prev-next-button"
                 disabled={index == array.length - 1}
                 onClick={() => {
                     if (index == array.length - 1) {
                         return;
                     }
-                    const nextIndex = index + 1;
-                    setIndex(nextIndex);
-                    setValue(array[nextIndex]);
-                    setInputValue("");
-                    onChange(nextIndex);
+                    selectIndex(index + 1);
                 }}
             >
                 <BsCaretDownFill />
             </Ariakit.Button>
             <Ariakit.Button
-                title="Select previous variant"
+                title={t(
+                    "editor-variant-previous",
+                    undefined,
+                    "Select previous variant",
+                )}
                 data-test="Previous Variant"
-                className="button prev-next-button"
+                className="doenet-ui-button button prev-next-button"
                 disabled={index < 1}
                 onClick={() => {
                     if (index < 1) {
                         return;
                     }
-                    const nextIndex = index - 1;
-                    setIndex(nextIndex);
-                    setValue(array[nextIndex]);
-                    setInputValue("");
-                    onChange(nextIndex);
+                    selectIndex(index - 1);
                 }}
             >
                 <BsCaretUpFill />

@@ -1,5 +1,7 @@
 import React from "react";
 
+import { useT } from "../utils/i18n";
+
 /**
  * True when `error` matches the transient dynamic-import failures we see when
  * Vite's dev server hiccups (Cypress component-test runs) or a network blip
@@ -60,22 +62,64 @@ export async function importRendererWithRetry<T>(
 export function RendererLoadFailed(props: {
     componentInstructions?: { id?: string };
 }) {
+    const t = useT();
+
     return (
         <div
             id={props.componentInstructions?.id}
             role="alert"
             style={{
-                backgroundColor: "#ff9999",
-                color: "#222",
+                backgroundColor: "var(--lightRed)",
+                color: "var(--canvasText)",
                 borderWidth: 3,
                 borderStyle: "solid",
+                borderColor: "var(--mainRed)",
                 padding: "0.5em",
                 textAlign: "center",
             }}
         >
-            <b>Error</b>: a renderer failed to load. Please reload the page.
+            <b>{t("error-heading", undefined, "Error")}</b>:{" "}
+            {t(
+                "renderer-load-failed",
+                undefined,
+                "a renderer failed to load. Please reload the page.",
+            )}
         </div>
     );
+}
+
+type ChunkLoadErrorBoundaryState = { caught: boolean; error: unknown };
+
+/**
+ * Error boundary for a `React.lazy` seam whose chunk ultimately failed to
+ * load (after `importRendererWithRetry` gave up): the rejection re-thrown by
+ * React during render is caught here and replaced with the same
+ * `RendererLoadFailed` placeholder the viewer renderers substitute, keeping
+ * the surrounding tree mounted. Any other error is re-thrown to the next
+ * boundary up, so a bug inside the loaded component still fails the way it
+ * did before the lazy seam existed.
+ */
+export class ChunkLoadErrorBoundary extends React.Component<
+    { children: React.ReactNode },
+    ChunkLoadErrorBoundaryState
+> {
+    state: ChunkLoadErrorBoundaryState = { caught: false, error: undefined };
+
+    static getDerivedStateFromError(
+        error: unknown,
+    ): ChunkLoadErrorBoundaryState {
+        return { caught: true, error };
+    }
+
+    render() {
+        if (this.state.caught) {
+            if (!isTransientDynamicImportError(this.state.error)) {
+                throw this.state.error;
+            }
+            return <RendererLoadFailed />;
+        }
+        return this.props.children;
+    }
 }
 
 export type RenderersLoadResult = {

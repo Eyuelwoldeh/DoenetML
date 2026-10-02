@@ -112,4 +112,113 @@ describe("schema build enforcement", () => {
             ),
         );
     });
+
+    it("throws when an attribute declares both validValues and suggestedValues", () => {
+        // They are the enforcing and non-enforcing forms of the same list, so
+        // declaring both says nothing coherent about whether an unlisted value
+        // is an error.
+        const cls = infoObjects.allComponentClasses.point as any;
+        const originalCreate = cls.createAttributesObject;
+        cls.createAttributesObject = function () {
+            const attrs = originalCreate.call(this);
+            attrs.draggable = {
+                ...attrs.draggable,
+                validValues: [{ value: "a", description: "A." }],
+                suggestedValues: [{ value: "b", description: "B." }],
+            };
+            return attrs;
+        };
+        restore = () => {
+            cls.createAttributesObject = originalCreate;
+        };
+        expect(() => getSchema(infoObjects)).toThrow(
+            /declares both `validValues` and `suggestedValues`/,
+        );
+    });
+
+    it("throws when a suggestedValues entry has no description", () => {
+        // Suggestions reach the same autocomplete and help surfaces as
+        // enumerated values, so they are held to the same bar — an entry with
+        // no help text renders as a blank row.
+        const cls = infoObjects.allComponentClasses.point as any;
+        const originalCreate = cls.createAttributesObject;
+        cls.createAttributesObject = function () {
+            const attrs = originalCreate.call(this);
+            attrs.draggable = {
+                ...attrs.draggable,
+                suggestedValues: [{ value: "a", description: "  " }],
+            };
+            return attrs;
+        };
+        restore = () => {
+            cls.createAttributesObject = originalCreate;
+        };
+        expect(() => getSchema(infoObjects)).toThrow(
+            /Invalid suggestedValues entry for `\w+\.draggable`/,
+        );
+    });
+
+    it("emits suggestedValues as suggestions only, never as a constraint", () => {
+        // The shape the whole non-enforcing path depends on:
+        // `autocompleteValues` populated, `values` absent (so the language
+        // server's "must be one of" check has nothing to fire on), and the
+        // attribute's own type preserved rather than being recast as the
+        // closed-set `keyword`.
+        const cls = infoObjects.allComponentClasses.point as any;
+        const originalCreate = cls.createAttributesObject;
+        cls.createAttributesObject = function () {
+            const attrs = originalCreate.call(this);
+            attrs.labelPosition = {
+                ...attrs.labelPosition,
+                validValues: undefined,
+                suggestedValues: [{ value: "a", description: "A." }],
+            };
+            return attrs;
+        };
+        restore = () => {
+            cls.createAttributesObject = originalCreate;
+        };
+        const schema = getSchema(infoObjects);
+        const point = schema.elements.find((e) => e.name === "point")!;
+        const attr = point.attributes.find((a) => a.name === "labelPosition")!;
+        expect(attr.autocompleteValues).toEqual([
+            { value: "a", description: "A." },
+        ]);
+        expect(attr.values).toBeUndefined();
+        expect(attr.suggestedValuesOnly).toBe(true);
+        expect(attr.type).not.toBe("keyword");
+    });
+
+    it("throws when a composite carries both schema marks", () => {
+        // The realistic way this happens is inheritance: both marks are
+        // statics, so a composite extending an `allowInSchemaAnywhere` one
+        // (`SortIndices extends Sort`) picks the mark up silently and gets
+        // widened to every container despite naming a fixed replacement type.
+        const cls = infoObjects.allComponentClasses.sortIndices as any;
+        const original = cls.allowInSchemaAnywhere;
+        cls.allowInSchemaAnywhere = true;
+        restore = () => {
+            cls.allowInSchemaAnywhere = original;
+        };
+        expect(() => getSchema(infoObjects)).toThrow(
+            /`sortIndices` sets both allowInSchemaAnywhere and allowInSchemaAsComponent \[number\]/,
+        );
+    });
+
+    it("keeps `<sortIndices>` out of containers that don't take a number", () => {
+        // `<sortIndices>` expands to `number`, so it must not follow `<sort>`
+        // into containers that accept arbitrary children of some other type.
+        const schema = getSchema(infoObjects);
+        const parentsOf = (child: string) =>
+            schema.elements
+                .filter((e) => e.children.includes(child))
+                .map((e) => e.name);
+        const sortParents = new Set(parentsOf("sort"));
+        const sortIndicesParents = new Set(parentsOf("sortIndices"));
+        expect(sortIndicesParents.size).toBeLessThan(sortParents.size);
+        // `<image>` takes no numbers; `<sort>` reaches it via the anywhere mark.
+        expect(sortParents.has("image")).toBe(true);
+        expect(sortIndicesParents.has("image")).toBe(false);
+        expect(sortIndicesParents.has("numberList")).toBe(true);
+    });
 });

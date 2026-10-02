@@ -14,7 +14,15 @@ import {
     find_maxima_of_piecewise,
     find_minima_of_piecewise,
 } from "../utils/extrema";
-import { roundForDisplay } from "../utils/math";
+import {
+    isNumericConstant,
+    roundForDisplay,
+    toNumberOrNaN,
+} from "../utils/math";
+import {
+    contentTranslator,
+    returnContentLocaleDependencies,
+} from "../utils/contentLocale";
 
 export default class PiecewiseFunction extends Function {
     static componentType = "piecewiseFunction";
@@ -139,9 +147,18 @@ export default class PiecewiseFunction extends Function {
                         let intervalMinIsClosed = fDomain.tree[2][1];
                         let intervalMaxIsClosed = fDomain.tree[2][2];
 
+                        // `isNumericConstant` rather than `!Number.isNaN`,
+                        // because an endpoint can also be complex and that is
+                        // not a numeric domain either. It also used to be the
+                        // only thing catching the `null` the engine answered
+                        // for a free variable in `[a,a]` or `(s,t)`: testing
+                        // NaN alone read those pieces as *numeric* with an
+                        // unusable domain and dropped them from the rendered
+                        // `\begin{cases}` entirely. ±Infinity is a legitimate
+                        // numeric endpoint and passes.
                         childrenWithNonNumericDomains.push(
-                            Number.isNaN(intervalMin) ||
-                                Number.isNaN(intervalMax),
+                            !isNumericConstant(intervalMin) ||
+                                !isNumericConstant(intervalMax),
                         );
 
                         if (
@@ -411,10 +428,17 @@ export default class PiecewiseFunction extends Function {
                     for (let arrayKey of arrayKeys) {
                         if (arrayKey === "0") {
                             numericalfs[arrayKey] = function (x) {
+                                // The same contract as `Function.js`' twin of
+                                // this branch: a `numericalf` must answer a
+                                // number, every other branch here answers
+                                // `NaN` when it has nothing, and the engine's
+                                // old `null` for a shadowed symbolic function
+                                // that did not reduce to a constant was `0` to
+                                // whatever plots or integrates it.
                                 let val = globalDependencyValues
                                     .symbolicfShadow(me.fromAst(x))
                                     .evaluate_to_constant();
-                                return val;
+                                return toNumberOrNaN(val);
                             };
                         } else {
                             numericalfs[arrayKey] = () => NaN;
@@ -573,6 +597,7 @@ export default class PiecewiseFunction extends Function {
                     dependencyType: "stateVariable",
                     variableName: "avoidScientificNotation",
                 },
+                ...returnContentLocaleDependencies(),
             }),
             definition: function ({ dependencyValues }) {
                 let functionVariable = dependencyValues.variable;
@@ -740,7 +765,7 @@ export default class PiecewiseFunction extends Function {
                             formulaLatexByLine.push(formulaLatex);
                             subsetDomainsByLine.push([]);
                             nonNumericConditionsByLine.push([
-                                "\\text{otherwise}",
+                                conditionOtherwise(dependencyValues),
                             ]);
 
                             break;
@@ -798,25 +823,25 @@ export default class PiecewiseFunction extends Function {
 
                 let conditionLatexByLine = subsetDomainsByLine.map(
                     (subsetDomains, i) => {
+                        const otherwise = conditionOtherwise(dependencyValues);
                         if (
                             nonNumericConditionsByLine[i].length === 1 &&
-                            nonNumericConditionsByLine[i][0] ===
-                                "\\text{otherwise}"
+                            nonNumericConditionsByLine[i][0] === otherwise
                         ) {
-                            return "\\text{otherwise}";
+                            return otherwise;
                         } else {
-                            let conditionLatex = "\\text{if }";
+                            let conditionLatex = conditionIf(dependencyValues);
                             if (nonNumericConditionsByLine[i].length > 0) {
                                 conditionLatex +=
                                     " " +
                                     nonNumericConditionsByLine[i].join(
-                                        " \\text{ or } ",
+                                        ` ${conditionOr(dependencyValues)} `,
                                     );
                             }
 
                             if (subsetDomains.length > 0) {
                                 if (nonNumericConditionsByLine[i].length > 0) {
-                                    conditionLatex += " \\text{ or } ";
+                                    conditionLatex += ` ${conditionOr(dependencyValues)} `;
                                 } else {
                                     conditionLatex += " ";
                                 }
@@ -991,6 +1016,38 @@ export default class PiecewiseFunction extends Function {
     }
 }
 
+/**
+ * The three words this component writes into a branch's condition:
+ * "if 1 < x < 2 or 4 < x < 5", and "otherwise" for the branch that catches
+ * what the others leave.
+ *
+ * The inequalities around them are notation and stay as they are. The words
+ * are prose — they are read aloud as prose, and `\\text{}` is literally the
+ * escape out of math mode into text — so they follow the document's language.
+ * `or` is the only conjunction the core composes into content; everything else
+ * that reads as "a, b, and c" is a diagnostic, joined by `Intl.ListFormat`
+ * once the reader's language is known.
+ */
+function conditionOr(dependencyValues) {
+    const t = contentTranslator(dependencyValues);
+    return `\\text{ ${t("piecewise-condition-or")} }`;
+}
+
+function conditionIf(dependencyValues) {
+    const t = contentTranslator(dependencyValues);
+    return `\\text{${t("piecewise-condition-if")} }`;
+}
+
+/**
+ * Also the marker for a branch with no condition of its own: the string is
+ * compared against itself a few lines later, which is safe because both sides
+ * are built for the same document.
+ */
+function conditionOtherwise(dependencyValues) {
+    const t = contentTranslator(dependencyValues);
+    return `\\text{${t("piecewise-condition-otherwise")}}`;
+}
+
 function latexFromSubsetDomain({
     subsetDomain,
     dependencyValues,
@@ -1014,7 +1071,7 @@ function latexFromSubsetDomain({
                     dependencyValues,
                 }).toLatex(toLatexParams),
             )
-            .join(" \\text{ or }");
+            .join(` ${conditionOr(dependencyValues)}`);
     } else {
         childDomainLatex = roundForDisplay({
             value: childDomainMath,

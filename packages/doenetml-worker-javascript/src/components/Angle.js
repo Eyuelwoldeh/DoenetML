@@ -1,6 +1,10 @@
 import GraphicalComponent from "./abstract/GraphicalComponent";
 import me from "math-expressions";
-import { roundForDisplay } from "../utils/math";
+import {
+    roundForDisplay,
+    isNumericConstant,
+    evaluateToNumber,
+} from "../utils/math";
 import {
     buildNumberDisplayParameters,
     returnNumberDisplayAttributeComponentShadowing,
@@ -8,9 +12,11 @@ import {
     returnNumberDisplayStateVariableDefinitions,
 } from "../utils/numberDisplay";
 import { returnWrapNonLabelsDescriptionsSugarFunction } from "../utils/label";
+import { codedDiagnostic } from "../utils/diagnostics";
 
 export default class Angle extends GraphicalComponent {
     static componentType = "angle";
+    static styleOverrideCategories = ["fill"];
 
     static componentDocs = {
         summary: "An angle defined by three points or a measure",
@@ -273,10 +279,14 @@ export default class Angle extends GraphicalComponent {
             arrayDefinitionByKey({ globalDependencyValues }) {
                 if (globalDependencyValues.lineChildren) {
                     if (globalDependencyValues.lineChildren.length > 2) {
-                        let warning = {
-                            message: `Cannot define an angle between ${globalDependencyValues.lineChildren.length} lines`,
+                        let warning = codedDiagnostic({
                             type: "info",
-                        };
+                            code: "doenet-i0017",
+                            args: {
+                                count: globalDependencyValues.lineChildren
+                                    .length,
+                            },
+                        });
 
                         let points = {};
                         for (let i = 0; i < 3; i++) {
@@ -310,14 +320,26 @@ export default class Angle extends GraphicalComponent {
                             },
                         });
 
-                        let a1 =
-                            line1.stateValues.points[0][0].evaluate_to_constant();
-                        let a2 =
-                            line1.stateValues.points[0][1].evaluate_to_constant();
-                        let b1 =
-                            line1.stateValues.points[1][0].evaluate_to_constant();
-                        let b2 =
-                            line1.stateValues.points[1][1].evaluate_to_constant();
+                        // Read through `evaluateToNumber`: a line through
+                        // symbolic points has no numeric coordinates, and the
+                        // engine used to report those as `null`, which is `0`
+                        // to `-`. `Math.atan2(0, 0)` is `0`, so the angle came
+                        // out along the positive x-axis and every point below
+                        // was a real number placed on it. `NaN` is what "no
+                        // angle" has to look like here, and is what the engine
+                        // now answers directly.
+                        let a1 = evaluateToNumber(
+                            line1.stateValues.points[0][0],
+                        );
+                        let a2 = evaluateToNumber(
+                            line1.stateValues.points[0][1],
+                        );
+                        let b1 = evaluateToNumber(
+                            line1.stateValues.points[1][0],
+                        );
+                        let b2 = evaluateToNumber(
+                            line1.stateValues.points[1][1],
+                        );
 
                         let angleOfLine = Math.atan2(b2 - a2, b1 - a1);
 
@@ -388,27 +410,30 @@ export default class Angle extends GraphicalComponent {
 
                         let point2 = lineIntersection;
 
-                        let a1 =
-                            line1.stateValues.points[0][0].evaluate_to_constant();
-                        let a2 =
-                            line1.stateValues.points[0][1].evaluate_to_constant();
-                        let b1 =
-                            line1.stateValues.points[1][0].evaluate_to_constant();
-                        let b2 =
-                            line1.stateValues.points[1][1].evaluate_to_constant();
+                        // See the note in the one-line case: a symbolic
+                        // coordinate has no numeric value, and the offsets
+                        // below must see `NaN` rather than a number.
+                        let a1 = evaluateToNumber(
+                            line1.stateValues.points[0][0],
+                        );
+                        let a2 = evaluateToNumber(
+                            line1.stateValues.points[0][1],
+                        );
+                        let b1 = evaluateToNumber(
+                            line1.stateValues.points[1][0],
+                        );
+                        let b2 = evaluateToNumber(
+                            line1.stateValues.points[1][1],
+                        );
                         let point1 = [
                             me.fromAst(point2[0].tree + b1 - a1),
                             me.fromAst(point2[1].tree + b2 - a2),
                         ];
 
-                        a1 =
-                            line2.stateValues.points[0][0].evaluate_to_constant();
-                        a2 =
-                            line2.stateValues.points[0][1].evaluate_to_constant();
-                        b1 =
-                            line2.stateValues.points[1][0].evaluate_to_constant();
-                        b2 =
-                            line2.stateValues.points[1][1].evaluate_to_constant();
+                        a1 = evaluateToNumber(line2.stateValues.points[0][0]);
+                        a2 = evaluateToNumber(line2.stateValues.points[0][1]);
+                        b1 = evaluateToNumber(line2.stateValues.points[1][0]);
+                        b2 = evaluateToNumber(line2.stateValues.points[1][1]);
                         let point3 = [
                             me.fromAst(point2[0].tree + b1 - a1),
                             me.fromAst(point2[1].tree + b2 - a2),
@@ -455,14 +480,15 @@ export default class Angle extends GraphicalComponent {
 
                 const diagnostics = [];
                 if (foundBadThroughPoint) {
-                    diagnostics.push({
-                        message: "Invalid point in through of `<angle>`",
-                        type: "warning",
-                    });
-                    if (globalDependencyValues.throughAttr.position) {
-                        diagnostics[diagnostics.length - 1].position =
-                            globalDependencyValues.throughAttr.position;
-                    }
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0048",
+                            position:
+                                globalDependencyValues.throughAttr.position ||
+                                undefined,
+                        }),
+                    );
                 }
 
                 if (numPointsSpecified === 0) {
@@ -505,10 +531,16 @@ export default class Angle extends GraphicalComponent {
                         radians = Math.PI / 2;
                     }
 
-                    let a1 = points["0,0"].evaluate_to_constant();
-                    let a2 = points["0,1"].evaluate_to_constant();
-                    let b1 = points["1,0"].evaluate_to_constant();
-                    let b2 = points["1,1"].evaluate_to_constant();
+                    // `<angle through="(a,b) (0,0)" />`: the prescribed points
+                    // are symbolic, so they have no numeric value and
+                    // `Math.atan2` must see `NaN`. While the engine answered
+                    // `null` here they subtracted as `0`, and `Math.atan2(0, 0)`
+                    // is `0` — the third point came out at a real position on
+                    // the unit circle instead of nowhere.
+                    let a1 = evaluateToNumber(points["0,0"]);
+                    let a2 = evaluateToNumber(points["0,1"]);
+                    let b1 = evaluateToNumber(points["1,0"]);
+                    let b2 = evaluateToNumber(points["1,1"]);
 
                     let angleFromTwoPoints = Math.atan2(a2 - b2, a1 - b1);
                     let desiredAngle = angleFromTwoPoints + radians;
@@ -589,7 +621,10 @@ export default class Angle extends GraphicalComponent {
                         dependencyValues.points[i][0].evaluate_to_constant(),
                         dependencyValues.points[i][1].evaluate_to_constant(),
                     ]);
-                    if (Number.isNaN(ps[i][0]) || Number.isNaN(ps[i][1])) {
+                    if (
+                        !isNumericConstant(ps[i][0]) ||
+                        !isNumericConstant(ps[i][1])
+                    ) {
                         foundNaN = true;
                     }
                 }
@@ -768,8 +803,10 @@ export default class Angle extends GraphicalComponent {
                     let point = dependencyValuesByKey[arrayKey].point;
                     let numericalP = [];
                     for (let ind = 0; ind < 2; ind++) {
-                        let val = point[ind].evaluate_to_constant();
-                        numericalP.push(val);
+                        // `evaluateToNumber`: `numericalPoints` is
+                        // `forRenderer` and JSXGraph coerces whatever it is
+                        // given, so a complex coordinate has to arrive as NaN.
+                        numericalP.push(evaluateToNumber(point[ind]));
                     }
                     numericalPoints[arrayKey] = numericalP;
                 }
@@ -825,16 +862,14 @@ function calculateLineIntersection(line1, line2) {
     let b2 = line2.stateValues.coeffvar2.evaluate_to_constant();
     let c2 = line2.stateValues.coeff0.evaluate_to_constant();
 
-    if (
-        !(
-            Number.isFinite(a1) &&
-            Number.isFinite(b1) &&
-            Number.isFinite(c1) &&
-            Number.isFinite(a2) &&
-            Number.isFinite(b2) &&
-            Number.isFinite(c2)
-        )
-    ) {
+    if (!(
+        Number.isFinite(a1) &&
+        Number.isFinite(b1) &&
+        Number.isFinite(c1) &&
+        Number.isFinite(a2) &&
+        Number.isFinite(b2) &&
+        Number.isFinite(c2)
+    )) {
         console.log(
             "Calculating angle between two lines implemented only for constant coefficients",
         );

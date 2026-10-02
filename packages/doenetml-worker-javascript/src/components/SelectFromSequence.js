@@ -20,6 +20,15 @@ import {
     mergeContainingNumberCombinations,
 } from "../utils/excludeCombinations";
 import me from "math-expressions";
+import { codedDiagnostic } from "../utils/diagnostics";
+import {
+    NO_SELECT_ERROR,
+    selectError,
+    selectionResult,
+    takeSelectError,
+} from "../utils/selectErrors";
+import { errorComponentState } from "../utils/dast/errors";
+const { gcd } = me.math;
 
 export default class SelectFromSequence extends Sequence {
     static componentType = "selectFromSequence";
@@ -121,10 +130,12 @@ export default class SelectFromSequence extends Sequence {
                     dependencyValues.coprime &&
                     dependencyValues.type !== "number"
                 ) {
-                    diagnostics.push({
-                        message: "coprime ignored since not selecting numbers",
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0051",
+                        }),
+                    );
                 }
                 if (dependencyValues.excludeCombinations !== null) {
                     let excludedCombinations =
@@ -151,11 +162,12 @@ export default class SelectFromSequence extends Sequence {
                         }
 
                         if (dependencyValues.coprime) {
-                            diagnostics.push({
-                                message:
-                                    "coprime ignored since excludeCombinations specified",
-                                type: "warning",
-                            });
+                            diagnostics.push(
+                                codedDiagnostic({
+                                    type: "warning",
+                                    code: "doenet-w0052",
+                                }),
+                            );
                         }
                     }
                     return {
@@ -197,6 +209,14 @@ export default class SelectFromSequence extends Sequence {
                 },
                 {
                     variableName: "errorMessage",
+                    hasEssential: true,
+                    shadowVariable: true,
+                    immutable: true,
+                },
+                {
+                    // Set with `errorMessage` and never without it; see
+                    // `SelectErrorState`.
+                    variableName: "errorDiagnostic",
                     hasEssential: true,
                     shadowVariable: true,
                     immutable: true,
@@ -326,7 +346,10 @@ export default class SelectFromSequence extends Sequence {
                         componentType: "_error",
                         componentIdx: nComponents++,
                         stateId: `${stateIdInfo.prefix}${stateIdInfo.num++}`,
-                        state: { message: errorMessage },
+                        state: errorComponentState(
+                            errorMessage,
+                            await component.stateValues.errorDiagnostic,
+                        ),
                         attributes: {},
                         doenetAttributes: {},
                         children: [],
@@ -403,8 +426,8 @@ export default class SelectFromSequence extends Sequence {
         serializedComponent,
         infoDiagnostics,
     }) {
-        const info = (message) =>
-            pushVariantInfo(infoDiagnostics, message, serializedComponent);
+        const info = (diagnostic) =>
+            pushVariantInfo(infoDiagnostics, diagnostic, serializedComponent);
         let numToSelect = 1,
             withReplacement = false;
 
@@ -422,15 +445,14 @@ export default class SelectFromSequence extends Sequence {
                 numToSelect = Number(numToSelectComponent.children[0]);
 
                 if (!(Number.isInteger(numToSelect) && numToSelect >= 0)) {
-                    info(
-                        `cannot determine unique variants of selectFromSequence as numToSelect isn't a non-negative integer.`,
-                    );
+                    info({
+                        code: "doenet-i0022",
+                        component: "selectFromSequence",
+                    });
                     return { success: false };
                 }
             } else {
-                info(
-                    `cannot determine unique variants of selectFromSequence as numToSelect isn't constant number.`,
-                );
+                info({ code: "doenet-i0023", component: "selectFromSequence" });
                 return { success: false };
             }
         }
@@ -440,20 +462,15 @@ export default class SelectFromSequence extends Sequence {
         if (coprimeCombinationsComponent) {
             // unique variants is only implemented if know that coprime is false,
             // i.e., if have an boolean with a single string child that is "false"
-            if (
-                !(
-                    coprimeCombinationsComponent.componentType === "boolean" &&
-                    coprimeCombinationsComponent.children?.length === 1 &&
-                    typeof coprimeCombinationsComponent.children[0] ===
-                        "string" &&
-                    coprimeCombinationsComponent.children[0]
-                        .trim()
-                        .toLowerCase() === "false"
-                )
-            ) {
-                info(
-                    `cannot determine unique variants of selectFromSequence as cannot determine coprime is always false.`,
-                );
+            if (!(
+                coprimeCombinationsComponent.componentType === "boolean" &&
+                coprimeCombinationsComponent.children?.length === 1 &&
+                typeof coprimeCombinationsComponent.children[0] === "string" &&
+                coprimeCombinationsComponent.children[0]
+                    .trim()
+                    .toLowerCase() === "false"
+            )) {
+                info({ code: "doenet-i0026", component: "selectFromSequence" });
                 return { success: false };
             }
         }
@@ -477,15 +494,14 @@ export default class SelectFromSequence extends Sequence {
                 ) {
                     withReplacement = withReplacementComponent.state.value;
                 } else {
-                    info(
-                        `cannot determine unique variants of selectFromSequence as withReplacement isn't constant boolean.`,
-                    );
+                    info({
+                        code: "doenet-i0024",
+                        component: "selectFromSequence",
+                    });
                     return { success: false };
                 }
             } else {
-                info(
-                    `cannot determine unique variants of selectFromSequence as withReplacement isn't constant boolean.`,
-                );
+                info({ code: "doenet-i0024", component: "selectFromSequence" });
                 return { success: false };
             }
         }
@@ -511,17 +527,29 @@ export default class SelectFromSequence extends Sequence {
                 if (sequenceType === "number") {
                     from = Number(fromComponent2.children[0]);
                     if (!Number.isFinite(from)) {
-                        info(
-                            `cannot determine unique variants of selectFromSequence of number type as from isn't a number.`,
-                        );
+                        info({
+                            code: "doenet-i0029",
+                            component: "selectFromSequence",
+                            args: {
+                                type: "number",
+                                attribute: "from",
+                                expected: "number",
+                            },
+                        });
                         return { success: false };
                     }
                 } else if (sequenceType === "letters") {
                     from = lettersToNumber(fromComponent2.children[0]);
                     if (!Number.isFinite(from)) {
-                        info(
-                            `cannot determine unique variants of selectFromSequence of letters type as from isn't a combination of letters.`,
-                        );
+                        info({
+                            code: "doenet-i0029",
+                            component: "selectFromSequence",
+                            args: {
+                                type: "letters",
+                                attribute: "from",
+                                expected: "letters-combination",
+                            },
+                        });
                         return { success: false };
                     }
                 } else {
@@ -531,17 +559,25 @@ export default class SelectFromSequence extends Sequence {
                     try {
                         from = fromText(fromComponent2.children[0]);
                     } catch (e) {
-                        info(
-                            `cannot determine unique variants of selectFromSequence of math type as from isn't a valid math expression.`,
-                        );
+                        info({
+                            code: "doenet-i0029",
+                            component: "selectFromSequence",
+                            args: {
+                                type: "math",
+                                attribute: "from",
+                                expected: "math-expression",
+                            },
+                        });
                         return { success: false };
                     }
                 }
                 sequencePars.from = from;
             } else {
-                info(
-                    `cannot determine unique variants of selectFromSequence as from isn't a constant.`,
-                );
+                info({
+                    code: "doenet-i0027",
+                    component: "selectFromSequence",
+                    args: { attribute: "from" },
+                });
                 return { success: false };
             }
         }
@@ -560,17 +596,29 @@ export default class SelectFromSequence extends Sequence {
                 if (sequenceType === "number") {
                     to = Number(toComponent2.children[0]);
                     if (!Number.isFinite(to)) {
-                        info(
-                            `cannot determine unique variants of selectFromSequence of number type as to isn't a number.`,
-                        );
+                        info({
+                            code: "doenet-i0029",
+                            component: "selectFromSequence",
+                            args: {
+                                type: "number",
+                                attribute: "to",
+                                expected: "number",
+                            },
+                        });
                         return { success: false };
                     }
                 } else if (sequenceType === "letters") {
                     to = lettersToNumber(toComponent2.children[0]);
                     if (!Number.isFinite(to)) {
-                        info(
-                            `cannot determine unique variants of selectFromSequence of letters type as to isn't a combination of letters.`,
-                        );
+                        info({
+                            code: "doenet-i0029",
+                            component: "selectFromSequence",
+                            args: {
+                                type: "letters",
+                                attribute: "to",
+                                expected: "letters-combination",
+                            },
+                        });
                         return { success: false };
                     }
                 } else {
@@ -580,17 +628,25 @@ export default class SelectFromSequence extends Sequence {
                     try {
                         to = fromText(toComponent2.children[0]);
                     } catch (e) {
-                        info(
-                            `cannot determine unique variants of selectFromSequence of math type as to isn't a valid math expression.`,
-                        );
+                        info({
+                            code: "doenet-i0029",
+                            component: "selectFromSequence",
+                            args: {
+                                type: "math",
+                                attribute: "to",
+                                expected: "math-expression",
+                            },
+                        });
                         return { success: false };
                     }
                 }
                 sequencePars.to = to;
             } else {
-                info(
-                    `cannot determine unique variants of selectFromSequence as to isn't a constant.`,
-                );
+                info({
+                    code: "doenet-i0027",
+                    component: "selectFromSequence",
+                    args: { attribute: "to" },
+                });
                 return { success: false };
             }
         }
@@ -607,17 +663,29 @@ export default class SelectFromSequence extends Sequence {
                 if (sequenceType === "number") {
                     step = Number(stepComponent.children[0]);
                     if (!Number.isFinite(step)) {
-                        info(
-                            `cannot determine unique variants of selectFromSequence of number type as step isn't a number.`,
-                        );
+                        info({
+                            code: "doenet-i0029",
+                            component: "selectFromSequence",
+                            args: {
+                                type: "number",
+                                attribute: "step",
+                                expected: "number",
+                            },
+                        });
                         return { success: false };
                     }
                 } else if (sequenceType === "letters") {
                     step = Number(stepComponent.children[0]);
                     if (!Number.isInteger(step)) {
-                        info(
-                            `cannot determine unique variants of selectFromSequence of letters type as step isn't an integer.`,
-                        );
+                        info({
+                            code: "doenet-i0029",
+                            component: "selectFromSequence",
+                            args: {
+                                type: "letters",
+                                attribute: "step",
+                                expected: "integer",
+                            },
+                        });
                         return { success: false };
                     }
                 } else {
@@ -627,17 +695,25 @@ export default class SelectFromSequence extends Sequence {
                     try {
                         step = fromText(stepComponent.children[0]);
                     } catch (e) {
-                        info(
-                            `cannot determine unique variants of selectFromSequence of math type as step isn't a valid math expression.`,
-                        );
+                        info({
+                            code: "doenet-i0029",
+                            component: "selectFromSequence",
+                            args: {
+                                type: "math",
+                                attribute: "step",
+                                expected: "math-expression",
+                            },
+                        });
                         return { success: false };
                     }
                 }
                 sequencePars.step = step;
             } else {
-                info(
-                    `cannot determine unique variants of selectFromSequence as step isn't a constant.`,
-                );
+                info({
+                    code: "doenet-i0027",
+                    component: "selectFromSequence",
+                    args: { attribute: "step" },
+                });
                 return { success: false };
             }
         }
@@ -651,24 +727,25 @@ export default class SelectFromSequence extends Sequence {
             ) {
                 let length = Number(lengthComponent.children[0]);
                 if (!Number.isInteger(length)) {
-                    info(
-                        `cannot determine unique variants of selectFromSequence as length isn't an integer.`,
-                    );
+                    info({
+                        code: "doenet-i0030",
+                        component: "selectFromSequence",
+                    });
                     return { success: false };
                 }
                 sequencePars.length = length;
             } else {
-                info(
-                    `cannot determine unique variants of selectFromSequence as length isn't a constant.`,
-                );
+                info({
+                    code: "doenet-i0027",
+                    component: "selectFromSequence",
+                    args: { attribute: "length" },
+                });
                 return { success: false };
             }
         }
 
         if (serializedComponent.attributes.excludeCombinations) {
-            info(
-                "have not implemented unique variants of a selectFromSequence with excludeCombinations",
-            );
+            info({ code: "doenet-i0032", component: "selectFromSequence" });
             return { success: false };
         }
 
@@ -678,9 +755,7 @@ export default class SelectFromSequence extends Sequence {
             serializedComponent.attributes.exclude?.component;
         if (excludeComponent) {
             if (sequenceType === "math") {
-                info(
-                    "have not implemented unique variants of a selectFromSequence of type math with exclude",
-                );
+                info({ code: "doenet-i0033", component: "selectFromSequence" });
                 return { success: false };
             }
             if (
@@ -690,9 +765,7 @@ export default class SelectFromSequence extends Sequence {
                         typeof x.children[0] === "string",
                 )
             ) {
-                info(
-                    "have not implemented unique variants of a selectFromSequence with non-constant exclude",
-                );
+                info({ code: "doenet-i0034", component: "selectFromSequence" });
                 return { success: false };
             }
             if (sequenceType === "letters") {
@@ -706,9 +779,7 @@ export default class SelectFromSequence extends Sequence {
             }
 
             if (!excludes.every(Number.isFinite)) {
-                info(
-                    "have not implemented unique variants of a selectFromSequence with non-constant exclude",
-                );
+                info({ code: "doenet-i0034", component: "selectFromSequence" });
                 return { success: false };
             }
         }
@@ -839,18 +910,10 @@ function makeSelection({ dependencyValues }) {
     // console.log(dependencyValues)
 
     if (dependencyValues.numToSelect < 1) {
-        return {
-            setEssentialValue: {
-                errorMessage: "",
-                selectedValues: [],
-                selectedIndices: [],
-            },
-            setValue: {
-                errorMessage: "",
-                selectedValues: [],
-                selectedIndices: [],
-            },
-        };
+        return selectionResult(NO_SELECT_ERROR, {
+            selectedValues: [],
+            selectedIndices: [],
+        });
     }
 
     let numUniqueRequired = 1;
@@ -859,24 +922,17 @@ function makeSelection({ dependencyValues }) {
     }
 
     if (numUniqueRequired > dependencyValues.length) {
-        let errorMessage =
-            "Cannot select " +
-            numUniqueRequired +
-            " values from a sequence of length " +
-            dependencyValues.length +
-            ".";
-        return {
-            setEssentialValue: {
-                errorMessage,
-                selectedValues: null,
-                selectedIndices: null,
+        const error = selectError({
+            code: "doenet-e0036",
+            args: {
+                numToSelect: numUniqueRequired,
+                length: dependencyValues.length,
             },
-            setValue: {
-                errorMessage,
-                selectedValues: null,
-                selectedIndices: null,
-            },
-        };
+        });
+        return selectionResult(error, {
+            selectedValues: null,
+            selectedIndices: null,
+        });
     }
 
     // if desiredIndices is specified, use those
@@ -887,37 +943,19 @@ function makeSelection({ dependencyValues }) {
         let desiredIndices = dependencyValues.variants.desiredVariant.indices;
         if (desiredIndices !== undefined) {
             if (desiredIndices.length !== dependencyValues.numToSelect) {
-                let errorMessage =
-                    "Number of indices specified for select must match number to select";
-                return {
-                    setEssentialValue: {
-                        errorMessage,
-                        selectedValues: null,
-                        selectedIndices: null,
-                    },
-                    setValue: {
-                        errorMessage,
-                        selectedValues: null,
-                        selectedIndices: null,
-                    },
-                };
+                const error = selectError({ code: "doenet-e0037" });
+                return selectionResult(error, {
+                    selectedValues: null,
+                    selectedIndices: null,
+                });
             }
             desiredIndices = desiredIndices.map(Number);
             if (!desiredIndices.every(Number.isInteger)) {
-                let errorMessage =
-                    "All indices specified for select must be integers";
-                return {
-                    setEssentialValue: {
-                        errorMessage,
-                        selectedValues: null,
-                        selectedIndices: null,
-                    },
-                    setValue: {
-                        errorMessage,
-                        selectedValues: null,
-                        selectedIndices: null,
-                    },
-                };
+                const error = selectError({ code: "doenet-e0038" });
+                return selectionResult(error, {
+                    selectedValues: null,
+                    selectedIndices: null,
+                });
             }
             let n = dependencyValues.length;
             desiredIndices = desiredIndices.map(
@@ -937,20 +975,11 @@ function makeSelection({ dependencyValues }) {
                 });
 
                 if (componentValue === null) {
-                    let errorMessage =
-                        "Specified index of selectfromsequence that was excluded";
-                    return {
-                        setEssentialValue: {
-                            errorMessage,
-                            selectedValues: null,
-                            selectedIndices: null,
-                        },
-                        setValue: {
-                            errorMessage,
-                            selectedValues: null,
-                            selectedIndices: null,
-                        },
-                    };
+                    const error = selectError({ code: "doenet-e0039" });
+                    return selectionResult(error, {
+                        selectedValues: null,
+                        selectedIndices: null,
+                    });
                 }
 
                 selectedValues.push(componentValue);
@@ -963,34 +992,17 @@ function makeSelection({ dependencyValues }) {
                     values: selectedValues,
                 })
             ) {
-                let errorMessage =
-                    "Specified indices of selectfromsequence that was an excluded combination";
-                return {
-                    setEssentialValue: {
-                        errorMessage,
-                        selectedValues: null,
-                        selectedIndices: null,
-                    },
-                    setValue: {
-                        errorMessage,
-                        selectedValues: null,
-                        selectedIndices: null,
-                    },
-                };
+                const error = selectError({ code: "doenet-e0040" });
+                return selectionResult(error, {
+                    selectedValues: null,
+                    selectedIndices: null,
+                });
             }
 
-            return {
-                setEssentialValue: {
-                    errorMessage: "",
-                    selectedValues,
-                    selectedIndices: desiredIndices,
-                },
-                setValue: {
-                    errorMessage: "",
-                    selectedValues,
-                    selectedIndices: desiredIndices,
-                },
-            };
+            return selectionResult(NO_SELECT_ERROR, {
+                selectedValues,
+                selectedIndices: desiredIndices,
+            });
         }
     }
 
@@ -999,7 +1011,7 @@ function makeSelection({ dependencyValues }) {
     let coprime = dependencyValues.coprime;
 
     if (dependencyValues.type === "number") {
-        let errorMessage = null;
+        let error = null;
         numCombinationsExcluded = estimateNumberOfNumberCombinationsExcluded({
             excludedCombinations: dependencyValues.excludedCombinations,
             numValues:
@@ -1022,12 +1034,11 @@ function makeSelection({ dependencyValues }) {
                 dependencyValues.from <= 0 ||
                 lastNumber <= 0
             ) {
-                errorMessage =
-                    "Cannot select coprime combinations as not selecting positive integers.";
+                error = selectError({ code: "doenet-e0041" });
             } else if (
-                me.math.gcd(dependencyValues.from, dependencyValues.step) !== 1
+                gcd(dependencyValues.from, dependencyValues.step) !== 1
             ) {
-                errorMessage = `Cannot select coprime numbers. All possible values share a common factor. (Specified values of "from" or "to" must be coprime with "step".)`;
+                error = selectError({ code: "doenet-e0042" });
             } else if (dependencyValues.numToSelect === 1) {
                 coprime = false;
             } else if (
@@ -1041,35 +1052,26 @@ function makeSelection({ dependencyValues }) {
                     dependencyValues.from > 1 ||
                     dependencyValues.exclude.includes(1)
                 ) {
-                    if (dependencyValues.length <= 1) {
-                        errorMessage =
-                            "Cannot select coprime combinations from a single number that is not 1.";
-                    } else {
-                        const possibleValues =
-                            returnSequenceValues(dependencyValues);
-
-                        if (possibleValues.length <= 1) {
-                            errorMessage =
-                                "Cannot select coprime combinations from a single number that is not 1.";
-                        }
+                    // One situation and so one code, reached two ways: a
+                    // sequence short enough to tell from `length` alone, and
+                    // one whose values have to be generated to tell. The
+                    // short-circuit is what keeps the second from being
+                    // generated when the first already answered.
+                    if (
+                        dependencyValues.length <= 1 ||
+                        returnSequenceValues(dependencyValues).length <= 1
+                    ) {
+                        error = selectError({ code: "doenet-e0043" });
                     }
                 }
             }
         }
 
-        if (errorMessage) {
-            return {
-                setEssentialValue: {
-                    errorMessage: errorMessage,
-                    selectedValues: null,
-                    selectedIndices: null,
-                },
-                setValue: {
-                    errorMessage: errorMessage,
-                    selectedValues: null,
-                    selectedIndices: null,
-                },
-            };
+        if (error) {
+            return selectionResult(error, {
+                selectedValues: null,
+                selectedIndices: null,
+            });
         }
     } else {
         // No need to send warning since already sent
@@ -1089,18 +1091,10 @@ function makeSelection({ dependencyValues }) {
         });
 
         if (selectedObj.errorMessage) {
-            return {
-                setEssentialValue: {
-                    errorMessage: selectedObj.errorMessage,
-                    selectedValues: null,
-                    selectedIndices: null,
-                },
-                setValue: {
-                    errorMessage: selectedObj.errorMessage,
-                    selectedValues: null,
-                    selectedIndices: null,
-                },
-            };
+            return selectionResult(takeSelectError(selectedObj), {
+                selectedValues: null,
+                selectedIndices: null,
+            });
         }
 
         selectedValues = selectedObj.selectedValues;
@@ -1155,52 +1149,32 @@ function makeSelection({ dependencyValues }) {
             }
 
             if (numCombinationsExcluded > 0.7 * numPossibilities) {
+                // A combination naming NaN can name the same one twice, so the
+                // estimate is revised down before the threshold is believed.
+                // Nothing else can revise it, so a count that survives — or
+                // one there was nothing to revise — is the same failure and
+                // the same code.
                 if (
                     dependencyValues.type === "number" &&
                     dependencyValues.excludedCombinations.some((x) =>
                         x.some(Number.isNaN),
                     )
                 ) {
-                    let numDuplicated = estimateNumberOfDuplicateCombinations(
-                        dependencyValues.excludedCombinations,
-                        dependencyValues.length -
-                            dependencyValues.exclude.length,
-                        dependencyValues.withReplacement,
-                    );
+                    numCombinationsExcluded -=
+                        estimateNumberOfDuplicateCombinations(
+                            dependencyValues.excludedCombinations,
+                            dependencyValues.length -
+                                dependencyValues.exclude.length,
+                            dependencyValues.withReplacement,
+                        );
+                }
 
-                    numCombinationsExcluded -= numDuplicated;
-
-                    if (numCombinationsExcluded > 0.7 * numPossibilities) {
-                        let errorMessage =
-                            "Excluded over 70% of combinations in selectFromSequence";
-                        return {
-                            setEssentialValue: {
-                                errorMessage,
-                                selectedValues: null,
-                                selectedIndices: null,
-                            },
-                            setValue: {
-                                errorMessage,
-                                selectedValues: null,
-                                selectedIndices: null,
-                            },
-                        };
-                    }
-                } else {
-                    let errorMessage =
-                        "Excluded over 70% of combinations in selectFromSequence";
-                    return {
-                        setEssentialValue: {
-                            errorMessage,
-                            selectedValues: null,
-                            selectedIndices: null,
-                        },
-                        setValue: {
-                            errorMessage,
-                            selectedValues: null,
-                            selectedIndices: null,
-                        },
-                    };
+                if (numCombinationsExcluded > 0.7 * numPossibilities) {
+                    const error = selectError({ code: "doenet-e0044" });
+                    return selectionResult(error, {
+                        selectedValues: null,
+                        selectedIndices: null,
+                    });
                 }
             }
         }
@@ -1218,18 +1192,10 @@ function makeSelection({ dependencyValues }) {
             });
 
             if (selectedObj.errorMessage) {
-                return {
-                    setEssentialValue: {
-                        errorMessage: selectedObj.errorMessage,
-                        selectedValues: null,
-                        selectedIndices: null,
-                    },
-                    setValue: {
-                        errorMessage: selectedObj.errorMessage,
-                        selectedValues: null,
-                        selectedIndices: null,
-                    },
-                };
+                return selectionResult(takeSelectError(selectedObj), {
+                    selectedValues: null,
+                    selectedIndices: null,
+                });
             }
 
             selectedValues = selectedObj.selectedValues;
@@ -1246,7 +1212,7 @@ function makeSelection({ dependencyValues }) {
                 continue;
             }
 
-            if (coprime && me.math.gcd(...selectedValues) !== 1) {
+            if (coprime && gcd(...selectedValues) !== 1) {
                 continue;
             }
 
@@ -1255,27 +1221,16 @@ function makeSelection({ dependencyValues }) {
         }
 
         if (!foundValidCombination) {
-            let errorMessage;
-            if (coprime) {
-                errorMessage =
-                    "Could not select coprime numbers. All possible values share a common factor.";
-            } else {
-                // this won't happen, as occurs with prob < 10^(-30)
-                errorMessage =
-                    "By extremely unlikely fluke, couldn't select combination of random values";
-            }
-            return {
-                setEssentialValue: {
-                    errorMessage,
-                    selectedValues: null,
-                    selectedIndices: null,
-                },
-                setValue: {
-                    errorMessage,
-                    selectedValues: null,
-                    selectedIndices: null,
-                },
-            };
+            // Without `coprime` this is the extremely unlikely fluke rather
+            // than a sequence that could never have supplied a pair: it
+            // won't happen, as it occurs with prob < 10^(-30).
+            const error = coprime
+                ? selectError({ code: "doenet-e0045" })
+                : selectError({ code: "doenet-e0052" });
+            return selectionResult(error, {
+                selectedValues: null,
+                selectedIndices: null,
+            });
         }
     }
 
@@ -1313,14 +1268,10 @@ function makeSelection({ dependencyValues }) {
         // don't sort type math
     }
 
-    return {
-        setEssentialValue: {
-            errorMessage: "",
-            selectedValues,
-            selectedIndices,
-        },
-        setValue: { errorMessage: "", selectedValues, selectedIndices },
-    };
+    return selectionResult(NO_SELECT_ERROR, {
+        selectedValues,
+        selectedIndices,
+    });
 }
 
 function selectValuesAndIndices({
@@ -1381,10 +1332,8 @@ function selectValuesAndIndices({
 
             if (!foundValid) {
                 // this won't happen, as occurs with prob < 10^(-30)
-                let errorMessage =
-                    "By extremely unlikely fluke, couldn't select random value";
                 return {
-                    errorMessage,
+                    ...selectError({ code: "doenet-e0053" }),
                     selectedValues: null,
                     selectedIndices: null,
                 };
@@ -1405,13 +1354,11 @@ function selectValuesAndIndices({
     let numPossibleValues = possibleValuesAndIndices.length;
 
     if (numUniqueRequired > numPossibleValues) {
-        let errorMessage =
-            "Cannot select " +
-            numUniqueRequired +
-            " unique values from sequence of length " +
-            numPossibleValues;
         return {
-            errorMessage,
+            ...selectError({
+                code: "doenet-e0046",
+                args: { numToSelect: numUniqueRequired, numPossibleValues },
+            }),
             selectedValues: null,
             selectedIndices: null,
         };

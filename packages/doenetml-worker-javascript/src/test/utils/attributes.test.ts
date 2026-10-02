@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { preprocessAttributesObject } from "../../utils/attributes";
+import {
+    preprocessAttributesObject,
+    validateListItemsAgainstValidValues,
+} from "../../utils/attributes";
 import type { AttributeDefinition } from "../../utils/dast/types";
 
-describe("preprocessAttributesObject", () => {
+describe("preprocessAttributesObject @group4", () => {
     it("lower-cases each validValues entry's value when toLowerCase is set, without touching descriptions", () => {
         const attrs: Record<string, AttributeDefinition<unknown>> = {
             mode: {
@@ -53,6 +56,25 @@ describe("preprocessAttributesObject", () => {
         ]);
     });
 
+    it("lower-cases an array defaultValue item-wise, keeping it an array", () => {
+        // A list-valued attribute's default is a list; stringifying it would
+        // hand every consumer a comma-joined string instead.
+        const attrs: Record<string, AttributeDefinition<unknown>> = {
+            stats: {
+                toLowerCase: true,
+                defaultValue: ["Default", "MEAN"],
+                validValues: [
+                    { value: "Default", description: "The default set." },
+                    { value: "MEAN", description: "The mean." },
+                ],
+            },
+        };
+
+        const result = preprocessAttributesObject(attrs);
+
+        expect(result.stats.defaultValue).toEqual(["default", "mean"]);
+    });
+
     it("leaves validValues casing intact when toLowerCase is not set", () => {
         const attrs: Record<string, AttributeDefinition<unknown>> = {
             mode: {
@@ -92,5 +114,123 @@ describe("preprocessAttributesObject", () => {
         expect(() => preprocessAttributesObject(attrs)).toThrow(
             /Invalid validValues entry for attribute `mode`/,
         );
+    });
+
+    it("throws when a suggestedValues entry is a bare string", () => {
+        // The non-enforcing list is held to the same shape as the enforcing
+        // one, so neither can be the value list nothing checks.
+        const attrs: Record<string, AttributeDefinition<unknown>> = {
+            lang: {
+                suggestedValues: ["es"] as unknown as {
+                    value: string;
+                    description: string;
+                }[],
+            },
+        };
+
+        expect(() => preprocessAttributesObject(attrs)).toThrow(
+            /Invalid suggestedValues entry for attribute `lang`/,
+        );
+    });
+});
+
+describe("validateListItemsAgainstValidValues @group4", () => {
+    const validValues = [
+        { value: "top", description: "Align to the top." },
+        { value: "middle", description: "Center." },
+        { value: "bottom", description: "Align to the bottom." },
+    ];
+
+    it("keeps all items when every item is allowed", () => {
+        const result = validateListItemsAgainstValidValues({
+            items: ["top", "bottom", "middle"],
+            validValues,
+            attribute: "valigns",
+        });
+        expect(result.value).toEqual(["top", "bottom", "middle"]);
+        expect(result.diagnostics).toEqual([]);
+    });
+
+    it("drops invalid items and reports them in a single diagnostic", () => {
+        const result = validateListItemsAgainstValidValues({
+            items: ["top", "sideways", "bottom", "diagonal"],
+            validValues,
+            attribute: "valigns",
+        });
+        expect(result.value).toEqual(["top", "bottom"]);
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0].type).toBe("info");
+        expect(result.diagnostics[0].message).toContain("`sideways`");
+        expect(result.diagnostics[0].message).toContain("`diagonal`");
+        expect(result.diagnostics[0].message).toContain("valigns");
+        // The runtime diagnostic does not enumerate the allowed values (that
+        // would show the lower-cased copy when toLowerCase is set); the
+        // canonical-cased list lives in the schema-driven editor surfaces.
+        expect(result.diagnostics[0].message).not.toContain("`middle`");
+    });
+
+    it("uses singular wording for a single invalid item", () => {
+        const result = validateListItemsAgainstValidValues({
+            items: ["top", "sideways"],
+            validValues,
+            attribute: "valigns",
+        });
+        expect(result.value).toEqual(["top"]);
+        expect(result.diagnostics[0].message).toContain("Invalid value `");
+        expect(result.diagnostics[0].message).not.toContain("Invalid values");
+    });
+
+    it("lower-cases and trims items before matching when toLowerCase is set", () => {
+        const result = validateListItemsAgainstValidValues({
+            items: ["  TOP ", "Middle"],
+            validValues,
+            toLowerCase: true,
+            attribute: "valigns",
+        });
+        expect(result.value).toEqual(["top", "middle"]);
+        expect(result.diagnostics).toEqual([]);
+    });
+
+    it("does not lower-case when toLowerCase is not set", () => {
+        const result = validateListItemsAgainstValidValues({
+            items: ["TOP", "top"],
+            validValues,
+            attribute: "valigns",
+        });
+        expect(result.value).toEqual(["top"]);
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0].message).toContain("`TOP`");
+    });
+
+    it("trims items even when toLowerCase is not set", () => {
+        const result = validateListItemsAgainstValidValues({
+            items: ["  top  ", "bottom"],
+            validValues,
+            attribute: "valigns",
+        });
+        expect(result.value).toEqual(["top", "bottom"]);
+        expect(result.diagnostics).toEqual([]);
+    });
+
+    it("treats non-string items as invalid and echoes the original value", () => {
+        const result = validateListItemsAgainstValidValues({
+            items: ["top", 5, null],
+            validValues,
+            attribute: "valigns",
+        });
+        expect(result.value).toEqual(["top"]);
+        expect(result.diagnostics).toHaveLength(1);
+        expect(result.diagnostics[0].message).toContain("`5`");
+        expect(result.diagnostics[0].message).toContain("`null`");
+    });
+
+    it("returns an empty result with no diagnostics for an empty list", () => {
+        const result = validateListItemsAgainstValidValues({
+            items: [],
+            validValues,
+            attribute: "valigns",
+        });
+        expect(result.value).toEqual([]);
+        expect(result.diagnostics).toEqual([]);
     });
 });

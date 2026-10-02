@@ -24,13 +24,36 @@ Bump any one of these and Changesets bumps all six. Listing or omitting a fixed-
 
 ## Independent Versioning
 
-- `@doenet/prefigure` versions independently.
+`@doenet/prefigure` is published but **never listed in any changeset**. Its npm
+version is manually pinned to match the bundled `prefig` Python wheel version
+(e.g. `0.6.7`) so consumers can see which upstream Python runtime they are
+running. It lives in the `ignore` list in `.changeset/config.json`. When
+bumping the prefig wheel, update `packages/prefigure/package.json` directly
+following the instructions in `packages/prefigure/README.md`.
 
 ## Never Versioned
 
-`@doenet/lsp-tools` and `@doenet/static-assets` are never published — their source is bundled into `@doenet/doenetml`, so a change to either rides under `@doenet/doenetml`'s version. **Do not list them in any changeset, ever** — not even when files under `packages/lsp-tools/` or `packages/static-assets/` themselves changed.
+Most `@doenet/*` packages are **internal**: their source is bundled into `@doenet/doenetml`, so a change to any of them rides out under `@doenet/doenetml`'s version. **Never list an internal package in a changeset** — not even when the files that changed are its own.
 
-Don't infer "never published" from `"private": true` alone. Most packages in this repo (including `@doenet/doenetml`, `@doenet/standalone`, `@doenet/doenetml-iframe`, `@doenet/v06-to-v07`, and `@doenet/prefigure`) carry `"private": true` at the root and are still published, because their Vite build runs `scripts/transform-package-json.ts` to emit a `dist/package.json` with `private: false`. The real signal for "never published" is the absence of that transformer in the package's `vite.config.ts` — `@doenet/lsp-tools` and `@doenet/static-assets` are the two packages where it's missing.
+Rather than enumerate them — the list grows — invert it. **Exactly six packages are published**, and every other `@doenet/*` package is internal:
+
+- `@doenet/doenetml`
+- `@doenet/standalone`
+- `@doenet/doenetml-iframe`
+- `@doenet/v06-to-v07`
+- `@doenet/vscode-extension` / `doenet-vscode-extension`
+- `@doenet/prefigure` (published, but never listed in a changeset — see above)
+
+So `@doenet/i18n`, `@doenet/utils`, `@doenet/parser`, `@doenet/ui-components`, `@doenet/static-assets`, `@doenet/lsp-tools`, `@doenet/lsp`, `@doenet/codemirror`, `@doenet/virtual-keyboard`, `@doenet/doenetml-worker`, `@doenet/doenetml-worker-javascript`, `@doenet/debug-hooks` and the rest never appear in a changeset. A change to any of them is a change to `@doenet/doenetml`.
+
+Don't infer "never published" from `"private": true` alone, and don't infer "published" from its absence. Most packages in this repo — including every published one (`@doenet/doenetml`, `@doenet/standalone`, `@doenet/doenetml-iframe`, `@doenet/v06-to-v07`, `@doenet/prefigure`) — carry `"private": true` at the root and are published anyway, because their Vite build runs `scripts/transform-package-json.ts` to emit a `dist/package.json` with no `private` flag at all.
+
+**The two reliable signals**, either of which settles it:
+
+1. The package's `vite.config.ts` runs `scripts/transform-package-json.ts`. Internal packages have no such step.
+2. The package appears in the publish targets in `.github/workflows/publish.yml` (`npm run build -w packages/doenetml -w packages/standalone -w packages/doenetml-iframe -w packages/v06-to-v07`, plus `@doenet/vscode-extension`), or has a publish workflow of its own (`publish-prefigure.yml`).
+
+Check one of those before adding an unfamiliar package to a changeset — the enumeration above is a convenience, and new packages land as internal by default.
 
 ## Which packages to list
 
@@ -54,7 +77,15 @@ Fixed-group members all version together regardless of whether they're listed, b
 
 ## Bump type
 
-While the repo is < 1.0, default to `patch` for every package in every changeset — even for new API or larger-feeling changes. Revisit this convention once the first 1.0 release is on the horizon.
+**Default to `patch`** — even for new API or larger-feeling changes.
+
+Use `minor` only to **open a new release line**. While the repo is < 1.0 a minor bump is the breaking-change marker: `0.7` → `0.8` is what `1.0` → `2.0` will be later. The first backward-incompatible change after a stable release carries the `minor`; every further breaking change in the same unreleased cycle stays `patch`, because they all ship in the line that first one opened. That is what keeps breaking changes batched into a line instead of each spawning one of its own — and it matters, because each line that opens is a line someone has to maintain.
+
+Say so in the body when a change is breaking, whatever the bump type. `minor` marks the release; the body is what tells a reader which change did it.
+
+Never use `major` before 1.0.
+
+**On a maintenance branch, `patch` is the only bump allowed**, and CI enforces it (`.github/scripts/check-changeset-bumps.mjs` on that branch). This is a cherry-pick hazard rather than an authoring one: a backport brings the original changeset file with it, and the bump type is the one part that stops being true on the way across. A `minor` there would compute the *next* line's version from the wrong branch and collide with `main`. See [`docs/RELEASING.md`](../../../docs/RELEASING.md) for the backport flow.
 
 ## File format
 

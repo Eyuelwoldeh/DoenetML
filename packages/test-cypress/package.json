@@ -46,7 +46,9 @@
                 "../doenetml-prototype:build",
                 "../doenetml:build",
                 "../prefigure:build",
-                "../ui-components:build"
+                "../ui-components:build",
+                "../standalone:build",
+                "../math:build"
             ]
         }
     },
@@ -55,7 +57,10 @@
         "react-dom": "^19.2.3"
     },
     "dependencies": {
+        "@doenet/doenetml-prototype": "*",
+        "@doenet/i18n": "*",
         "@doenet/utils": "^*",
+        "math-expressions": "file:../math",
         "vite": "^*"
     },
     "devDependencies": {

@@ -1,8 +1,19 @@
 import {
     returnLabelAttributes,
+    returnLabelChildIndDefinition,
     returnLabelStateVariableDefinitions,
 } from "../../utils/label";
 import InlineComponent from "./InlineComponent";
+import { codedDiagnostic } from "../../utils/diagnostics";
+import {
+    contentTranslator,
+    returnContentLocaleDependencies,
+} from "../../utils/contentLocale";
+import {
+    BLANK_PLACEHOLDER,
+    SLOT_PATTERN,
+} from "../../utils/embeddedMathInputs";
+import { latexToText, stripAlignmentMarkers } from "../../utils/math";
 
 export default class Input extends InlineComponent {
     constructor(args) {
@@ -16,6 +27,18 @@ export default class Input extends InlineComponent {
     static componentType = "_input";
 
     static renderChildren = true;
+
+    /**
+     * Whether `<m>` may render this input inside the typeset expression rather
+     * than flattening it to its value.
+     *
+     * An embedded input's width has to be known before MathJax typesets, because
+     * MathJax writes column widths and delimiter sizes into the output at typeset
+     * time and cannot reflow around a control that grows afterwards. So this is
+     * opt-in per input type, and an input that changes size as the reader types
+     * does not qualify.
+     */
+    static canBeEmbeddedInMath = false;
 
     static createAttributesObject() {
         let attributes = super.createAttributesObject();
@@ -32,18 +55,20 @@ export default class Input extends InlineComponent {
         attributes.labelPosition = {
             createComponentOfType: "text",
             createStateVariable: "labelPosition",
-            defaultValue: "left",
+            defaultValue: "start",
             public: true,
             forRenderer: true,
             toLowerCase: true,
             validValues: [
                 {
-                    value: "left",
-                    description: "Place the label to the left of the input.",
+                    value: "start",
+                    description:
+                        "Place the label before the input: to its left in a left-to-right document, to its right in a right-to-left one.",
                 },
                 {
-                    value: "right",
-                    description: "Place the label to the right of the input.",
+                    value: "end",
+                    description:
+                        "Place the label after the input: to its right in a left-to-right document, to its left in a right-to-left one.",
                 },
             ],
             description: "Position of the label relative to the input.",
@@ -69,6 +94,10 @@ export default class Input extends InlineComponent {
             getLabelFromParentIfSugared: true,
         });
         Object.assign(stateVariableDefinitions, labelDefinitions);
+        Object.assign(
+            stateVariableDefinitions,
+            returnLabelChildIndDefinition(),
+        );
 
         // how many values an input returns
         stateVariableDefinitions.numValues = {
@@ -98,6 +127,7 @@ export default class Input extends InlineComponent {
                         "forceFullCheckWorkButton",
                         "forceSmallCheckWorkButton",
                         "labelsForAnswer",
+                        "colorInputsSeparately",
                     ],
                 },
             }),
@@ -177,6 +207,11 @@ export default class Input extends InlineComponent {
                             stateValues.sectionDeterminingColorCorrectness,
                         variableNames: [
                             "justSubmitted",
+                            // The section colors its inputs by the same credit
+                            // its button reports, so the two can never disagree;
+                            // it is `null` wherever the score already says it,
+                            // hence the fallback below.
+                            "creditAchievedForCheckWork",
                             "creditAchieved",
                             "showCorrectness",
                             "colorCorrectness",
@@ -197,6 +232,7 @@ export default class Input extends InlineComponent {
                             "creditAchieved",
                             "showCorrectness",
                             "colorCorrectness",
+                            "colorInputsSeparately",
                         ],
                         variablesOptional: true,
                     };
@@ -303,21 +339,106 @@ export default class Input extends InlineComponent {
             },
         };
 
+        // creditAchieved on an input is used purely for display/coloring: the
+        // renderer reads it to decide whether to show the input border as green
+        // (1), red (0), or orange (0 < x < 1).  It is NOT the input's own
+        // credit contribution — without colorInputsSeparately it simply mirrors
+        // the answer's overall creditAchieved so all inputs in the same answer
+        // share a uniform color.  With colorInputsSeparately it carries the
+        // per-input ratio derived from the awards that reference this input.
+        const variableForImplicitProp = this.variableForImplicitProp ?? "value";
         stateVariableDefinitions.creditAchieved = {
             forRenderer: true,
-            returnDependencies: () => ({
-                componentDeterminingDisplayedCorrectness: {
-                    dependencyType: "stateVariable",
-                    variableName: "componentDeterminingDisplayedCorrectness",
-                },
-            }),
-            definition: function ({ dependencyValues }) {
+            stateVariablesDeterminingDependencies: [
+                "answerAncestor",
+                "answerSpecifiedInForAnswer",
+            ],
+            returnDependencies({ stateValues }) {
+                const deps = {
+                    componentDeterminingDisplayedCorrectness: {
+                        dependencyType: "stateVariable",
+                        variableName:
+                            "componentDeterminingDisplayedCorrectness",
+                    },
+                };
+                // Inputs nested inside an answer can avoid depending on
+                // creditAchievedPerInput unless colorInputsSeparately is active,
+                // which prevents unnecessary staleness propagation on every
+                // keystroke. forAnswer inputs still fetch both variables together
+                // so they can react if the referenced answer enables
+                // colorInputsSeparately.
+                if (
+                    stateValues.answerAncestor?.stateValues
+                        .colorInputsSeparately
+                ) {
+                    // Input is inside the answer: use ancestor dependency.
+                    deps.answerCreditAchievedPerInput = {
+                        dependencyType: "ancestor",
+                        componentType: "answer",
+                        variableNames: ["creditAchievedPerInput"],
+                    };
+                } else if (stateValues.answerSpecifiedInForAnswer !== null) {
+                    // Input is external (forAnswer): fetch colorInputsSeparately
+                    // and creditAchievedPerInput together in one dep.
+                    deps.answerColoringState = {
+                        dependencyType: "multipleStateVariables",
+                        componentIdx: stateValues.answerSpecifiedInForAnswer,
+                        variableNames: [
+                            "colorInputsSeparately",
+                            "creditAchievedPerInput",
+                        ],
+                        variablesOptional: true,
+                    };
+                }
+                return deps;
+            },
+            definition: function ({ dependencyValues, componentIdx }) {
                 let creditAchieved = 0;
-                if (dependencyValues.componentDeterminingDisplayedCorrectness) {
-                    creditAchieved =
-                        dependencyValues
-                            .componentDeterminingDisplayedCorrectness
-                            .stateValues.creditAchieved;
+                const comp =
+                    dependencyValues.componentDeterminingDisplayedCorrectness;
+                if (comp) {
+                    const overallCredit =
+                        comp.stateValues.creditAchievedForCheckWork ??
+                        comp.stateValues.creditAchieved ??
+                        0;
+                    // Per-input coloring when colorInputsSeparately is active.
+                    const creditAchievedPerInput =
+                        dependencyValues.answerCreditAchievedPerInput
+                            ?.stateValues.creditAchievedPerInput ??
+                        (dependencyValues.answerColoringState?.stateValues
+                            ?.colorInputsSeparately
+                            ? dependencyValues.answerColoringState.stateValues
+                                  .creditAchievedPerInput
+                            : undefined);
+                    if (
+                        comp.stateValues.colorInputsSeparately &&
+                        creditAchievedPerInput
+                    ) {
+                        const key = `${componentIdx}/${variableForImplicitProp}`;
+                        let perInputCredit = creditAchievedPerInput[key];
+                        if (
+                            perInputCredit === undefined &&
+                            variableForImplicitProp !== "value"
+                        ) {
+                            const keyPrefix = `${componentIdx}/`;
+                            const candidateCredits = Object.entries(
+                                creditAchievedPerInput,
+                            )
+                                .filter(([entryKey]) =>
+                                    entryKey.startsWith(keyPrefix),
+                                )
+                                .map(([, credit]) => credit);
+                            if (candidateCredits.length > 0) {
+                                perInputCredit = Math.max(...candidateCredits);
+                            }
+                        }
+                        creditAchieved =
+                            perInputCredit !== undefined
+                                ? perInputCredit
+                                : overallCredit;
+                    } else {
+                        creditAchieved = overallCredit;
+                    }
                 }
                 return {
                     setValue: { creditAchieved },
@@ -804,8 +925,23 @@ export default class Input extends InlineComponent {
                     dependencyType: "stateVariable",
                     variableName: "externalLabelsReferencingInputByFor",
                 },
+                // An input drawn inside an expression has nowhere to put a
+                // visible label, so the expression it sits in names it instead.
+                ...(componentClass.canBeEmbeddedInMath
+                    ? {
+                          mathAncestor: {
+                              dependencyType: "ancestor",
+                              componentType: "m",
+                              variableNames: [
+                                  "latexTemplate",
+                                  "embeddedInputComponentIndices",
+                              ],
+                          },
+                          ...returnContentLocaleDependencies(),
+                      }
+                    : {}),
             }),
-            definition({ dependencyValues }) {
+            definition({ dependencyValues, componentIdx }) {
                 let shortDescription = "";
                 const diagnostics = [];
                 if (dependencyValues.shortDescriptionChild.length > 0) {
@@ -826,22 +962,52 @@ export default class Input extends InlineComponent {
                         ?.length,
                 );
 
+                // Nothing else named it, but it is a blank in an expression:
+                // read the expression, with the gap spoken in its place, so the
+                // reader hears what they are being asked to fill in. An
+                // external `<label for>` counts as naming it: the renderer
+                // would otherwise emit the expression as `aria-label`, which
+                // takes precedence over that label.
                 if (
                     shortDescription === "" &&
                     !dependencyValues.label &&
                     !hasExternalForLabel
                 ) {
-                    let objectNeedingLabel =
-                        dependencyValues.createdFromSugar &&
-                        dependencyValues.answerAncestor
-                            ? "an `<answer>` creating an input"
-                            : `\`<${componentClass.componentType}>\``;
-
-                    diagnostics.push({
-                        type: "accessibility",
-                        level: 1,
-                        message: `For accessibility, ${objectNeedingLabel} must have a short description or a label.`,
+                    shortDescription = describeAsMathBlank({
+                        dependencyValues,
+                        componentIdx,
                     });
+                }
+
+                if (
+                    shortDescription === "" &&
+                    !dependencyValues.label &&
+                    !hasExternalForLabel
+                ) {
+                    // Two codes rather than one with the subject passed in.
+                    // The subject is a component name in one branch but an
+                    // English phrase in the other, and a phrase handed over
+                    // as an argument would never reach a translator.
+                    const createdByAnswer =
+                        dependencyValues.createdFromSugar &&
+                        dependencyValues.answerAncestor;
+
+                    diagnostics.push(
+                        createdByAnswer
+                            ? codedDiagnostic({
+                                  type: "accessibility",
+                                  level: 1,
+                                  code: "doenet-a0004",
+                              })
+                            : codedDiagnostic({
+                                  type: "accessibility",
+                                  level: 1,
+                                  code: "doenet-a0003",
+                                  args: {
+                                      component: componentClass.componentType,
+                                  },
+                              }),
+                    );
                 }
 
                 return {
@@ -857,6 +1023,10 @@ export default class Input extends InlineComponent {
                     dependencyType: "child",
                     includeAllChildren: true,
                 },
+                labelChildInd: {
+                    dependencyType: "stateVariable",
+                    variableName: "labelChildInd",
+                },
             }),
             definition({ dependencyValues }) {
                 const descriptionIdx =
@@ -864,8 +1034,10 @@ export default class Input extends InlineComponent {
                         (child) => child.componentType === "description",
                     );
 
-                const childIndicesToRender =
-                    descriptionIdx === -1 ? [] : [descriptionIdx];
+                const childIndicesToRender = [
+                    descriptionIdx,
+                    dependencyValues.labelChildInd,
+                ].filter((ind) => ind !== -1);
 
                 return { setValue: { childIndicesToRender } };
             },
@@ -918,4 +1090,67 @@ export default class Input extends InlineComponent {
             doNotSave: true,
         });
     }
+}
+
+/**
+ * Describe an embedded input by the expression it is a gap in.
+ *
+ * Returns `""` unless this input really is embedded in the math ancestor, so
+ * that an input merely written near some math is left to the ordinary
+ * unlabeled-input warning.
+ *
+ * The gap is named rather than left silent because MathJax reads a reserved
+ * space as nothing at all — and worse, without an operand there, a following
+ * binary `+` is read as a sign. Speaking the whole expression on the control
+ * gives the reader the question and the place it is asked in one go.
+ */
+function describeAsMathBlank({ dependencyValues, componentIdx }) {
+    const math = dependencyValues.mathAncestor;
+    const embedded = math?.stateValues.embeddedInputComponentIndices;
+    if (!embedded?.includes(componentIdx)) {
+        return "";
+    }
+
+    const t = contentTranslator(dependencyValues);
+    const ordinal = embedded.indexOf(componentIdx) + 1;
+    const plainBlank = t("math-embedded-input-blank", undefined, "blank");
+    // Only this input's gap is numbered; the others stay plain, so a reader
+    // scanning the expression can tell which gap they have landed on.
+    const thisBlank =
+        embedded.length > 1
+            ? t(
+                  "math-embedded-input-blank-ordinal",
+                  { ordinal, total: embedded.length },
+                  `blank ${ordinal} of ${embedded.length}`,
+              )
+            : plainBlank;
+
+    // Put the blank placeholder in for each gap, read the whole expression as
+    // one, then put the words in. Two things force this shape: reading the
+    // pieces *between* the gaps separately does not work, because a fragment
+    // cut at a gap is not a whole expression and the math parser fills what is
+    // missing with a placeholder of its own; and the words cannot go in before
+    // parsing, because the parser passes `\text{...}` through untouched. The
+    // placeholder parses as an ordinary variable, so the gaps come out of the
+    // round trip intact and in the order they went in. It is the same
+    // placeholder `text` and `math` use for a blank, so all three agree.
+    //
+    // A row of an aligned display carries its alignment marker, which is
+    // layout and not mathematics: it is dropped as `Md.text` drops it, so the
+    // row is spoken as the equation it is.
+    const withPlaceholders = stripAlignmentMarkers(
+        math.stateValues.latexTemplate ?? "",
+    ).replace(SLOT_PATTERN, BLANK_PLACEHOLDER);
+
+    // `latexToText` hands back the LaTeX itself when it cannot be parsed,
+    // which still has the placeholders in it, so the reader is still told
+    // where the gap is.
+    const described = latexToText(withPlaceholders).trim();
+
+    let position = 0;
+    const named = described.replaceAll(BLANK_PLACEHOLDER, () =>
+        position++ === ordinal - 1 ? thisBlank : plainBlank,
+    );
+
+    return named || thisBlank;
 }

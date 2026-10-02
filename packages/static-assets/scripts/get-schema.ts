@@ -1,3 +1,17 @@
+/*
+ * Builds the DoenetML schema from the worker's component definitions.
+ *
+ * The `createComponentInfoObjects` import below reaches the worker's *source*,
+ * which in turn resolves `@doenet/utils`, `@doenet/i18n` and `@doenet/parser` to
+ * their built `dist/`. Generating against an unbuilt or stale sibling therefore
+ * produces a schema built from old code instead of failing, so the npm scripts
+ * that run the generators — `build:schema`, `build:assets` and
+ * `check:docs-coverage` — are wireit scripts that depend on the worker's
+ * `build:deps`, which names those builds. See the header of
+ * `test/generator-script-dependencies.test.ts` for the full reasoning and the
+ * test that keeps the wiring honest. (The `test` script reaches this module too
+ * and is not yet covered — Doenet/DoenetML#1675.)
+ */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +25,7 @@ import type { MathDefaultValue, ValidValueEntry } from "../src/schema";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REFERENCE_DOCS_DIR = path.resolve(
     __dirname,
-    "../../docs-nextra/pages/reference",
+    "../../docs-nextra/content/reference",
 );
 
 /**
@@ -134,10 +148,45 @@ type AttributeObject = {
      */
     stateVarExcludeFromSchema?: boolean;
     validValues?: ValidValueEntry[];
+    /**
+     * The non-enforcing counterpart to `validValues` — values worth offering
+     * an author where the list is helpful but genuinely incomplete. See
+     * `AttributeDefinition.suggestedValues` in the worker for the contract.
+     */
+    suggestedValues?: ValidValueEntry[];
     valueForTrue?: unknown;
     valueForFalse?: unknown;
     description: string;
 };
+
+/**
+ * Reject a `{value, description}` list that bypassed the TypeScript contract.
+ *
+ * The worker's components are plain JavaScript, so a bare string in the list
+ * is caught here or not at all — and every offered value must ship with
+ * author-facing help text, since the autocomplete and help panel have nothing
+ * else to show beside it.
+ */
+function assertValueEntries(
+    entries: ValidValueEntry[],
+    field: "validValues" | "suggestedValues",
+    type: string,
+    attrName: string,
+): void {
+    for (const entry of entries) {
+        if (
+            typeof entry !== "object" ||
+            entry === null ||
+            typeof entry.value !== "string" ||
+            typeof entry.description !== "string" ||
+            entry.description.trim() === ""
+        ) {
+            throw new Error(
+                `Invalid ${field} entry for \`${type}.${attrName}\`: every entry must be a {value, description} object with a non-empty description. Got: ${JSON.stringify(entry)}`,
+            );
+        }
+    }
+}
 
 type ComponentClass = {
     componentType: string;
@@ -158,6 +207,12 @@ type ComponentClass = {
     /**
      * If a composite component class has the static variable allowInSchemaAnywhere set to true,
      * then we will treat it as though it were any component type when determining schema relationships.
+     *
+     * Use this for a composite whose replacements are copies of whatever the
+     * author put inside it (`<group>`, `<repeat>`, `<select>`, …), or which
+     * produces no replacements at all (`<setup>`). Neither kind has a
+     * replacement type the schema could check against, so both must be
+     * accepted wherever their container accepts any children.
      */
     allowInSchemaAnywhere?: boolean;
     /**
@@ -165,6 +220,15 @@ type ComponentClass = {
      * then we will treat it as though it were any of those
      * component types (as well as its actual component type)
      * when determining schema relationships
+     *
+     * Use this only for a composite with a fixed replacement type — `<mathList>`
+     * expands to `math`, `<intersection>` to `point`. Note that each listed type
+     * is the *starting* type of the inherit/adapt walk below, so an abstract type
+     * such as `_inline` matches only containers that accept arbitrary inline
+     * content; it does not reach a container that accepts one concrete inline
+     * type (`<math>` accepts `math`, but `_inline` neither inherits from nor
+     * adapts to `math`). A composite that can legitimately appear inside such a
+     * container wants `allowInSchemaAnywhere` instead.
      */
     allowInSchemaAsComponent?: string[];
     createAttributesObject: () => Record<string, AttributeObject>;
@@ -280,8 +344,7 @@ type ArrayElementDescription = {
 };
 
 type WrappingComponentElement =
-    | string
-    | { componentType: string; isAttributeNamed: string };
+    string | { componentType: string; isAttributeNamed: string };
 
 type ArrayEntryPrefixDescription = {
     arrayVariableName: string;
@@ -379,6 +442,24 @@ type SchemaAttribute = {
      * are intentionally kept out of this list and live only in `values`.
      */
     autocompleteValues?: ValidValueEntry[];
+    /**
+     * `true` when the entries in `autocompleteValues` are suggestions rather
+     * than the permitted set — the attribute declared `suggestedValues`, so
+     * there is no companion `values` list and an unlisted value is not an
+     * error. Author-facing surfaces use it to stay honest about the list: the
+     * help panel labels it "Suggested values" rather than "Allowed values",
+     * and autocomplete keeps its free-text behavior for a value the list
+     * doesn't contain.
+     */
+    suggestedValuesOnly?: boolean;
+    /**
+     * `true` when the attribute is list-valued (e.g. `createComponentOfType:
+     * "textList"`) and declares `validValues`. In that case `validValues`
+     * constrains *each item* of the list, so the LSP and docs phrase the
+     * constraint per-item and the schema-violation check validates each
+     * whitespace-separated token rather than the whole value.
+     */
+    isList?: boolean;
     /** One-sentence description of the attribute, surfaced in editor help and docs. */
     description: string;
     /** Default value for the attribute (if defined). */
@@ -558,6 +639,25 @@ export function getSchema(
         }
     }
 
+    // The two schema marks contradict each other: one says the replacement
+    // type is unpredictable, the other names it. Both are statics, so a
+    // composite that extends a marked one inherits the mark even when it
+    // declares a replacement type of its own (`SortIndices extends Sort`, but
+    // always expands to `number`). The loop below would silently let
+    // `allowInSchemaAnywhere` win and widen the subclass to every container,
+    // so hard-fail instead and make the subclass say which it means.
+    for (const type in componentClasses) {
+        const cClass = componentClasses[type];
+        if (cClass.allowInSchemaAnywhere && cClass.allowInSchemaAsComponent) {
+            throw Error(
+                `\`${type}\` sets both allowInSchemaAnywhere and allowInSchemaAsComponent ` +
+                    `[${cClass.allowInSchemaAsComponent.join(", ")}]. A composite either has an ` +
+                    `unpredictable replacement type or a fixed one, not both. If the mark comes ` +
+                    `from a base class, set \`static allowInSchemaAnywhere = false\` on the subclass.`,
+            );
+        }
+    }
+
     /**
      * A record of, for each component type, the list of all component types that
      * inherit from or adapt to that component type.
@@ -652,6 +752,10 @@ export function getSchema(
         let children: string[] = [];
         const childRanks: Record<string, number> = {};
         let acceptsStringChildren = false;
+        // Whether the class declares `_base` as a child, i.e. takes arbitrary
+        // content rather than a named set of children. Only such a class needs
+        // the `allowInSchemaAnywhere` widening below.
+        let acceptsAnyChild = false;
 
         // Record `name` as a child, keeping the smallest (most direct) rank
         // when it's reachable through more than one declared child group.
@@ -690,6 +794,9 @@ export function getSchema(
                     ) {
                         acceptsStringChildren = true;
                     }
+                    if (type2 === "_base") {
+                        acceptsAnyChild = true;
+                    }
                 }
             }
         }
@@ -719,6 +826,30 @@ export function getSchema(
                 ) {
                     acceptsStringChildren = true;
                 }
+                if (type2 === "_base") {
+                    acceptsAnyChild = true;
+                }
+            }
+        }
+
+        // The other half of `allowInSchemaAnywhere`. That mark says the
+        // composite's replacements are copies of whatever an author puts inside
+        // it, so it is accepted wherever its container accepts children — and
+        // by the same argument such a composite must accept whatever its
+        // container would have. It already says so, by declaring `_base` as a
+        // child; what `_base` no longer reaches is a component narrowed by
+        // `inSchemaOnlyInheritAs`, which deliberately inherits from nothing.
+        // Without this, `<chart><repeat><series>…</series></repeat></chart>` is
+        // reported as a series in the wrong place, when a composite is exactly
+        // what an author reaches for to build one series per group of data.
+        //
+        // Gated on `_base` because `allowInSchemaAnywhere` says nothing about
+        // what a composite takes *inside* it: `<select>` takes only `<option>`
+        // and `<collect>` takes no children at all, and widening those would
+        // accept in the editor what core then rejects as an invalid child.
+        if (cClass.allowInSchemaAnywhere && acceptsAnyChild) {
+            for (const type2 in componentClasses) {
+                addChild(type2, CHILD_RANK_ADAPTER);
             }
         }
 
@@ -876,24 +1007,19 @@ export function getSchema(
             if (attrDef.valueForFalse !== undefined)
                 booleanAliasValues.push("false");
 
+            if (attrDef.validValues && attrDef.suggestedValues) {
+                throw new Error(
+                    `Attribute \`${type}.${attrName}\` declares both \`validValues\` and \`suggestedValues\`. They are the enforcing and non-enforcing forms of the same list — pick one.`,
+                );
+            }
+
             if (attrDef.validValues) {
-                for (const entry of attrDef.validValues) {
-                    // Hard-fail if the type contract is bypassed (e.g. a bare
-                    // string sneaks through plain-JS component declarations).
-                    // Every enumerated value must ship with author-facing
-                    // help text.
-                    if (
-                        typeof entry !== "object" ||
-                        entry === null ||
-                        typeof entry.value !== "string" ||
-                        typeof entry.description !== "string" ||
-                        entry.description.trim() === ""
-                    ) {
-                        throw new Error(
-                            `Invalid validValues entry for \`${type}.${attrName}\`: every entry must be a {value, description} object with a non-empty description. Got: ${JSON.stringify(entry)}`,
-                        );
-                    }
-                }
+                assertValueEntries(
+                    attrDef.validValues,
+                    "validValues",
+                    type,
+                    attrName,
+                );
                 const validValueStrings = attrDef.validValues.map(
                     (v) => v.value,
                 );
@@ -907,6 +1033,36 @@ export function getSchema(
                           ]
                         : validValueStrings;
                 attrSpec.autocompleteValues = attrDef.validValues;
+
+                // List-valued attributes (e.g. `createComponentOfType:
+                // "textList"`, or a `*Array` primitive) interpret `validValues`
+                // per-item. Mark the schema entry so the LSP and docs phrase
+                // the constraint as "each item must be one of …" and the
+                // schema-violation check validates each token, not the whole
+                // value.
+                const isListType =
+                    (typeof attrDef.createComponentOfType === "string" &&
+                        attrDef.createComponentOfType.endsWith("List")) ||
+                    (typeof attrDef.createPrimitiveOfType === "string" &&
+                        attrDef.createPrimitiveOfType.endsWith("Array"));
+                if (isListType) {
+                    attrSpec.isList = true;
+                }
+            } else if (attrDef.suggestedValues) {
+                assertValueEntries(
+                    attrDef.suggestedValues,
+                    "suggestedValues",
+                    type,
+                    attrName,
+                );
+                // Only `autocompleteValues` — deliberately not `values`. The
+                // two consumers of `values` are the language server's
+                // "must be one of" check and the RELAX NG schema, and neither
+                // should fire for a list that is a helpful subset rather than
+                // the permitted set. The autocomplete and context-help paths
+                // read `autocompleteValues` and are unaffected.
+                attrSpec.autocompleteValues = attrDef.suggestedValues;
+                attrSpec.suggestedValuesOnly = true;
             } else if (
                 attrDef.createPrimitiveOfType === "boolean" ||
                 attrDef.createComponentOfType === "boolean"
@@ -921,6 +1077,11 @@ export function getSchema(
             // surfaced as `reference` — or `referenceOrText` when it also sets
             // `allowStrings` (e.g. `<ref to>`, which accepts a URL string in
             // addition to a component reference).
+            //
+            // `suggestedValues` is intentionally absent here: `keyword` says
+            // the value is drawn from a closed set, which is the one thing a
+            // suggestion list does not say. Such an attribute keeps the type
+            // its own declaration gives it (`text` for `<document lang>`).
             if (attrDef.validValues) {
                 attrSpec.type = "keyword";
             } else if (attrDef.createReferences) {

@@ -1,15 +1,17 @@
-import { roundForDisplay } from "../utils/math";
+import { roundForDisplay, isNumericConstant } from "../utils/math";
 import BaseComponent from "./abstract/BaseComponent";
 import me from "math-expressions";
 import {
     returnLabelAttributes,
     returnLabelStateVariableDefinitions,
+    returnRenderOnlyLabelChildDefinitions,
 } from "../utils/label";
 import {
     returnNumberDisplayAttributeComponentShadowing,
     returnNumberDisplayAttributes,
     returnNumberDisplayStateVariableDefinitions,
 } from "../utils/numberDisplay";
+import { codedDiagnostic } from "../utils/diagnostics";
 
 export default class Slider extends BaseComponent {
     constructor(args) {
@@ -20,6 +22,7 @@ export default class Slider extends BaseComponent {
         });
     }
     static componentType = "slider";
+    static renderChildren = true;
 
     static componentDocs = {
         summary: "An interactive slider input",
@@ -169,6 +172,10 @@ export default class Slider extends BaseComponent {
         let labelDefinitions = returnLabelStateVariableDefinitions();
 
         Object.assign(stateVariableDefinitions, labelDefinitions);
+        Object.assign(
+            stateVariableDefinitions,
+            returnRenderOnlyLabelChildDefinitions(),
+        );
 
         Object.assign(
             stateVariableDefinitions,
@@ -663,15 +670,15 @@ export default class Slider extends BaseComponent {
                         markers = [...dependencyValues.items];
                     } else if (markerType !== dependencyValues.type) {
                         //Note: no markers when they don't match and not init
-                        const warning = {
-                            type: "warning",
-                            message: "Markers type doesn't match slider type.",
-                        };
-                        if (dependencyValues.markersChild[0].position) {
-                            warning.position =
-                                dependencyValues.markersChild[0].position;
-                        }
-                        diagnostics.push(warning);
+                        diagnostics.push(
+                            codedDiagnostic({
+                                type: "warning",
+                                code: "doenet-w0080",
+                                position:
+                                    dependencyValues.markersChild[0].position ||
+                                    undefined,
+                            }),
+                        );
                         markers = [];
                     } else {
                         markers =
@@ -848,7 +855,7 @@ async function invertSliderValue({ desiredStateVariableValues, stateValues }) {
     } else {
         if (preliminaryValue instanceof me.class) {
             preliminaryValue = preliminaryValue.evaluate_to_constant();
-            if (Number.isNaN(preliminaryValue)) {
+            if (!isNumericConstant(preliminaryValue)) {
                 return { success: false };
             }
         } else {

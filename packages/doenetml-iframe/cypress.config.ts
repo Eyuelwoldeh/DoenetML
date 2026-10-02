@@ -2,6 +2,7 @@ import { defineConfig } from "cypress";
 import vitePreprocessor from "cypress-vite";
 import fs from "fs";
 import { version as iframeVersion } from "./package.json";
+import { serveDoenetmlWorkerPlugin } from "./serve-doenetml-worker-plugin";
 
 export default defineConfig({
     // Match @doenet/test-cypress's policy: retry twice in CI (runMode), no
@@ -27,7 +28,21 @@ export default defineConfig({
                     // resolves at cypress dev-server compile time too.
                     IFRAME_VERSION: JSON.stringify(iframeVersion),
                 },
+                resolve: {
+                    // Component specs may import linked workspace packages
+                    // (notably @doenet/virtual-keyboard) directly. Dedupe
+                    // React so those packages share the same hook dispatcher as
+                    // Cypress's React mount runtime.
+                    dedupe: ["react", "react-dom"],
+                },
                 plugins: [
+                    // The standalone bundle no longer embeds the core worker —
+                    // it loads it from a URL. Because these specs load the
+                    // bundle from a Blob URL (below), "next to the bundle" does
+                    // not exist and the bundle falls back to
+                    // `<origin>/doenetml-worker/index.js`. Serve the built
+                    // worker there.
+                    serveDoenetmlWorkerPlugin(),
                     {
                         // The @doenet/standalone bundle (~32 MB JS, plus a
                         // multi-MB CSS file) is imported as `?raw` and wrapped
@@ -70,6 +85,15 @@ export default defineConfig({
                 ],
                 optimizeDeps: {
                     exclude: ["@doenet/standalone"],
+                    // Only `DoenetViewer.virtualKeyboard.cy.tsx` pulls these in
+                    // (it imports @doenet/virtual-keyboard's source by relative
+                    // path), so a `--spec`-narrowed run that skips it leaves a
+                    // partial `node_modules/.vite`; the next fuller run then
+                    // discovers them mid-flight, re-optimizes, and reloads the
+                    // page out from under whatever spec is mounting. Pre-include
+                    // them so every run starts from the same set. CI always
+                    // begins from a cold cache, so this is local-dev hygiene.
+                    include: ["@ariakit/react", "classnames"],
                 },
             },
         },

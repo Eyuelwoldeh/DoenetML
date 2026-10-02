@@ -134,6 +134,103 @@ describe("computeContextHelp — element help", () => {
     });
 });
 
+describe("computeContextHelp — cursor on a tag boundary (#1327)", () => {
+    it.each([
+        ["before top-level tag", `<text/>`, 0, { topLevel: true }],
+        ["before spaced top-level tag", ` <text/>`, 1, { topLevel: true }],
+        ["before nested tag", `<p><text/></p>`, 3, { elementName: "p" }],
+        [
+            "before spaced nested tag",
+            `<p> <text/></p>`,
+            4,
+            { elementName: "p" },
+        ],
+        [
+            "before indented nested tag",
+            `<p>\n  <text/></p>`,
+            6,
+            { elementName: "p" },
+        ],
+        [
+            "between a closed child and the parent's close tag",
+            `<p><math>x</math></p>`,
+            `<p><math>x</math></p>`.indexOf("</p>"),
+            { elementName: "p" },
+        ],
+        [
+            "between a self-closed child and the parent's close tag",
+            `<p><math/></p>`,
+            `<p><math/></p>`.indexOf("</p>"),
+            { elementName: "p" },
+        ],
+    ])(
+        "reports surrounding suggestions %s",
+        async (_name, source, offset, context) => {
+            const help = await helpAt(source, offset);
+            expect(help.kind).toBe("suggestions");
+            if (help.kind === "suggestions") {
+                expect(help.context).toEqual(context);
+            }
+        },
+    );
+
+    it("reports element help (not children) when the cursor is inside a self-closing tag's `/>`", async () => {
+        const source = `<text/>`;
+        // Offset 6: cursor sits between `/` and `>`, still inside the open tag.
+        const help = await helpAt(source, 6);
+        expect(help).toMatchObject({ kind: "element", elementName: "text" });
+    });
+
+    it("reports element help inside a nested self-closing tag's `/>`", async () => {
+        const source = `<p><text/></p>`;
+        // Offset 9: between `/` and `>` of the nested `<text/>`.
+        const help = await helpAt(source, 9);
+        expect(help).toMatchObject({ kind: "element", elementName: "text" });
+    });
+
+    it("reports element help while a tag name is typed before a terminator (#1767)", async () => {
+        // A character that cannot continue a tag name — here the `}` the
+        // editor auto-inserted for `\frac{` — used to make the half-typed
+        // `<math` look like a finished element the cursor was *inside*, so the
+        // panel listed that element's allowed children instead of describing
+        // the element being named.
+        const source = `<me>\\frac{<math}</me>`;
+        const help = await helpAt(source, source.indexOf("<math}") + 5);
+        expect(help).toMatchObject({ kind: "element", elementName: "math" });
+    });
+
+    it("reports no help for a tag name ending in a non-word character (#1780)", async () => {
+        // The panel used to describe the *parent* while the author was still
+        // typing a tag name that ended in anything `\w` does not cover — `-`,
+        // `.`, `:` or a non-ASCII letter — or show an empty allowed-children
+        // panel for the half-typed name as though it were a real element.
+        // Neither element exists, so there is nothing to say.
+        const followers = ["", "}", "/", ">"];
+        for (const nameEnd of ["-", ".", ":", "ü"]) {
+            for (const after of followers) {
+                const source = `<p><my${nameEnd}${after}</p>`;
+                const offset = source.indexOf("<my") + 3 + nameEnd.length;
+                const help = await helpAt(source, offset);
+                expect({ source, kind: help.kind }).toEqual({
+                    source,
+                    kind: "none",
+                });
+            }
+        }
+
+        // A name that does match an element still gets its help, whatever
+        // follows the cursor.
+        for (const after of followers) {
+            const source = `<p><math${after}</p>`;
+            const help = await helpAt(source, source.indexOf("<math") + 5);
+            expect({ source, help }).toMatchObject({
+                source,
+                help: { kind: "element", elementName: "math" },
+            });
+        }
+    });
+});
+
 describe("computeContextHelp — attribute help", () => {
     it("returns attribute help with description and defaultValue", async () => {
         const source = `<point draggable="true"/>`;
@@ -333,6 +430,33 @@ describe("computeContextHelp — attribute help", () => {
         expect(allowedValueStrings).toContain("none");
         expect(allowedValueStrings).not.toContain("true");
         expect(allowedValueStrings).not.toContain("false");
+    });
+
+    it("marks `<document lang>`'s values as suggestions, not a constraint", async () => {
+        // `lang` declares `suggestedValues`, so the panel gets the list plus
+        // the flag that makes it label the row "Suggested values". Asserting
+        // the flag is what keeps the panel from claiming a constraint the
+        // language server deliberately does not enforce.
+        const source = `<document lang="es"></document>`;
+        const offset = source.indexOf("lang") + 2;
+        const help = await helpAt(source, offset);
+        if (help.kind !== "attribute") {
+            expect.fail(`expected attribute help, got ${help.kind}`);
+            return;
+        }
+        expect(help.allowedValuesAreSuggestions).toBe(true);
+        expect(help.allowedValues?.map((v) => v.value)).toContain("es");
+    });
+
+    it("leaves allowedValuesAreSuggestions unset for a closed enum", async () => {
+        const source = `<math simplify="full"/>`;
+        const offset = source.indexOf("simplify") + 3;
+        const help = await helpAt(source, offset);
+        if (help.kind !== "attribute") {
+            expect.fail(`expected attribute help, got ${help.kind}`);
+            return;
+        }
+        expect(help.allowedValuesAreSuggestions).toBeFalsy();
     });
 
     it("omits allowedValues for pure boolean primitives", async () => {
@@ -997,19 +1121,46 @@ describe("computeContextHelp — hyphenated names in $(...) macros", () => {
         });
     });
 
-    it("resolves a hyphenated descendant name in $(base).(my-p) with cursor mid-identifier", async () => {
-        // `$(base).(my-p)` should resolve to the descendant `<p name="my-p"/>`,
+    it("resolves a hyphenated descendant name in $(base.my-p) with cursor mid-identifier", async () => {
+        // `$(base.my-p)` should resolve to the descendant `<p name="my-p"/>`,
         // not truncate at the hyphen and fall through to property lookup.
-        // Only the hyphenated segment is wrapped in parens.
-        const source = `<section name="base"><p name="my-p"/></section>\n$(base).(my-p)`;
+        const source = `<section name="base"><p name="my-p"/></section>\n$(base.my-p)`;
         const offset = source.indexOf("my-p)") + 2; // between 'my' and '-p'
         const help = await helpAt(source, offset);
         expect(help).toMatchObject({
             kind: "refName",
             refName: "my-p",
-            displayPath: "base.(my-p)",
+            // The parentheses go around the whole path, which is the only
+            // spelling of it that is a reference.
+            displayPath: "(base.my-p)",
             targetElementName: "p",
         });
+    });
+
+    it("resolves a hyphenated member of $(base[$i].my-p), whose index holds a ref", async () => {
+        // Which char class the member reads with comes from the macro the
+        // completion context found. Scanning left from `my-p` for the `(`
+        // instead would stop at the `$` of the `$i` inside the index, read
+        // the member with the bare class, and truncate it to `my`.
+        const source = `<section name="base"><p name="my-p"/></section>\n$(base[$i].my-p)`;
+        const offset = source.indexOf("my-p)") + 2; // between 'my' and '-p'
+        const help = await helpAt(source, offset);
+        expect(help).toMatchObject({
+            kind: "refName",
+            refName: "my-p",
+            targetElementName: "p",
+        });
+    });
+
+    it("does not resolve $(base).(my-p), which is not a reference", async () => {
+        // A macro ends at its `)`, and there is no parenthesized member form,
+        // so this text is `$(base)` followed by `.(my-p)`. Reporting it as a
+        // reference to `<p name="my-p"/>` would tell the author that a form
+        // DoenetML does not read is one it does.
+        const source = `<section name="base"><p name="my-p"/></section>\n$(base).(my-p)`;
+        const offset = source.indexOf("my-p)") + 2; // between 'my' and '-p'
+        const help = await helpAt(source, offset);
+        expect(help).not.toMatchObject({ kind: "refName" });
     });
 });
 
@@ -1471,6 +1622,103 @@ describe("computeContextHelp — repeat-introduced names (valueName/indexName)",
                 ownerLine: 1,
             },
         });
+    });
+});
+
+describe("computeContextHelp — sizeSyntax on componentSize attributes", () => {
+    it("lists the accepted length forms on a width", async () => {
+        const source = `<textInput expanded width="600"/>`;
+        const offset = source.indexOf("width") + 2;
+        const help = await helpAt(source, offset);
+        if (help.kind !== "attribute" || !help.sizeSyntax) {
+            expect.fail("expected attribute help with sizeSyntax");
+            return;
+        }
+        const values = help.sizeSyntax.examples.map((e) => e.value);
+        // A bare number and a percentage are the two forms an author cannot
+        // guess from the attribute description alone.
+        expect(values).toContain("600");
+        expect(values).toContain("50%");
+        expect(values).toContain("6in");
+        expect(
+            help.sizeSyntax.examples.find((e) => e.value === "50%")?.kind,
+        ).toBe("relative");
+        expect(
+            help.sizeSyntax.examples.find((e) => e.value === "600")?.kind,
+        ).toBe("absolute");
+        // A `<textInput>` uses its width literally.
+        expect(help.sizeSyntax.snapsToSizePreset).toBeUndefined();
+    });
+
+    it("offers a height the absolute forms and no percentage", async () => {
+        const source = `<textInput expanded height="300"/>`;
+        const offset = source.indexOf("height") + 2;
+        const help = await helpAt(source, offset);
+        if (help.kind !== "attribute" || !help.sizeSyntax) {
+            expect.fail("expected attribute help with sizeSyntax");
+            return;
+        }
+        // The runtime takes a percentage height and does nothing with it, so
+        // the panel never raises one — not as an offer, and not as a caveat.
+        const values = help.sizeSyntax.examples.map((e) => e.value);
+        expect(values).toContain("600px");
+        expect(values).not.toContain("50%");
+        expect(
+            help.sizeSyntax.examples.every((e) => e.kind === "absolute"),
+        ).toBe(true);
+    });
+
+    it("flags the widths that snap to a size preset", async () => {
+        for (const elementName of ["graph", "image", "video"]) {
+            const source = `<${elementName} width="400px"/>`;
+            const offset = source.indexOf("width") + 2;
+            const help = await helpAt(source, offset);
+            if (help.kind !== "attribute" || !help.sizeSyntax) {
+                expect.fail(`expected sizeSyntax on <${elementName} width>`);
+                return;
+            }
+            expect(help.sizeSyntax.snapsToSizePreset).toBe(true);
+        }
+    });
+
+    it("does not flag a width that is used literally", async () => {
+        const source = `<codeEditor width="50%"/>`;
+        const offset = source.indexOf("width") + 2;
+        const help = await helpAt(source, offset);
+        if (help.kind !== "attribute" || !help.sizeSyntax) {
+            expect.fail("expected attribute help with sizeSyntax");
+            return;
+        }
+        expect(help.sizeSyntax.snapsToSizePreset).toBeUndefined();
+    });
+
+    it("offers a side-by-side width the percentage and nothing else", async () => {
+        for (const elementName of ["sideBySide", "sbsGroup"]) {
+            const source = `<${elementName} width="50%"/>`;
+            const offset = source.indexOf("width") + 2;
+            const help = await helpAt(source, offset);
+            if (help.kind !== "attribute" || !help.sizeSyntax) {
+                expect.fail(`expected sizeSyntax on <${elementName} width>`);
+                return;
+            }
+            // An absolute width is warned about and coerced to relative, so
+            // the panel never puts one in front of an author.
+            expect(help.sizeSyntax.examples.map((e) => e.value)).toEqual([
+                "50%",
+            ]);
+            expect(help.sizeSyntax.snapsToSizePreset).toBeUndefined();
+        }
+    });
+
+    it("is absent on an attribute that is not a size", async () => {
+        const source = `<textInput expanded="true"/>`;
+        const offset = source.indexOf("expanded") + 2;
+        const help = await helpAt(source, offset);
+        if (help.kind !== "attribute") {
+            expect.fail("expected attribute help");
+            return;
+        }
+        expect(help.sizeSyntax).toBeUndefined();
     });
 });
 

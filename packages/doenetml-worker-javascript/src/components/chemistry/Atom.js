@@ -10,6 +10,11 @@ import {
     returnNumberDisplayStateVariableDefinitions,
 } from "../../utils/numberDisplay";
 import { getDataForAtom } from "../../utils/chemistry";
+import {
+    contentTranslator,
+    returnContentLocaleDependencies,
+} from "../../utils/contentLocale";
+import { elementName } from "../../utils/chemistryWords";
 
 export default class Atom extends InlineComponent {
     static componentType = "atom";
@@ -186,12 +191,17 @@ export default class Atom extends InlineComponent {
                     dependencyType: "stateVariable",
                     variableName: "dataForAtom",
                 },
+                ...returnContentLocaleDependencies(),
             }),
             definition({ dependencyValues }) {
                 let name;
 
                 if (dependencyValues.dataForAtom) {
-                    name = dependencyValues.dataForAtom.Name;
+                    name = elementName(
+                        contentTranslator(dependencyValues),
+                        dependencyValues.dataForAtom.Symbol,
+                        dependencyValues.dataForAtom.Name,
+                    );
                 } else {
                     name = null;
                 }
@@ -334,6 +344,12 @@ export default class Atom extends InlineComponent {
             },
         };
 
+        // Not translated, unlike `name` above, and for the same reason
+        // `phaseAtSTP` and `metalCategory` are not: this is an enumerated
+        // category an author compares against — `$atom.groupName = Noble Gas`
+        // — rather than prose the reader is meant to read as a sentence. A
+        // name that changed with the document's language would break that
+        // award silently (#1577).
         stateVariableDefinitions.groupName = {
             description:
                 'The descriptive name of the element\'s periodic group (e.g. "Alkali metals").',
@@ -645,13 +661,15 @@ export default class Atom extends InlineComponent {
                     dependencyType: "stateVariable",
                     variableName: "symbol",
                 },
+                ...returnContentLocaleDependencies(),
             }),
             definition({ dependencyValues }) {
                 let latex;
                 if (dependencyValues.symbol) {
                     latex = `\\text{${dependencyValues.symbol}}`;
                 } else {
-                    latex = "[\\text{Invalid Chemical Symbol}]";
+                    const t = contentTranslator(dependencyValues);
+                    latex = `[\\text{${t("chemistry-invalid-symbol")}}]`;
                 }
                 return {
                     setValue: { latex },
@@ -670,13 +688,15 @@ export default class Atom extends InlineComponent {
                     dependencyType: "stateVariable",
                     variableName: "symbol",
                 },
+                ...returnContentLocaleDependencies(),
             }),
             definition({ dependencyValues }) {
                 let text;
                 if (dependencyValues.symbol) {
                     text = dependencyValues.symbol;
                 } else {
-                    text = "[Invalid Chemical Symbol]";
+                    const t = contentTranslator(dependencyValues);
+                    text = `[${t("chemistry-invalid-symbol")}]`;
                 }
                 return {
                     setValue: { text },
@@ -727,13 +747,11 @@ function electronConfigurationToOrbitalDiagram(electronConfiguration) {
         let shellType = infoObj[1];
         let nElectrons = infoObj[2];
 
-        if (
-            !(
-                ["s", "p", "d", "f"].includes(shellType) &&
-                Number.isInteger(nElectrons) &&
-                nElectrons > 0
-            )
-        ) {
+        if (!(
+            ["s", "p", "d", "f"].includes(shellType) &&
+            Number.isInteger(nElectrons) &&
+            nElectrons > 0
+        )) {
             return null;
         }
 

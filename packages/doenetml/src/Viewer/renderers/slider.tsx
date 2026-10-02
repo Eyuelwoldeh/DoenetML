@@ -6,6 +6,9 @@ import useDoenetRenderer, {
 import { sizeToCSS } from "./utils/css";
 import { ActionButton, ActionButtonGroup } from "@doenet/ui-components";
 import { renderLabelWithLatex } from "./utils/labelWithLatex";
+import { useRenderedLabel } from "./utils/inputLabel";
+import { useT } from "../../utils/i18n";
+import { ltrIslandProps } from "./utils/direction";
 
 let round_to_decimals = (x: number, n: number) => {
     try {
@@ -193,8 +196,11 @@ interface SliderSVs {
 }
 
 export default React.memo(function Slider(props: UseDoenetRendererProps) {
-    let { id, SVs, actions, ignoreUpdate, rendererName, callAction } =
+    let { id, SVs, actions, children, ignoreUpdate, rendererName, callAction } =
         useDoenetRenderer<SliderSVs>(props);
+    const renderedLabel = useRenderedLabel({ SVs, children });
+
+    const t = useT();
 
     // @ts-ignore
     Slider.baseStateVariable = "index";
@@ -331,10 +337,12 @@ export default React.memo(function Slider(props: UseDoenetRendererProps) {
     // Conditional label and showValue attributes
     let myLabel = null;
     if (SVs.label) {
-        const label = renderLabelWithLatex({
-            label: SVs.label,
-            labelHasLatex: SVs.labelHasLatex,
-        });
+        const label =
+            renderedLabel ??
+            renderLabelWithLatex({
+                label: SVs.label,
+                labelHasLatex: SVs.labelHasLatex,
+            });
         if (SVs.showValue) {
             myLabel = (
                 <>
@@ -365,7 +373,7 @@ export default React.memo(function Slider(props: UseDoenetRendererProps) {
                 style={{ marginBottom: "12px", marginTop: "5px" }}
             >
                 <ActionButton
-                    value="Prev"
+                    value={t("slider-previous", undefined, "Prev")}
                     onClick={() => {
                         if (inputRef.current) {
                             inputRef.current.stepDown();
@@ -376,7 +384,7 @@ export default React.memo(function Slider(props: UseDoenetRendererProps) {
                     disabled={SVs.disabled || index === 0}
                 ></ActionButton>
                 <ActionButton
-                    value="Next"
+                    value={t("slider-next", undefined, "Next")}
                     onClick={() => {
                         if (inputRef.current) {
                             inputRef.current.stepUp();
@@ -394,28 +402,47 @@ export default React.memo(function Slider(props: UseDoenetRendererProps) {
 
     return (
         <div>
+            {/* The label is the author's prose and follows the document. Only
+                the track below it is notation. */}
             {myLabel}
-            <input
-                ref={inputRef}
-                id={id}
-                type="range"
-                style={{ width, margin: 0, maxWidth: "100%" }}
-                value={index}
-                list={id + "-datalist"}
-                min={0}
-                max={SVs.numItems - 1}
-                onInput={(e) =>
-                    changeValue((e.target as HTMLInputElement).value, transient)
-                }
-                onMouseDown={() => setTransient(true)}
-                onMouseUp={(e) => {
-                    setTransient(false);
-                    changeValue((e.target as HTMLInputElement).value, false);
-                }}
-                disabled={SVs.disabled}
-            />
-            {dataList}
-            {controls}
+            {/* A browser reverses a native range input under `rtl`, putting
+                `min` at the right edge — which would leave the small numbers
+                on the right while the tick labels under them, being notation,
+                still read left-to-right. Pinning the track keeps the two
+                agreeing, and takes in the prev/next buttons so that "prev"
+                stays on the end of the track it steps toward.
+
+                The authored width sizes the pinned box and the input fills it,
+                so that `width="50%"` still measures against the column. */}
+            <div {...ltrIslandProps(width)}>
+                <input
+                    ref={inputRef}
+                    id={id}
+                    type="range"
+                    style={{ width: "100%", margin: 0 }}
+                    value={index}
+                    list={id + "-datalist"}
+                    min={0}
+                    max={SVs.numItems - 1}
+                    onInput={(e) =>
+                        changeValue(
+                            (e.target as HTMLInputElement).value,
+                            transient,
+                        )
+                    }
+                    onMouseDown={() => setTransient(true)}
+                    onMouseUp={(e) => {
+                        setTransient(false);
+                        changeValue(
+                            (e.target as HTMLInputElement).value,
+                            false,
+                        );
+                    }}
+                    disabled={SVs.disabled}
+                />
+                {dataList}
+                {controls}
+            </div>
         </div>
     );
 });

@@ -1,5 +1,10 @@
 import BlockComponent from "./abstract/BlockComponent";
 import { returnListItemChildStateVariableDefinitions } from "../utils/listItemChild";
+import {
+    returnBorderValidValues,
+    returnHalignValidValues,
+    returnValignValidValues,
+} from "../utils/tabularAttributes";
 
 export default class Tabular extends BlockComponent {
     constructor(args) {
@@ -53,28 +58,11 @@ export default class Tabular extends BlockComponent {
             description: "Default horizontal alignment for cells.",
             createComponentOfType: "text",
             createStateVariable: "halign",
-            defaultValue: "left",
+            defaultValue: "start",
             public: true,
             toLowerCase: true,
-            validValues: [
-                {
-                    value: "left",
-                    description: "Left-align cell content.",
-                },
-                {
-                    value: "center",
-                    description: "Center cell content horizontally.",
-                },
-                {
-                    value: "right",
-                    description: "Right-align cell content.",
-                },
-                {
-                    value: "justify",
-                    description:
-                        "Justify cell content across the full cell width.",
-                },
-            ],
+            validValues: returnHalignValidValues(),
+            forRenderer: true,
         };
         attributes.valign = {
             description: "Default vertical alignment for cells.",
@@ -83,131 +71,63 @@ export default class Tabular extends BlockComponent {
             defaultValue: "middle",
             public: true,
             toLowerCase: true,
-            validValues: [
-                {
-                    value: "top",
-                    description: "Align cell content to the top.",
-                },
-                {
-                    value: "middle",
-                    description: "Center cell content vertically.",
-                },
-                {
-                    value: "bottom",
-                    description: "Align cell content to the bottom.",
-                },
-            ],
-        };
-        attributes.top = {
-            description: "Border style for the top edge of the layout.",
-            createComponentOfType: "text",
-            createStateVariable: "top",
-            defaultValue: "none",
-            public: true,
-            toLowerCase: true,
-            validValues: [
-                {
-                    value: "none",
-                    description: "Do not render a border.",
-                },
-                {
-                    value: "minor",
-                    description: "Render a thin border line.",
-                },
-                {
-                    value: "medium",
-                    description: "Render a medium-weight border line.",
-                },
-                {
-                    value: "major",
-                    description: "Render a thick border line.",
-                },
-            ],
+            validValues: returnValignValidValues(),
             forRenderer: true,
         };
-        attributes.left = {
-            description: "Border style for the left edge of the layout.",
+        attributes.topBorder = {
+            description: "Border style for the top edge of the layout.",
             createComponentOfType: "text",
-            createStateVariable: "left",
+            createStateVariable: "topBorder",
             defaultValue: "none",
             public: true,
             toLowerCase: true,
-            validValues: [
-                {
-                    value: "none",
-                    description: "Do not render a border.",
-                },
-                {
-                    value: "minor",
-                    description: "Render a thin border line.",
-                },
-                {
-                    value: "medium",
-                    description: "Render a medium-weight border line.",
-                },
-                {
-                    value: "major",
-                    description: "Render a thick border line.",
-                },
-            ],
+            validValues: returnBorderValidValues(),
+            forRenderer: true,
         };
-        attributes.bottom = {
+        attributes.startBorder = {
+            description:
+                "Border style for the leading edge of the layout: its left edge in a left-to-right document, its right edge in a right-to-left one.",
+            createComponentOfType: "text",
+            createStateVariable: "startBorder",
+            defaultValue: "none",
+            public: true,
+            toLowerCase: true,
+            validValues: returnBorderValidValues(),
+            forRenderer: true,
+        };
+        attributes.bottomBorder = {
             description: "Border style for the bottom edge of the layout.",
             createComponentOfType: "text",
-            createStateVariable: "bottom",
+            createStateVariable: "bottomBorder",
             defaultValue: "none",
             public: true,
             toLowerCase: true,
-            validValues: [
-                {
-                    value: "none",
-                    description: "Do not render a border.",
-                },
-                {
-                    value: "minor",
-                    description: "Render a thin border line.",
-                },
-                {
-                    value: "medium",
-                    description: "Render a medium-weight border line.",
-                },
-                {
-                    value: "major",
-                    description: "Render a thick border line.",
-                },
-            ],
+            validValues: returnBorderValidValues(),
+            forRenderer: true,
         };
-        attributes.right = {
-            description: "Border style for the right edge of the layout.",
+        attributes.endBorder = {
+            description:
+                "Border style for the trailing edge of the layout: its right edge in a left-to-right document, its left edge in a right-to-left one.",
             createComponentOfType: "text",
-            createStateVariable: "right",
+            createStateVariable: "endBorder",
             defaultValue: "none",
             public: true,
             toLowerCase: true,
-            validValues: [
-                {
-                    value: "none",
-                    description: "Do not render a border.",
-                },
-                {
-                    value: "minor",
-                    description: "Render a thin border line.",
-                },
-                {
-                    value: "medium",
-                    description: "Render a medium-weight border line.",
-                },
-                {
-                    value: "major",
-                    description: "Render a thick border line.",
-                },
-            ],
+            validValues: returnBorderValidValues(),
+            forRenderer: true,
         };
         return attributes;
     }
 
     static returnChildGroups() {
         return [
+            // PreTeXt writes the `<col>` elements ahead of the rows, and so
+            // does HTML with its `<colgroup>`, so the column group comes first
+            // here as well.
+            {
+                group: "columns",
+                componentTypes: ["col"],
+            },
             {
                 group: "rows",
                 componentTypes: ["row"],
@@ -224,6 +144,114 @@ export default class Tabular extends BlockComponent {
                 listItemInlineAlignment: "flex-start",
             }),
         );
+
+        // The settings authored on the `<col>` children, in order, with no
+        // padding: one entry per `<col>` and `null` for every attribute the
+        // author left off. This is what a `<cell>` consults when it falls back
+        // to its column, so it deliberately does not depend on the rows —
+        // `columnSpecs`, below, is the padded version and would drag the row
+        // children into every cell's alignment computation.
+        stateVariableDefinitions.columnAttributes = {
+            returnDependencies: () => ({
+                columnChildren: {
+                    dependencyType: "child",
+                    childGroups: ["columns"],
+                    variableNames: [
+                        "width",
+                        "halign",
+                        "topBorder",
+                        "endBorder",
+                    ],
+                },
+            }),
+            definition({ dependencyValues }) {
+                return {
+                    setValue: {
+                        columnAttributes: dependencyValues.columnChildren.map(
+                            (column) => ({
+                                width: column.stateValues.width ?? null,
+                                halign: column.stateValues.halign ?? null,
+                                topBorder: column.stateValues.topBorder ?? null,
+                                endBorder: column.stateValues.endBorder ?? null,
+                            }),
+                        ),
+                    },
+                };
+            },
+        };
+
+        stateVariableDefinitions.numColumns = {
+            description:
+                "Number of columns in the tabular layout: the number of col components, or the furthest any single row reaches counting each cell's colSpan, whichever is larger.",
+            public: true,
+            shadowingInstructions: {
+                createComponentOfType: "integer",
+            },
+            forRenderer: true,
+            returnDependencies: () => ({
+                rowChildren: {
+                    dependencyType: "child",
+                    childGroups: ["rows"],
+                    variableNames: ["numColumns"],
+                },
+                columnAttributes: {
+                    dependencyType: "stateVariable",
+                    variableName: "columnAttributes",
+                },
+            }),
+            definition({ dependencyValues }) {
+                let numColumns = dependencyValues.columnAttributes.length;
+                for (const row of dependencyValues.rowChildren) {
+                    numColumns = Math.max(
+                        numColumns,
+                        row.stateValues.numColumns ?? 0,
+                    );
+                }
+                return { setValue: { numColumns } };
+            },
+        };
+
+        // `columnAttributes` padded out to one entry per column of the table.
+        // The padding is what lets the renderer emit a `<colgroup>` that lines
+        // up with the cells, and it is also what PreTeXt's guide asks for:
+        // "once there is one [`<col>`], then there needs to be as many as the
+        // number of columns of the table"
+        // (https://pretextbook.org/doc/guide/html/topic-tabular.html).
+        stateVariableDefinitions.columnSpecs = {
+            description:
+                "Per-column width, alignment, and border settings, one entry per column.",
+            forRenderer: true,
+            returnDependencies: () => ({
+                columnAttributes: {
+                    dependencyType: "stateVariable",
+                    variableName: "columnAttributes",
+                },
+                numColumns: {
+                    dependencyType: "stateVariable",
+                    variableName: "numColumns",
+                },
+            }),
+            definition({ dependencyValues }) {
+                const { columnAttributes, numColumns } = dependencyValues;
+                if (columnAttributes.length === 0) {
+                    // No `<col>` children: stay out of the renderer's way
+                    // entirely rather than emitting a row of empty specs.
+                    return { setValue: { columnSpecs: [] } };
+                }
+                const columnSpecs = [];
+                for (let i = 0; i < numColumns; i++) {
+                    columnSpecs.push(
+                        columnAttributes[i] ?? {
+                            width: null,
+                            halign: null,
+                            topBorder: null,
+                            endBorder: null,
+                        },
+                    );
+                }
+                return { setValue: { columnSpecs } };
+            },
+        };
 
         // stateVariableDefinitions.numRows = {
         //   public: true,

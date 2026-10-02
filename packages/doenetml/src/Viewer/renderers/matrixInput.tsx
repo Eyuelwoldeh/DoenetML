@@ -14,7 +14,9 @@ import {
     createCheckWorkComponent,
 } from "./utils/checkWork";
 import { DescriptionPopover } from "./utils/Description";
+import { useRenderedLabel } from "./utils/inputLabel";
 import { useSubmitActionWithDelay } from "./utils/useSubmitActionWithDelay";
+import { useContentT, useT } from "../../utils/i18n";
 
 interface MatrixInputSVs {
     [key: string]: any;
@@ -36,6 +38,13 @@ interface MatrixInputSVs {
 export default React.memo(function MatrixInput(props: UseDoenetRendererProps) {
     let { id, SVs, actions, children, callAction } =
         useDoenetRenderer<MatrixInputSVs>(props);
+    const renderedLabel = useRenderedLabel({ SVs, children });
+
+    const t = useT();
+
+    // The check-work button follows the document's language, not the
+    // reader's — see `useContentT`.
+    const tContent = useContentT();
 
     // need to use a ref for validation state as handlePressEnter
     // does not update to current values
@@ -75,6 +84,7 @@ export default React.memo(function MatrixInput(props: UseDoenetRendererProps) {
         submitActionWithPending,
         SVs.forceFullCheckWorkButton,
         isPending,
+        tContent,
     );
 
     let matrixInputs = [];
@@ -112,7 +122,11 @@ export default React.memo(function MatrixInput(props: UseDoenetRendererProps) {
                             })
                         }
                         disabled={SVs.numRows < 2 || disabled}
-                        ariaLabel="Remove row"
+                        ariaLabel={t(
+                            "matrix-remove-row",
+                            undefined,
+                            "Remove row",
+                        )}
                     ></ActionButton>
                     <ActionButton
                         id={id + "_rowIncrement"}
@@ -124,7 +138,7 @@ export default React.memo(function MatrixInput(props: UseDoenetRendererProps) {
                             })
                         }
                         disabled={disabled}
-                        ariaLabel="Add row"
+                        ariaLabel={t("matrix-add-row", undefined, "Add row")}
                     ></ActionButton>
                 </ActionButtonGroup>
             </span>
@@ -145,7 +159,11 @@ export default React.memo(function MatrixInput(props: UseDoenetRendererProps) {
                             })
                         }
                         disabled={SVs.numColumns < 2 || disabled}
-                        ariaLabel="Remove column"
+                        ariaLabel={t(
+                            "matrix-remove-column",
+                            undefined,
+                            "Remove column",
+                        )}
                     ></ActionButton>
                     <ActionButton
                         id={id + "_columnIncrement"}
@@ -157,7 +175,11 @@ export default React.memo(function MatrixInput(props: UseDoenetRendererProps) {
                             })
                         }
                         disabled={disabled}
-                        ariaLabel="Add column"
+                        ariaLabel={t(
+                            "matrix-add-column",
+                            undefined,
+                            "Add column",
+                        )}
                     ></ActionButton>
                 </ActionButtonGroup>
             </span>
@@ -174,6 +196,9 @@ export default React.memo(function MatrixInput(props: UseDoenetRendererProps) {
                 {label}
             </MathJax>
         );
+    }
+    if (renderedLabel) {
+        label = renderedLabel;
     }
 
     const shortDescription = SVs.shortDescription || undefined;
@@ -206,8 +231,10 @@ export default React.memo(function MatrixInput(props: UseDoenetRendererProps) {
         <span
             id={labelId}
             style={{
-                marginRight: SVs.labelPosition === "right" ? undefined : "5px",
-                marginLeft: SVs.labelPosition === "right" ? "5px" : undefined,
+                marginInlineEnd:
+                    SVs.labelPosition === "end" ? undefined : "5px",
+                marginInlineStart:
+                    SVs.labelPosition === "end" ? "5px" : undefined,
             }}
         >
             {label}
@@ -225,7 +252,12 @@ export default React.memo(function MatrixInput(props: UseDoenetRendererProps) {
                 verticalAlign: "baseline",
             }}
         >
-            <div className="matrix-input" id={id}>
+            {/* A matrix is notation: its columns are numbered left to right in
+                every language, and the brackets around it are drawn as
+                absolutely-positioned pseudo-elements that assume which side
+                they are on. A `<table>` reverses its columns under `rtl`, so
+                without this the whole matrix would come out mirrored. */}
+            <div className="matrix-input" id={id} dir="ltr">
                 <table
                     aria-labelledby={groupLabelledByIds || undefined}
                     aria-label={
@@ -239,7 +271,7 @@ export default React.memo(function MatrixInput(props: UseDoenetRendererProps) {
                     <tbody>{matrixInputs}</tbody>
                 </table>
             </div>
-            <div style={{ marginRight: "4px" }}></div>
+            <div style={{ marginInlineEnd: "4px" }}></div>
             {rowNumControls}
             {colNumControls}
             {checkWorkComponent}
@@ -262,7 +294,7 @@ export default React.memo(function MatrixInput(props: UseDoenetRendererProps) {
                 }}
                 id={`${id}-container`}
             >
-                {SVs.labelPosition === "right" ? (
+                {SVs.labelPosition === "end" ? (
                     <>
                         {matrixInputRow}
                         {labelComponent}

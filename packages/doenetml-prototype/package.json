@@ -26,7 +26,8 @@
         "test:before": "npm run build:test2",
         "build:test1": "wireit",
         "build:test2": "wireit",
-        "test": "npm run build:test1 && vitest"
+        "test": "npm run build:test1 && vitest",
+        "create-renderer-stub": "vite-node scripts/create-renderer-stub.ts"
     },
     "wireit": {
         "build:test1": {
@@ -78,7 +79,8 @@
                 "../doenetml-worker:build",
                 "../doenetml-to-pretext:build",
                 "../parser:build",
-                "../codemirror:build"
+                "../codemirror:build",
+                "../math:build"
             ]
         }
     },
@@ -102,5 +104,8 @@
     },
     "prettier": {
         "tabWidth": 4
+    },
+    "dependencies": {
+        "math-expressions": "file:../math"
     }
 }

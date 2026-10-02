@@ -1,11 +1,13 @@
 import BlockComponent from "./abstract/BlockComponent";
 import me from "math-expressions";
 import {
-    orderedPercentWidthMidpoints,
-    orderedWidthMidpoints,
-    widthsBySize,
-    sizePossibilities,
-} from "@doenet/utils";
+    returnSizeAttributes,
+    returnSizeStateVariableDefinitions,
+} from "../utils/componentSize";
+import {
+    returnAxisLabelChildGroup,
+    returnAxisLabelStateVariableDefinitions,
+} from "../utils/axisLabel";
 import {
     returnNumberDisplayAttributeComponentShadowing,
     returnNumberDisplayAttributes,
@@ -17,9 +19,103 @@ import {
     GRAPH_CONTROL_VARIABLE_NAMES,
 } from "../utils/graphControls";
 import { returnListItemChildStateVariableDefinitions } from "../utils/listItemChild";
+import {
+    addChildrenToDynamicChild,
+    deleteChildrenFromDynamicChild,
+} from "../utils/dynamicChildren";
 // PreFigure conversion architecture and extension guide:
 // see src/utils/prefigure/README.md
 import { returnGraphPrefigureStateVariableDefinitions } from "../utils/prefigure/stateVariable";
+import { codedDiagnostic } from "../utils/diagnostics";
+import { returnShortDescriptionStateVariableDefinition } from "../utils/shortDescription";
+
+/**
+ * Evaluates one whitespace-separated group of the `grid` attribute to the
+ * positive spacing it stands for, or null when it does not stand for one.
+ *
+ * A group can hold more than one piece: `grid="2$a 3$b"` puts `2` and `$a` in
+ * the same group, and their product is the spacing.
+ *
+ * `me.fromText` throws on text it cannot parse — `grid="(1, 2)"` splits on the
+ * space into `(1,` and `2)`, neither of which parses — so every parse is
+ * guarded. An unparseable piece makes its group unusable rather than taking
+ * the whole document down with it.
+ *
+ * A non-string piece is read out of `dependencyValues`, which carries both the
+ * attribute's children (`gridAttrCompChildren`, whose order gives each piece
+ * its index) and one `childAdapter<index>` per child.
+ */
+function gridSpacingFromGroup(group, dependencyValues) {
+    let spacing = 1;
+
+    for (let piece of group) {
+        let factor;
+
+        if (typeof piece === "string") {
+            try {
+                factor = me.fromText(piece).evaluate_to_constant();
+            } catch {
+                return null;
+            }
+        } else {
+            // A non-string piece was adapted from a number or math component.
+            let childInd = dependencyValues.gridAttrCompChildren.indexOf(piece);
+            factor = dependencyValues["childAdapter" + childInd];
+            if (factor instanceof me.class) {
+                factor = factor.evaluate_to_constant();
+            }
+        }
+
+        spacing *= factor;
+    }
+
+    // Rejects zero and negatives, and the `NaN` that an expression without a
+    // constant value evaluates to (`NaN > 0` is `false`).
+    return spacing > 0 ? spacing : null;
+}
+
+/**
+ * Splits the `grid` attribute's children into whitespace-separated groups.
+ *
+ * Whitespace only ever appears inside string children, so a group runs until a
+ * string child contributes a space. Non-string children join whatever group is
+ * open around them.
+ */
+function groupGridAttrChildren(attrChildren) {
+    const groupedChildren = [];
+    let pieces = [];
+
+    // Closes the group being built, if anything is in it.
+    const endGroup = () => {
+        if (pieces.length > 0) {
+            groupedChildren.push(pieces);
+            pieces = [];
+        }
+    };
+
+    for (const child of attrChildren) {
+        if (typeof child !== "string") {
+            pieces.push(child);
+            continue;
+        }
+
+        for (const [ind, piece] of child.split(/\s+/).entries()) {
+            // A space preceded every piece but the first, and an empty first
+            // piece means the child led with one. Either way the group that
+            // was open ends at that space.
+            if (ind > 0 || piece === "") {
+                endGroup();
+            }
+            if (piece !== "") {
+                pieces.push(piece);
+            }
+        }
+    }
+
+    endGroup();
+
+    return groupedChildren;
+}
 
 export default class Graph extends BlockComponent {
     constructor(args) {
@@ -65,24 +161,10 @@ export default class Graph extends BlockComponent {
             defaultValue: 10,
             description: "Maximum value displayed on the y axis.",
         };
-        attributes.width = {
-            createComponentOfType: "componentSize",
-            description: "Explicit width of the graph (overrides size).",
-        };
-        attributes.size = {
-            createComponentOfType: "text",
-            createStateVariable: "specifiedSize",
-            defaultValue: "medium",
-            toLowerCase: true,
-            validValues: [
-                { value: "tiny", description: "About 1/12 the full width." },
-                { value: "small", description: "About 30% of the full width." },
-                { value: "medium", description: "About half the full width." },
-                { value: "large", description: "About 70% of the full width." },
-                { value: "full", description: "The full available width." },
-            ],
-            description: "Named size preset for the graph.",
-        };
+        Object.assign(
+            attributes,
+            returnSizeAttributes({ componentName: "graph" }),
+        );
         attributes.aspectRatio = {
             createComponentOfType: "number",
             description: "Aspect ratio (width / height) for the graph.",
@@ -335,11 +417,42 @@ export default class Graph extends BlockComponent {
             description:
                 "Whether the axis limits are locked (preventing zoom/pan).",
         };
+        // `suggestedValues`, not `validValues`: the named spacings are only
+        // part of what this attribute takes — two positive numbers are equally
+        // valid — so the list is offered rather than enforced. (The `grid`
+        // state variable below already matches the names case-insensitively.)
         attributes.grid = {
             createComponentOfType: "text",
             valueForTrue: "medium",
+            suggestedValues: [
+                { value: "none", description: "Draw no grid lines." },
+                {
+                    value: "medium",
+                    description:
+                        "Draw grid lines at the major tick marks. Used when `grid` is given with no value.",
+                },
+                {
+                    value: "dense",
+                    description:
+                        "Draw grid lines at the major and minor tick marks.",
+                },
+                // Two examples of the numeric form, which the named spacings
+                // would otherwise hide: an author scanning a list of three
+                // words has no reason to guess that spacings can be given
+                // explicitly.
+                {
+                    value: "1 1",
+                    description:
+                        "Draw grid lines every 1 unit in x and every 1 unit in y. Any two positive numbers can be given this way.",
+                },
+                {
+                    value: "2 2",
+                    description:
+                        "Draw grid lines every 2 units in x and every 2 units in y.",
+                },
+            ],
             description:
-                "Grid density to render on the graph (off, minor, medium, or major).",
+                'Grid line spacing on the graph: none, medium, dense, or two positive numbers giving the x and y spacing, such as grid="1 0.5".',
         };
 
         Object.assign(attributes, returnNumberDisplayAttributes());
@@ -399,14 +512,8 @@ export default class Graph extends BlockComponent {
 
     static returnChildGroups() {
         return [
-            {
-                group: "xLabels",
-                componentTypes: ["xLabel"],
-            },
-            {
-                group: "yLabels",
-                componentTypes: ["yLabel"],
-            },
+            returnAxisLabelChildGroup({ axis: "x" }),
+            returnAxisLabelChildGroup({ axis: "y" }),
             {
                 group: "shortDescriptions",
                 componentTypes: ["shortDescription"],
@@ -431,6 +538,7 @@ export default class Graph extends BlockComponent {
                     "triggerSet",
                     "booleanInput",
                     "textInput",
+                    "mathInput",
                 ],
             },
             {
@@ -459,51 +567,13 @@ export default class Graph extends BlockComponent {
             returnNumberDisplayStateVariableDefinitions(),
         );
 
-        stateVariableDefinitions.shortDescription = {
-            description: "A short accessibility description of the graph.",
-            forRenderer: true,
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                shortDescriptionChild: {
-                    dependencyType: "child",
-                    childGroups: ["shortDescriptions"],
-                    variableNames: ["text"],
-                },
-                decorative: {
-                    dependencyType: "stateVariable",
-                    variableName: "decorative",
-                },
+        Object.assign(
+            stateVariableDefinitions,
+            returnShortDescriptionStateVariableDefinition({
+                componentType: "graph",
+                componentName: "graph",
             }),
-            definition({ dependencyValues }) {
-                let shortDescription = "";
-                const diagnostics = [];
-                if (dependencyValues.shortDescriptionChild.length > 0) {
-                    const shortDescriptionChild =
-                        dependencyValues.shortDescriptionChild[
-                            dependencyValues.shortDescriptionChild.length - 1
-                        ];
-
-                    shortDescription =
-                        shortDescriptionChild.stateValues.text.trim();
-                }
-                if (shortDescription === "" && !dependencyValues.decorative) {
-                    diagnostics.push({
-                        type: "accessibility",
-                        level: 1,
-                        message:
-                            "For accessibility, `<graph>` must either have a short description or be specified as decorative.",
-                    });
-                }
-
-                return {
-                    setValue: { shortDescription },
-                    sendDiagnostics: diagnostics,
-                };
-            },
-        };
+        );
 
         stateVariableDefinitions.descriptionChildInd = {
             forRenderer: true,
@@ -554,167 +624,11 @@ export default class Graph extends BlockComponent {
             },
         };
 
-        stateVariableDefinitions.xLabel = {
-            description: "The x-axis label text.",
-            forRenderer: true,
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "label",
-                addStateVariablesShadowingStateVariables: {
-                    hasLatex: {
-                        stateVariableToShadow: "xLabelHasLatex",
-                    },
-                },
-            },
-            hasEssential: true,
-            defaultValue: "",
-            additionalStateVariablesDefined: [
-                {
-                    variableName: "xLabelHasLatex",
-                    forRenderer: true,
-                },
-            ],
-            returnDependencies: () => ({
-                xLabelChild: {
-                    dependencyType: "child",
-                    childGroups: ["xLabels"],
-                    variableNames: ["value", "hasLatex"],
-                },
-            }),
-            definition({ dependencyValues }) {
-                if (dependencyValues.xLabelChild.length > 0) {
-                    let xLabelChild =
-                        dependencyValues.xLabelChild[
-                            dependencyValues.xLabelChild.length - 1
-                        ];
-                    return {
-                        setValue: {
-                            xLabel: xLabelChild.stateValues.value,
-                            xLabelHasLatex: xLabelChild.stateValues.hasLatex,
-                        },
-                    };
-                } else {
-                    return {
-                        useEssentialOrDefaultValue: { xLabel: true },
-                        setValue: { xLabelHasLatex: false },
-                    };
-                }
-            },
-            inverseDefinition({
-                desiredStateVariableValues,
-                dependencyValues,
-            }) {
-                if (typeof desiredStateVariableValues.xLabel !== "string") {
-                    return { success: false };
-                }
-
-                if (dependencyValues.xLabelChild.length > 0) {
-                    let lastLabelInd = dependencyValues.xLabelChild.length - 1;
-                    return {
-                        success: true,
-                        instructions: [
-                            {
-                                setDependency: "xLabelChild",
-                                desiredValue: desiredStateVariableValues.xLabel,
-                                childIndex: lastLabelInd,
-                                variableIndex: 0,
-                            },
-                        ],
-                    };
-                } else {
-                    return {
-                        success: true,
-                        instructions: [
-                            {
-                                setEssentialValue: "xLabel",
-                                value: desiredStateVariableValues.xLabel,
-                            },
-                        ],
-                    };
-                }
-            },
-        };
-
-        stateVariableDefinitions.yLabel = {
-            description: "The y-axis label text.",
-            forRenderer: true,
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "label",
-                addStateVariablesShadowingStateVariables: {
-                    hasLatex: {
-                        stateVariableToShadow: "yLabelHasLatex",
-                    },
-                },
-            },
-            hasEssential: true,
-            defaultValue: "",
-            additionalStateVariablesDefined: [
-                {
-                    variableName: "yLabelHasLatex",
-                    forRenderer: true,
-                },
-            ],
-            returnDependencies: () => ({
-                yLabelChild: {
-                    dependencyType: "child",
-                    childGroups: ["yLabels"],
-                    variableNames: ["value", "hasLatex"],
-                },
-            }),
-            definition({ dependencyValues }) {
-                if (dependencyValues.yLabelChild.length > 0) {
-                    let yLabelChild =
-                        dependencyValues.yLabelChild[
-                            dependencyValues.yLabelChild.length - 1
-                        ];
-                    return {
-                        setValue: {
-                            yLabel: yLabelChild.stateValues.value,
-                            yLabelHasLatex: yLabelChild.stateValues.hasLatex,
-                        },
-                    };
-                } else {
-                    return {
-                        useEssentialOrDefaultValue: { yLabel: true },
-                        setValue: { yLabelHasLatex: false },
-                    };
-                }
-            },
-            inverseDefinition({
-                desiredStateVariableValues,
-                dependencyValues,
-            }) {
-                if (typeof desiredStateVariableValues.yLabel !== "string") {
-                    return { success: false };
-                }
-
-                if (dependencyValues.yLabelChild.length > 0) {
-                    let lastLabelInd = dependencyValues.yLabelChild.length - 1;
-                    return {
-                        success: true,
-                        instructions: [
-                            {
-                                setDependency: "yLabelChild",
-                                desiredValue: desiredStateVariableValues.yLabel,
-                                childIndex: lastLabelInd,
-                                variableIndex: 0,
-                            },
-                        ],
-                    };
-                } else {
-                    return {
-                        success: true,
-                        instructions: [
-                            {
-                                setEssentialValue: "yLabel",
-                                value: desiredStateVariableValues.yLabel,
-                            },
-                        ],
-                    };
-                }
-            },
-        };
+        Object.assign(
+            stateVariableDefinitions,
+            returnAxisLabelStateVariableDefinitions({ axis: "x" }),
+            returnAxisLabelStateVariableDefinitions({ axis: "y" }),
+        );
 
         stateVariableDefinitions.graphicalDescendants = {
             forRenderer: true,
@@ -881,105 +795,10 @@ export default class Graph extends BlockComponent {
             },
         };
 
-        stateVariableDefinitions.size = {
-            description: "The size of the graph.",
-            public: true,
-            defaultValue: "medium",
-            hasEssential: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                specifiedSize: {
-                    dependencyType: "stateVariable",
-                    variableName: "specifiedSize",
-                },
-                widthAttr: {
-                    dependencyType: "attributeComponent",
-                    attributeName: "width",
-                    variableNames: ["componentSize"],
-                },
-            }),
-            definition({ dependencyValues, usedDefault }) {
-                const defaultSize = "medium";
-
-                if (!usedDefault.specifiedSize) {
-                    return {
-                        setValue: { size: dependencyValues.specifiedSize },
-                    };
-                } else if (dependencyValues.widthAttr) {
-                    let componentSize =
-                        dependencyValues.widthAttr.stateValues.componentSize;
-                    if (componentSize === null) {
-                        return {
-                            setValue: { size: defaultSize },
-                        };
-                    }
-                    let { isAbsolute, size: widthSize } = componentSize;
-                    let size;
-
-                    if (isAbsolute) {
-                        for (let [
-                            ind,
-                            pixels,
-                        ] of orderedWidthMidpoints.entries()) {
-                            if (widthSize <= pixels) {
-                                size = sizePossibilities[ind];
-                                break;
-                            }
-                        }
-                        if (!size) {
-                            size = defaultSize;
-                        }
-                    } else {
-                        for (let [
-                            ind,
-                            percent,
-                        ] of orderedPercentWidthMidpoints.entries()) {
-                            if (widthSize <= percent) {
-                                size = sizePossibilities[ind];
-                                break;
-                            }
-                        }
-                        if (!size) {
-                            size = defaultSize;
-                        }
-                    }
-                    return {
-                        setValue: { size },
-                    };
-                } else {
-                    return {
-                        useEssentialOrDefaultValue: { size: true },
-                    };
-                }
-            },
-        };
-
-        stateVariableDefinitions.width = {
-            description: "The width of the graph.",
-            public: true,
-            forRenderer: true,
-            shadowingInstructions: {
-                createComponentOfType: "componentSize",
-            },
-            returnDependencies: () => ({
-                size: {
-                    dependencyType: "stateVariable",
-                    variableName: "size",
-                },
-            }),
-            definition({ dependencyValues }) {
-                let width = {
-                    isAbsolute: true,
-                    size: widthsBySize[dependencyValues.size],
-                };
-
-                return {
-                    setValue: { width },
-                };
-            },
-        };
+        Object.assign(
+            stateVariableDefinitions,
+            returnSizeStateVariableDefinitions({ componentName: "graph" }),
+        );
 
         stateVariableDefinitions.aspectRatioFromAxisScales = {
             returnDependencies: () => ({
@@ -1025,13 +844,13 @@ export default class Graph extends BlockComponent {
                             dependencyType: "stateVariable",
                             variableName: "aspectRatioFromAxisScales",
                         },
-                        xscale: {
+                        xScale: {
                             dependencyType: "stateVariable",
-                            variableName: "xscale",
+                            variableName: "xScale",
                         },
-                        yscale: {
+                        yScale: {
                             dependencyType: "stateVariable",
-                            variableName: "yscale",
+                            variableName: "yScale",
                         },
                     };
                 } else {
@@ -1055,7 +874,7 @@ export default class Graph extends BlockComponent {
             definition({ dependencyValues }) {
                 if (dependencyValues.aspectRatioFromAxisScales) {
                     let aspectRatio =
-                        dependencyValues.xscale / dependencyValues.yscale;
+                        dependencyValues.xScale / dependencyValues.yScale;
                     return {
                         setValue: { aspectRatio },
                     };
@@ -1828,7 +1647,53 @@ export default class Graph extends BlockComponent {
             },
         };
 
-        stateVariableDefinitions.xscale = {
+        function returnScaleInverseDefinition({
+            scaleStateVariable,
+            minDependency,
+            maxDependency,
+        }) {
+            return function inverseDefinition({
+                desiredStateVariableValues,
+                dependencyValues,
+            }) {
+                let desiredScale =
+                    desiredStateVariableValues[scaleStateVariable];
+                let midpoint =
+                    dependencyValues[minDependency] / 2 +
+                    dependencyValues[maxDependency] / 2;
+                let desiredMin = midpoint - desiredScale / 2;
+                let desiredMax = midpoint + desiredScale / 2;
+
+                if (
+                    !Number.isFinite(desiredScale) ||
+                    desiredScale <= 0 ||
+                    !Number.isFinite(midpoint) ||
+                    !Number.isFinite(desiredMin) ||
+                    !Number.isFinite(desiredMax)
+                ) {
+                    // Reject non-positive scales: they would make min ≥ max,
+                    // which breaks consumers that treat the scale as a positive
+                    // magnitude (e.g. aspectRatio = xScale / yScale).
+                    return { success: false };
+                }
+
+                return {
+                    success: true,
+                    instructions: [
+                        {
+                            setDependency: minDependency,
+                            desiredValue: desiredMin,
+                        },
+                        {
+                            setDependency: maxDependency,
+                            desiredValue: desiredMax,
+                        },
+                    ],
+                };
+            };
+        }
+
+        stateVariableDefinitions.xScale = {
             description: "Scale used along the x axis (xMax − xMin).",
             public: true,
             shadowingInstructions: {
@@ -1849,13 +1714,18 @@ export default class Graph extends BlockComponent {
             definition({ dependencyValues }) {
                 return {
                     setValue: {
-                        xscale: dependencyValues.xMax - dependencyValues.xMin,
+                        xScale: dependencyValues.xMax - dependencyValues.xMin,
                     },
                 };
             },
+            inverseDefinition: returnScaleInverseDefinition({
+                scaleStateVariable: "xScale",
+                minDependency: "xMin",
+                maxDependency: "xMax",
+            }),
         };
 
-        stateVariableDefinitions.yscale = {
+        stateVariableDefinitions.yScale = {
             description: "Scale used along the y axis (yMax − yMin).",
             public: true,
             shadowingInstructions: {
@@ -1876,10 +1746,15 @@ export default class Graph extends BlockComponent {
             definition({ dependencyValues }) {
                 return {
                     setValue: {
-                        yscale: dependencyValues.yMax - dependencyValues.yMin,
+                        yScale: dependencyValues.yMax - dependencyValues.yMin,
                     },
                 };
             },
+            inverseDefinition: returnScaleInverseDefinition({
+                scaleStateVariable: "yScale",
+                minDependency: "yMin",
+                maxDependency: "yMax",
+            }),
         };
 
         stateVariableDefinitions.gridAttrCompName = {
@@ -1942,13 +1817,32 @@ export default class Graph extends BlockComponent {
                     returnNumberDisplayAttributeComponentShadowing(),
             },
             forRenderer: true,
-            stateVariablesDeterminingDependencies: ["gridAttrCompChildren"],
+            stateVariablesDeterminingDependencies: [
+                "gridAttrCompName",
+                "gridAttrCompChildren",
+            ],
             returnDependencies({ stateValues }) {
                 if (stateValues.gridAttrCompChildren) {
                     let dependencies = {
                         gridAttrCompChildren: {
                             dependencyType: "stateVariable",
                             variableName: "gridAttrCompChildren",
+                        },
+                        // Every child of the attribute, used only to tell a
+                        // value the author spelled out from one that came from
+                        // elsewhere. It has to be every child rather than
+                        // `gridAttrCompChildren`, because a child a text
+                        // attribute cannot accept at all — `grid="$aPoint"` —
+                        // is missing from `gridAttrCompChildren` and from the
+                        // attribute's value alike. Judged on what survives, the
+                        // value would look authored, and the warning below
+                        // would quote the empty remnant the dropped child left
+                        // behind, on top of the "invalid format" warning that
+                        // child already raised.
+                        allGridAttrChildren: {
+                            dependencyType: "child",
+                            parentIdx: stateValues.gridAttrCompName,
+                            includeAllChildren: true,
                         },
                         gridAttr: {
                             dependencyType: "attributeComponent",
@@ -1981,9 +1875,37 @@ export default class Graph extends BlockComponent {
                     };
                 }
 
-                let grid = dependencyValues.gridAttr.stateValues.value
-                    .toLowerCase()
-                    .trim();
+                const attrChildren = dependencyValues.gridAttrCompChildren;
+                const attrValue = dependencyValues.gridAttr.stateValues.value;
+
+                // Only a value the author spelled out can be reported as
+                // invalid. Once the attribute contains a reference, an unusable
+                // value is not reliably a mistake: it is usually a `<mathInput>`
+                // the reader has not filled in yet — warning about that would
+                // fire on every load — or one they have filled in badly, which
+                // is not the author's to fix. The cost is that a reference to a
+                // value the author got wrong, as in `grid="1 $negativeNumber"`,
+                // goes unreported.
+                const authoredInFull =
+                    dependencyValues.allGridAttrChildren.every(
+                        (child) => typeof child === "string",
+                    );
+
+                const noGrid = () => ({
+                    setValue: { grid: "none" },
+                    setCreateComponentOfType: { grid: "text" },
+                    sendDiagnostics: authoredInFull
+                        ? [
+                              codedDiagnostic({
+                                  type: "warning",
+                                  code: "doenet-w0119",
+                                  args: { grid: attrValue },
+                              }),
+                          ]
+                        : [],
+                });
+
+                let grid = attrValue.toLowerCase().trim();
                 if (grid === "true") {
                     grid = "medium";
                 } else if (grid === "false") {
@@ -1996,124 +1918,27 @@ export default class Graph extends BlockComponent {
                     };
                 }
 
-                // group the children separated by spaces contained in string children
-
-                let groupedChildren = [];
-                let pieces = [];
-
-                for (let child of dependencyValues.gridAttrCompChildren) {
-                    if (typeof child !== "string") {
-                        pieces.push(child);
-                    } else {
-                        let stringPieces = child.split(/\s+/);
-                        let s0 = stringPieces[0];
-
-                        if (s0 === "") {
-                            // started with a space
-                            if (pieces.length > 0) {
-                                groupedChildren.push(pieces);
-                                pieces = [];
-                            }
-                        } else {
-                            pieces.push(s0);
-                        }
-
-                        for (let s of stringPieces.slice(1)) {
-                            // if have more than one piece, must have had a space in between pieces
-                            if (pieces.length > 0) {
-                                groupedChildren.push(pieces);
-                                pieces = [];
-                            }
-                            if (s !== "") {
-                                pieces.push(s);
-                            }
-                        }
-                    }
-                }
-
-                if (pieces.length > 0) {
-                    groupedChildren.push(pieces);
-                }
+                const groupedChildren = groupGridAttrChildren(attrChildren);
 
                 if (groupedChildren.length < 2) {
                     // if don't have at least two pieces separated by spaces, it isn't valid
-                    return {
-                        setValue: { grid: "none" },
-                        setCreateComponentOfType: { grid: "text" },
-                    };
+                    return noGrid();
                 }
 
                 grid = [];
 
                 for (let group of groupedChildren) {
-                    // each of the two grouped children must represent a positive number
-                    if (group.length === 1) {
-                        let child = group[0];
-                        if (typeof child === "string") {
-                            let num = me.fromText(child).evaluate_to_constant();
-                            if (num > 0) {
-                                grid.push(num);
-                            } else {
-                                return {
-                                    setValue: { grid: "none" },
-                                    setCreateComponentOfType: { grid: "text" },
-                                };
-                            }
-                        } else {
-                            // have a single non-string child.  See if it was adapted from number/math
-                            let childInd =
-                                dependencyValues.gridAttrCompChildren.indexOf(
-                                    child,
-                                );
+                    // each of the grouped children must represent a positive number
+                    const spacing = gridSpacingFromGroup(
+                        group,
+                        dependencyValues,
+                    );
 
-                            let num =
-                                dependencyValues["childAdapter" + childInd];
-                            if (num instanceof me.class) {
-                                num = num.evaluate_to_constant();
-                            }
-
-                            if (num > 0) {
-                                grid.push(num);
-                            } else {
-                                return {
-                                    setValue: { grid: "none" },
-                                    setCreateComponentOfType: { grid: "text" },
-                                };
-                            }
-                        }
-                    } else {
-                        // have a group of multiple children
-                        // multiply them together
-                        let num = 1;
-                        for (let piece of group) {
-                            if (typeof piece === "string") {
-                                num *= me
-                                    .fromText(piece)
-                                    .evaluate_to_constant();
-                            } else {
-                                let childInd =
-                                    dependencyValues.gridAttrCompChildren.indexOf(
-                                        piece,
-                                    );
-
-                                let factor =
-                                    dependencyValues["childAdapter" + childInd];
-                                if (factor instanceof me.class) {
-                                    factor = factor.evaluate_to_constant();
-                                }
-                                num *= factor;
-                            }
-                        }
-
-                        if (num > 0) {
-                            grid.push(num);
-                        } else {
-                            return {
-                                setValue: { grid: "none" },
-                                setCreateComponentOfType: { grid: "text" },
-                            };
-                        }
+                    if (spacing === null) {
+                        return noGrid();
                     }
+
+                    grid.push(spacing);
                 }
 
                 return {
@@ -2192,19 +2017,11 @@ export default class Graph extends BlockComponent {
     }
 
     async addChildren(args) {
-        const dynamicChildren = this.definingChildren.findLast(
-            (child) => child.componentType === "_dynamicChildren",
-        );
-
-        return await dynamicChildren.addChildren(args);
+        return await addChildrenToDynamicChild(this, args);
     }
 
     async deleteChildren(args) {
-        const dynamicChildren = this.definingChildren.findLast(
-            (child) => child.componentType === "_dynamicChildren",
-        );
-
-        return await dynamicChildren.deleteChildren(args);
+        return await deleteChildrenFromDynamicChild(this, args);
     }
 
     recordVisibilityChange({ isVisible }) {

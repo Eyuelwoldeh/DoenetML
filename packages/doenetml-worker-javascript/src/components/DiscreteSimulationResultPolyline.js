@@ -1,6 +1,9 @@
 import GraphicalComponent from "./abstract/GraphicalComponent";
 import me from "math-expressions";
-import { vectorOperators } from "@doenet/utils";
+import {
+    returnGraphicalStyleDescriptionDefinitions,
+    vectorOperators,
+} from "@doenet/utils";
 
 export default class DiscreteSimulationResultPolyline extends GraphicalComponent {
     constructor(args) {
@@ -52,72 +55,13 @@ export default class DiscreteSimulationResultPolyline extends GraphicalComponent
     static returnStateVariableDefinitions() {
         let stateVariableDefinitions = super.returnStateVariableDefinitions();
 
-        stateVariableDefinitions.styleDescription = {
-            description: "A textual description of the polyline's style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
+        Object.assign(
+            stateVariableDefinitions,
+            returnGraphicalStyleDescriptionDefinitions({
+                kind: "stroke",
+                noun: "polyline",
             }),
-            definition: function ({ dependencyValues }) {
-                let lineColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWordDarkMode;
-                } else {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWord;
-                }
-
-                let curveDescription =
-                    dependencyValues.selectedStyle.lineWidthWord;
-                if (dependencyValues.selectedStyle.lineStyleWord) {
-                    if (curveDescription) {
-                        curveDescription += " ";
-                    }
-                    curveDescription +=
-                        dependencyValues.selectedStyle.lineStyleWord;
-                }
-
-                if (curveDescription) {
-                    curveDescription += " ";
-                }
-
-                curveDescription += lineColorWord;
-
-                return { setValue: { styleDescription: curveDescription } };
-            },
-        };
-
-        stateVariableDefinitions.styleDescriptionWithNoun = {
-            description: 'Style description including the word "polyline".',
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                styleDescription: {
-                    dependencyType: "stateVariable",
-                    variableName: "styleDescription",
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let styleDescriptionWithNoun =
-                    dependencyValues.styleDescription + " polyline";
-
-                return { setValue: { styleDescriptionWithNoun } };
-            },
-        };
+        );
 
         stateVariableDefinitions.allIterates = {
             returnDependencies: () => ({
@@ -443,14 +387,12 @@ export default class DiscreteSimulationResultPolyline extends GraphicalComponent
                     nxPty = numericalVertices[i]?.[1];
 
                     // only implement for constants
-                    if (
-                        !(
-                            Number.isFinite(prPtx) &&
-                            Number.isFinite(prPty) &&
-                            Number.isFinite(nxPtx) &&
-                            Number.isFinite(nxPty)
-                        )
-                    ) {
+                    if (!(
+                        Number.isFinite(prPtx) &&
+                        Number.isFinite(prPty) &&
+                        Number.isFinite(nxPtx) &&
+                        Number.isFinite(nxPty)
+                    )) {
                         vals.push(null);
                     } else {
                         let BA1sub = nxPtx - prPtx;
@@ -480,6 +422,15 @@ export default class DiscreteSimulationResultPolyline extends GraphicalComponent
 
                             let x1 = variables.x1?.evaluate_to_constant();
                             let x2 = variables.x2?.evaluate_to_constant();
+
+                            // A point with a non-numeric coordinate has no
+                            // nearest point; leave it where it is. See the
+                            // note on `<polygon>`'s `nearestPoint` for why the
+                            // guard was added and why it stays now that the
+                            // engine answers `NaN` rather than `null`.
+                            if (!(Number.isFinite(x1) && Number.isFinite(x2))) {
+                                return {};
+                            }
 
                             let prevPtx, prevPty;
                             let nextPtx = numericalVertices[0][0];

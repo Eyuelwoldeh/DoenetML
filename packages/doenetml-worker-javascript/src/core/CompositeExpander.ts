@@ -1,4 +1,6 @@
 import type Core from "../Core";
+import { codedDiagnostic } from "../utils/diagnostics";
+import { errorComponentState } from "../utils/dast/errors";
 import { deepClone } from "@doenet/utils";
 import {
     deriveChildResultsFromDefiningChildren,
@@ -369,12 +371,10 @@ export async function expandCompositeComponent({
 
     const newNComponents = result.nComponents;
 
-    if (
-        !(
-            Number.isInteger(newNComponents) &&
-            newNComponents >= core._components.length
-        )
-    ) {
+    if (!(
+        Number.isInteger(newNComponents) &&
+        newNComponents >= core._components.length
+    )) {
         throw Error(
             `Invalid nComponents returned by createSerializedReplacements for ${component.componentType}: `,
             newNComponents,
@@ -403,18 +403,11 @@ export async function expandCompositeComponent({
     if (result.replacements) {
         let serializedReplacements = result.replacements;
 
-        await addReplacementsToResolver({
-            core,
-            serializedReplacements,
-            component,
-        });
-
-        reserveComponentIndices(core, newNComponents);
-
         await createAndSetReplacements({
             core,
             component,
             serializedReplacements,
+            newNComponents,
         });
     } else {
         throw Error(
@@ -596,11 +589,20 @@ async function expandShadowingComposite({
     while (shadowedByShadowed?.length > 0) {
         if (shadowedByShadowed.includes(nameOfCompositeMediatingTheShadow)) {
             foundCircular = true;
-            let message = "Circular dependency detected";
-            if (component.attributes.createComponentOfType?.primitive) {
-                message += ` involving \`<${component.attributes.createComponentOfType.primitive.value}>\` component`;
-            }
-            message += ".";
+            // The same situation `<copy>` reports, so the same code. The
+            // component type is an argument rather than a clause spliced into
+            // the sentence, which is what lets the catalog say it either way.
+            const circular = codedDiagnostic({
+                type: "error",
+                code: "doenet-e0005",
+                args: {
+                    componentType:
+                        component.attributes.createComponentOfType?.primitive
+                            ?.value ?? "none",
+                },
+                position: compositeMediatingTheShadow.position,
+                sourceDoc: compositeMediatingTheShadow.sourceDoc,
+            });
             serializedReplacements = [
                 {
                     type: "serialized",
@@ -609,17 +611,12 @@ async function expandShadowingComposite({
                     attributes: {},
                     doenetAttributes: {},
                     children: [],
-                    state: { message },
+                    state: errorComponentState(circular.message, circular),
                     position: compositeMediatingTheShadow.position,
                     sourceDoc: compositeMediatingTheShadow.sourceDoc,
                 },
             ];
-            core.addDiagnostic({
-                type: "error",
-                message,
-                position: compositeMediatingTheShadow.position,
-                sourceDoc: compositeMediatingTheShadow.sourceDoc,
-            });
+            core.addDiagnostic(circular);
 
             break;
         }
@@ -682,18 +679,11 @@ async function expandShadowingComposite({
 
     component.replacementsWorkspace.replacementsCreated = stateIdInfo.num;
 
-    await addReplacementsToResolver({
-        core,
-        serializedReplacements,
-        component,
-    });
-
-    reserveComponentIndices(core, newNComponents);
-
     await createAndSetReplacements({
         core,
         component,
         serializedReplacements,
+        newNComponents,
     });
 
     if (shadowedComposite.replacementsToWithhold > 0) {
@@ -782,38 +772,85 @@ export function adjustForCreateComponentIdxName({
     }
 }
 
+/**
+ * Register `serializedReplacements` with the resolver and create them as
+ * `component`'s replacements.
+ *
+ * Both halves report the same way. A composite that cannot produce its
+ * replacements shows an error in its own place and the rest of the document
+ * builds around it; before, only the second half did that and a failure
+ * registering the names escaped expansion and blanked the page (#1950).
+ */
 export async function createAndSetReplacements({
     core,
     component,
     serializedReplacements,
+    newNComponents,
 }: {
     core: Core;
     component: any;
     serializedReplacements: any[];
+    newNComponents: number;
 }) {
+    // Reserve the indices ahead of the guard below, rather than after
+    // registering with the resolver as the callers used to:
+    // `createSerializedReplacements` has already handed them out, and now that
+    // a failure registering them is caught rather than fatal, a later expansion
+    // would otherwise hand out the same ones again.
+    reserveComponentIndices(core, newNComponents);
+
+    // Registering with the resolver stays outside the parameter stack, where it
+    // was when it was the caller's step, so that `setErrorReplacements` builds
+    // its `_error` component with the composite's shared parameters pushed
+    // however the failure arose.
+    let registrationFailure: any = null;
+    try {
+        await addReplacementsToResolver({
+            core,
+            serializedReplacements,
+            component,
+        });
+    } catch (e: any) {
+        registrationFailure = e;
+    }
+
     core.parameterStack.push(component.sharedParameters, false);
 
-    try {
-        let replacementResult = await createIsolatedComponents({
-            core,
-            serializedComponents: serializedReplacements,
-            ancestors: component.ancestors,
-            shadow: true,
-            componentsReplacementOf: component,
-        });
-        component.replacements = replacementResult.components;
-    } catch (e: any) {
-        console.error(e);
-        component.replacements = await core.setErrorReplacements({
-            composite: component,
-            message: e.message,
-        });
+    if (registrationFailure) {
+        await setReplacementsToError(core, component, registrationFailure);
+    } else {
+        try {
+            let replacementResult = await createIsolatedComponents({
+                core,
+                serializedComponents: serializedReplacements,
+                ancestors: component.ancestors,
+                shadow: true,
+                componentsReplacementOf: component,
+            });
+            component.replacements = replacementResult.components;
+        } catch (e: any) {
+            await setReplacementsToError(core, component, e);
+        }
     }
     core.parameterStack.pop();
 
     await core.dependencies.addBlockersFromChangedReplacements(component);
 
     component.isExpanded = true;
+}
+
+/**
+ * Put `component` into its error state: its replacements become the one
+ * `_error` component that carries `e`'s message, and the message is added to
+ * the document's diagnostics beside the composite.
+ */
+async function setReplacementsToError(core: Core, component: any, e: any) {
+    console.error(e);
+    component.replacements = await core.setErrorReplacements({
+        composite: component,
+        message: e.message,
+        source: e,
+    });
 }
 
 export async function replaceCompositeChildren({
@@ -962,11 +999,16 @@ export async function replaceCompositeChildren({
                 ),
             );
 
+            // An enclosing composite recorded this child as one entry of its
+            // own range; now that the child has become `replacements.length`
+            // children, widen that range and put the replacements' eligibility
+            // in the entry's place. `potentialListComponents` is indexed from
+            // the range's own `firstInd`, not from the parent's children.
             for (let otherCompositeObject of parent.compositeReplacementActiveRange) {
                 if (otherCompositeObject.lastInd >= childInd) {
                     otherCompositeObject.lastInd += replacements.length - 1;
                     otherCompositeObject.potentialListComponents.splice(
-                        childInd,
+                        childInd - otherCompositeObject.firstInd,
                         1,
                         ...replacementsCanBeInList,
                     );
@@ -1230,7 +1272,9 @@ export async function changeInactiveComponentAndDescendants({
  * keeps replacements past `replacementsToWithhold`. `stopIfHaveProp`,
  * if set, names a state variable: a composite that publicly exposes
  * that variable is treated as the replacement itself rather than
- * recursed into.
+ * recursed into. `stopAtListComposites` does the same for a composite
+ * that can be shown as a list (its state has `asList`), so that a copy
+ * of the replacements keeps the list, commas and all.
  */
 export function recursivelyReplaceCompositesWithReplacements({
     core,
@@ -1238,12 +1282,14 @@ export function recursivelyReplaceCompositesWithReplacements({
     recurseNonStandardComposites = false,
     includeWithheldReplacements = false,
     stopIfHaveProp,
+    stopAtListComposites = false,
 }: {
     core: Core;
     replacements: any[];
     recurseNonStandardComposites?: boolean;
     includeWithheldReplacements?: boolean;
     stopIfHaveProp?: string;
+    stopAtListComposites?: boolean;
 }): {
     compositesFound: number[];
     newReplacements: any[];
@@ -1280,6 +1326,11 @@ export function recursivelyReplaceCompositesWithReplacements({
             }
         }
 
+        if (stopAtListComposites && "asList" in replacement.state) {
+            newReplacements.push(replacement);
+            continue;
+        }
+
         compositesFound.push(replacement.componentIdx);
 
         if (!replacement.isExpanded) {
@@ -1308,6 +1359,7 @@ export function recursivelyReplaceCompositesWithReplacements({
             recurseNonStandardComposites,
             includeWithheldReplacements,
             stopIfHaveProp,
+            stopAtListComposites,
         });
         compositesFound.push(...recursionResult.compositesFound);
         newReplacements.push(...recursionResult.newReplacements);

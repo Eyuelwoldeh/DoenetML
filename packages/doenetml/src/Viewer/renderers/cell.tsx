@@ -3,16 +3,18 @@ import useDoenetRenderer, {
     UseDoenetRendererProps,
 } from "../useDoenetRenderer";
 import { addCommasForCompositeRanges } from "./utils/composites";
+import { cellInlinePadding } from "./utils/tabularCellPadding";
 
 interface CellSVs {
     [key: string]: any;
     hidden: boolean;
     _compositeReplacementActiveRange?: any;
-    bottom?: any;
+    bottomBorder?: any;
     colSpan: number;
+    columnIndex?: number | null;
     halign?: any;
     inHeader: boolean;
-    right?: any;
+    endBorder?: any;
     text: string;
 }
 
@@ -24,7 +26,13 @@ export default React.memo(function Cell(props: UseDoenetRendererProps) {
     }
 
     let properties: React.TdHTMLAttributes<unknown> = {
-        style: { padding: "3px 10px" },
+        style: {
+            paddingBlock: "3px",
+            paddingInline: cellInlinePadding({
+                columnIndex: SVs.columnIndex,
+                colSpan: SVs.colSpan,
+            }),
+        },
     };
 
     if (SVs.colSpan !== 1) {
@@ -33,24 +41,24 @@ export default React.memo(function Cell(props: UseDoenetRendererProps) {
     if (SVs.halign !== null) {
         properties.style!.textAlign = SVs.halign;
     }
-    if (SVs.bottom !== "none") {
+    if (SVs.bottomBorder !== "none") {
         properties.style!.borderBottomStyle = "solid";
-        if (SVs.bottom === "minor") {
+        if (SVs.bottomBorder === "minor") {
             properties.style!.borderBottomWidth = "thin";
-        } else if (SVs.bottom === "medium") {
+        } else if (SVs.bottomBorder === "medium") {
             properties.style!.borderBottomWidth = "medium";
         } else {
             properties.style!.borderBottomWidth = "thick";
         }
     }
-    if (SVs.right !== "none") {
-        properties.style!.borderRightStyle = "solid";
-        if (SVs.right === "minor") {
-            properties.style!.borderRightWidth = "thin";
-        } else if (SVs.right === "medium") {
-            properties.style!.borderRightWidth = "medium";
+    if (SVs.endBorder !== "none") {
+        properties.style!.borderInlineEndStyle = "solid";
+        if (SVs.endBorder === "minor") {
+            properties.style!.borderInlineEndWidth = "thin";
+        } else if (SVs.endBorder === "medium") {
+            properties.style!.borderInlineEndWidth = "medium";
         } else {
-            properties.style!.borderRightWidth = "thick";
+            properties.style!.borderInlineEndWidth = "thick";
         }
     }
 

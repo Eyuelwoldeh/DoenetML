@@ -1,5 +1,5 @@
 import InlineComponent from "../abstract/InlineComponent";
-import me from "math-expressions";
+import me, { dopri } from "math-expressions";
 import {
     returnSelectedStyleStateVariableDefinition,
     returnTextStyleDescriptionDefinitions,
@@ -11,6 +11,7 @@ import {
     returnNumberDisplayStateVariableDefinitions,
 } from "../../utils/numberDisplay";
 import { returnNVariables, roundForDisplay } from "../../utils/math";
+import { codedDiagnostic } from "../../utils/diagnostics";
 
 export default class ODESystem extends InlineComponent {
     static componentType = "odeSystem";
@@ -42,16 +43,6 @@ export default class ODESystem extends InlineComponent {
         };
 
         Object.assign(attributes, returnNumberDisplayAttributes());
-
-        attributes.renderMode = {
-            createComponentOfType: "text",
-            createStateVariable: "renderMode",
-            defaultValue: "align",
-            public: true,
-            forRenderer: true,
-            description:
-                'How to format the rendered system of equations (e.g. "align").',
-        };
 
         attributes.chunkSize = {
             createComponentOfType: "number",
@@ -242,17 +233,15 @@ export default class ODESystem extends InlineComponent {
                         x.equals(globalDependencyValues.independentVariable),
                     )
                 ) {
-                    const warning = {
-                        type: "warning",
-                        message:
-                            "Variables of `<odeSystem>` must be different than independent variable.",
-                    };
-                    if (globalDependencyValues.variables?.position) {
-                        warning.position =
-                            globalDependencyValues.variables.position;
-                    }
-
-                    diagnostics.push(warning);
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0045",
+                            position:
+                                globalDependencyValues.variables?.position ||
+                                undefined,
+                        }),
+                    );
                 }
 
                 if (validVariables.length < numDims) {
@@ -416,6 +405,17 @@ export default class ODESystem extends InlineComponent {
             targetVariableName: "initialCondition1",
             description:
                 "The initial value of the first dependent variable at the initial independent-variable value.",
+        };
+
+        // Fixed, not author-settable: the `latex` state variable below always
+        // builds an aligned environment, so this is the only mode that renders
+        // it correctly. There used to be a `renderMode` attribute, now
+        // deprecated and dropped during DAST normalization — see
+        // `attributeRemovals` in `parser/src/dast-normalize/deprecations.ts`.
+        stateVariableDefinitions.renderMode = {
+            forRenderer: true,
+            returnDependencies: () => ({}),
+            definition: () => ({ setValue: { renderMode: "align" } }),
         };
 
         stateVariableDefinitions.equationTag = {
@@ -630,11 +630,12 @@ export default class ODESystem extends InlineComponent {
                 }
 
                 if ([...new Set(varNames)].length !== varNames.length) {
-                    diagnostics.push({
-                        message:
-                            "Can't define ODE RHS functions with duplicate dependent variable names.",
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0046",
+                        }),
+                    );
                     valid = false;
                 }
 
@@ -644,11 +645,12 @@ export default class ODESystem extends InlineComponent {
                         x.subscripts_to_strings().f(),
                     );
                 } catch (e) {
-                    diagnostics.push({
-                        message:
-                            "Cannot define ODE RHS function.  Error creating mathjs function.",
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0047",
+                        }),
+                    );
                     valid = false;
                 }
 
@@ -863,7 +865,7 @@ export default class ODESystem extends InlineComponent {
                                     x0 = x0s;
                                 }
                                 let t0shifted = t0 + tind * chunkSize;
-                                let result = me.math.dopri(
+                                let result = dopri(
                                     t0shifted,
                                     t0shifted + chunkSize,
                                     x0,

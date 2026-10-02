@@ -5,10 +5,13 @@ import {
     DastAttribute,
     DastElement,
     DastElementContent,
+    DastNodes,
     DastRoot,
     DastRootContent,
 } from "../types";
-import { visit } from "../pretty-printer/normalize/utils/visit";
+import { visitIncludingPathIndices } from "../pretty-printer/normalize/utils/visit";
+import { mergeAdjacentTextInArray } from "../dast-to-xml/utils";
+import { trimWhitespace } from "../lezer-to-dast/gobble-function-arguments";
 import { isDastElement } from "../types-util";
 import { repeatSugar } from "./component-sugar/repeat";
 import { conditionalContentSugar } from "./component-sugar/conditionalContent";
@@ -17,8 +20,13 @@ import { postponeRenderSugar } from "./component-sugar/postponeRender";
 import { pluginEnforceValidNames } from "./enforce-valid-names";
 import { pretzelSugar } from "./component-sugar/pretzel";
 import { descriptionAttributeSugar } from "./component-sugar/descriptionAttribute";
-import { graphSugar } from "./component-sugar/graph";
+import { fractionInputSugar } from "./component-sugar/fractionInput";
+import {
+    nodeSupportsDynamicChildren,
+    addDynamicChildrenSugar,
+} from "./component-sugar/dynamicChildren";
 import { answerSugar } from "./component-sugar/answer";
+import { fieldFunctionSugar } from "./component-sugar/field";
 import { pluginApplyDeprecations } from "./deprecations";
 
 /**
@@ -50,7 +58,7 @@ export function normalizeDocumentDast(
  */
 const pluginChangeCdataToText: Plugin<[], DastRoot, DastRoot> = () => {
     return (tree) => {
-        visit(tree, (node) => {
+        visitIncludingPathIndices(tree, (node) => {
             if (node.type === "cdata") {
                 // @ts-ignore
                 node.type = "text";
@@ -68,14 +76,51 @@ const pluginRemoveCommentsInstructionsAndDocStrings: Plugin<
     DastRoot
 > = () => {
     return (tree) => {
-        visit(tree, (node) => {
+        const keep = (n: { type: string }) =>
+            n.type !== "comment" &&
+            n.type !== "instruction" &&
+            n.type !== "doctype";
+
+        visitIncludingPathIndices(tree, (node) => {
             if (node.type === "element" || node.type === "root") {
-                node.children = node.children.filter(
-                    (n) =>
-                        n.type !== "comment" &&
-                        n.type !== "instruction" &&
-                        n.type !== "doctype",
+                node.children = node.children.filter(keep);
+            }
+            // What is written between a reference's index brackets, and what is
+            // written as a function reference's arguments, is nobody's children,
+            // so the filter above never reaches either. The parser leaves a
+            // comment in both on purpose — dropping it there would make the
+            // pretty-printer destructive — which makes this the place it goes.
+            // Adjacent text is merged again so the whitespace either side of a
+            // removed comment trims as the single run of whitespace it reads as.
+            if (node.type === "function" && node.input) {
+                node.input = node.input.map((argument) =>
+                    argument.some((n) => !keep(n))
+                        ? (trimWhitespace(
+                              mergeAdjacentTextInArray(
+                                  argument.filter(keep) as DastNodes[],
+                              ),
+                          ) as typeof argument)
+                        : argument,
                 );
+            }
+            if (node.type === "macro" || node.type === "function") {
+                for (const pathPart of node.path) {
+                    for (const propIndex of pathPart.index) {
+                        if (propIndex.value.some((n) => !keep(n))) {
+                            // Trim again afterwards: the parser trimmed this
+                            // group while the comment was still in it, so
+                            // whitespace that was interior then is on the edge
+                            // now, and `$a[ <!-- c --> <n/> ]` would keep a
+                            // leading space the same index without a comment
+                            // does not have.
+                            propIndex.value = trimWhitespace(
+                                mergeAdjacentTextInArray(
+                                    propIndex.value.filter(keep) as DastNodes[],
+                                ),
+                            ) as typeof propIndex.value;
+                        }
+                    }
+                }
             }
         });
     };
@@ -120,7 +165,7 @@ const pluginEnsureDocumentElement: Plugin<[], DastRoot, DastRoot> = () => {
  */
 const pluginExpandAliasedElements: Plugin<[], DastRoot, DastRoot> = () => {
     return (tree) => {
-        visit(tree, (node) => {
+        visitIncludingPathIndices(tree, (node) => {
             if (isDastElement(node)) {
                 const expansion = ELEMENT_EXPANSIONS[node.name];
                 if (expansion) {
@@ -156,7 +201,7 @@ const pluginExpandAliasedElements: Plugin<[], DastRoot, DastRoot> = () => {
 const pluginAddCompatibilityNames: Plugin<[], DastRoot, DastRoot> = () => {
     const counts: Record<string, number> = {};
     return (tree) => {
-        visit(tree, (node) => {
+        visitIncludingPathIndices(tree, (node) => {
             if (isDastElement(node)) {
                 const typeCount = (counts[node.name] =
                     (counts[node.name] ?? 0) + 1);
@@ -178,7 +223,7 @@ const pluginAddCompatibilityNames: Plugin<[], DastRoot, DastRoot> = () => {
  */
 const pluginComponentSugar: Plugin<[], DastRoot, DastRoot> = () => {
     return (tree) => {
-        visit(tree, (node) => {
+        visitIncludingPathIndices(tree, (node) => {
             if (!isDastElement(node)) {
                 return;
             }
@@ -218,7 +263,6 @@ const pluginComponentSugar: Plugin<[], DastRoot, DastRoot> = () => {
                     pretzelSugar(node);
                     break;
                 case "graph":
-                    graphSugar(node);
                     descriptionAttributeSugar(node);
                     break;
                 case "answer":
@@ -234,6 +278,18 @@ const pluginComponentSugar: Plugin<[], DastRoot, DastRoot> = () => {
                 case "matrixInput":
                     descriptionAttributeSugar(node);
                     break;
+                case "fractionInput":
+                    descriptionAttributeSugar(node);
+                    fractionInputSugar(node);
+                    break;
+                case "slopeField":
+                case "vectorField":
+                    fieldFunctionSugar(node);
+                    break;
+            }
+
+            if (nodeSupportsDynamicChildren(node)) {
+                addDynamicChildrenSugar(node);
             }
         });
     };

@@ -5,6 +5,7 @@ import { CompletionItemKind } from "vscode-languageserver/browser";
 import { filterPositionInfo, DastMacro, DastElement } from "@doenet/parser";
 import { DoenetSourceObject } from "../src/doenet-source-object";
 import { doenetSchema } from "@doenet/static-assets/schema";
+import { SUPPORTED_LOCALES } from "@doenet/i18n";
 import { AutoCompleter, RustResolverAdapter } from "../src";
 import type { ResolverCore } from "../src";
 
@@ -57,6 +58,32 @@ const schema = {
         },
     ],
 };
+
+/**
+ * Characters that cannot continue a tag name, so typing one ends the tag name
+ * being typed. These are the ones the report for #1767 tabulated; the fix isn't
+ * keyed to a list, so any other such character (`!`, `#`, `,`, `;`, `"`, …)
+ * behaves the same way.
+ */
+const TAG_NAME_TERMINATORS = ["}", "{", ")", "]", "$", "&", "%", "\\"];
+
+/**
+ * The completion items offered against the real Doenet schema (so snippets and
+ * ranking are in play) for `withCursor`, a source string whose cursor position
+ * is marked with `|`. The marker is stripped before parsing.
+ */
+async function itemsFor(withCursor: string) {
+    const source = withCursor.replace("|", "");
+    const autoCompleter = new AutoCompleter(source, doenetSchema.elements);
+    return await autoCompleter.getCompletionItems(withCursor.indexOf("|"));
+}
+
+/**
+ * The labels of {@link itemsFor}'s items, in the order they are offered.
+ */
+async function labelsFor(withCursor: string) {
+    return (await itemsFor(withCursor)).map((item) => item.label);
+}
 
 describe("AutoCompleter", () => {
     it("Can suggest completions", async () => {
@@ -175,6 +202,18 @@ describe("AutoCompleter", () => {
         }
     });
 
+    it("inserts a full close tag on explicit Ctrl+Space in an unclosed body", async () => {
+        const source = `<aa>\n  `;
+        const autoCompleter = new AutoCompleter(source, schema.elements);
+        const items = await autoCompleter.getCompletionItems(
+            source.length,
+            undefined,
+            true,
+        );
+        expect(items.map((i) => i.label)).toEqual(["/aa>", "b", "c", "d"]);
+        expect(items[0].textEdit?.newText).toBe("</aa>");
+    });
+
     it("opens the top-level element menu on explicit Ctrl+Space in an empty document", async () => {
         const source = ``;
         const autoCompleter = new AutoCompleter(source, schema.elements);
@@ -202,6 +241,267 @@ describe("AutoCompleter", () => {
         expect(b?.textEdit).toBeUndefined();
         // The visible `<` already signals a tag, so no tag-form displayLabel.
         expect(b?.displayLabel).toBeUndefined();
+    });
+
+    it("suggests element names (not a close tag) when typing a tag name immediately before another tag (#1328)", async () => {
+        // `<aa><b<c></c></aa>` — error recovery parses the half-typed `<b` as a
+        // complete element wrapping `<c>`. The cursor right after `<b` used to
+        // look like `<b>`'s body and offer a `/b>` close-tag completion. It
+        // should instead offer element names that can go here, filtered by the
+        // typed text.
+        const source = `<aa><b<c></c></aa>`;
+        const autoCompleter = new AutoCompleter(source, schema.elements);
+        const offset = source.indexOf("<b") + 2; // right after `<b`
+        const items = await autoCompleter.getCompletionItems(offset);
+        expect(items.map((i) => i.label)).toEqual(["b"]);
+        expect(items.map((i) => i.label)).not.toContain("/b>");
+    });
+
+    it("suggests element names on explicit Ctrl+Space when the cursor is on a tag name immediately before another tag (#1328)", async () => {
+        // Same `<aa><b<c></c></aa>` shape, but invoked explicitly (Ctrl+Space)
+        // on a static cursor rather than reached by typing. Explicit invocation
+        // sets `showElementMenu`, which used to route this position to the
+        // "insert a new element before this tag" branch and surface the
+        // half-typed element's close tag (`/b>`). The `openTagName` position
+        // must win and offer element names filtered by the typed text.
+        const source = `<aa><b<c></c></aa>`;
+        const autoCompleter = new AutoCompleter(source, schema.elements);
+        const offset = source.indexOf("<b") + 2; // right after `<b`
+        const items = await autoCompleter.getCompletionItems(
+            offset,
+            undefined,
+            true,
+        );
+        expect(items.map((i) => i.label)).toEqual(["b"]);
+        expect(items.map((i) => i.label)).not.toContain("/b>");
+    });
+
+    it("suggests element names when a tag-name terminator follows the cursor (#1767)", async () => {
+        // `<aa><b}</aa>` — error recovery parses the half-typed `<b` plus the
+        // `}` that ends it as a complete `<b>` element holding `}` as text, so
+        // the cursor right after `<b` used to look like `<b>`'s body and offer
+        // nothing. It should offer element names filtered by the typed text,
+        // exactly as it does with no terminator present.
+        for (const terminator of TAG_NAME_TERMINATORS) {
+            const source = `<aa><b${terminator}</aa>`;
+            const autoCompleter = new AutoCompleter(source, schema.elements);
+            const offset = source.indexOf("<b") + 2; // right after `<b`
+            const items = await autoCompleter.getCompletionItems(offset);
+            expect({ terminator, labels: items.map((i) => i.label) }).toEqual({
+                terminator,
+                labels: ["b"],
+            });
+        }
+
+        // `/` ends the tag name too, through a self-closing tag whose `>` has
+        // yet to be typed, and was equally empty before.
+        const selfClosingSource = `<aa><b/</aa>`;
+        const selfClosing = new AutoCompleter(
+            selfClosingSource,
+            schema.elements,
+        );
+        const selfClosingItems = await selfClosing.getCompletionItems(
+            selfClosingSource.indexOf("<b") + 2, // right after `<b`
+        );
+        expect(selfClosingItems.map((i) => i.label)).toEqual(["b"]);
+    });
+
+    it("offers the same items with and without a tag-name terminator (#1767)", async () => {
+        // The terminator sits *after* the cursor, so it must not perturb the
+        // completions at all: the same elements, in the same order, with the
+        // same replacement ranges on the snippet items (which replace `<m`,
+        // leaving the terminator in place). Checked against the real schema,
+        // where snippets and ranking are in play.
+        const expected = await itemsFor(`<p><m|</p>`);
+        expect(expected.map((i) => i.label)).toContain("math");
+        for (const terminator of TAG_NAME_TERMINATORS) {
+            const items = await itemsFor(`<p><m|${terminator}</p>`);
+            expect({ terminator, items }).toEqual({
+                terminator,
+                items: expected,
+            });
+        }
+
+        // The shape from the issue: a tag typed inside a brace group of an
+        // `<me>`, where `closeBrackets` has already supplied the `}`. The
+        // suggestions come from `<me>`'s allowed children, and again match the
+        // terminator-free source exactly.
+        const inMe = await itemsFor(`<me>\\frac{<m|}</me>`);
+        expect(inMe.map((i) => i.label)).toContain("mathInput");
+        expect(inMe).toEqual(await itemsFor(`<me>\\frac{<m|</me>`));
+    });
+
+    it("keeps suggesting a hyphenated snippet name across its hyphens (#1780)", async () => {
+        // Nine of the ten completion snippets have hyphenated names, and the
+        // menu emptied on the hyphen: `<answer-` was read as the close tag
+        // that follows it, so the only item offered was `/p>` — whose edit
+        // spanned the typed `<answer-`. Typing the hyphen must keep the
+        // snippet that the author is reaching for.
+        expect(await labelsFor(`<p><answer-|</p>`)).toEqual(["answer-labeled"]);
+        expect(await labelsFor(`<p><multiple-|</p>`)).toEqual([
+            "multiple-choice-answer",
+            "multiple-choice-select-multiple-answer",
+        ]);
+        // Unchanged one character earlier, where the name still ends in a word
+        // character — the hyphen is the only thing that used to break it.
+        expect(await labelsFor(`<p><multiple|</p>`)).toEqual(
+            await labelsFor(`<p><multiple-|</p>`),
+        );
+
+        // The same at the top level, where the name being typed is all there
+        // is and no close tag follows it.
+        expect(await labelsFor(`<answer-|`)).toEqual(["answer-labeled"]);
+        expect(await labelsFor(`<p>hi</p>\n<multiple-|`)).toEqual([
+            "multiple-choice-answer",
+            "multiple-choice-select-multiple-answer",
+        ]);
+
+        // A name matching nothing offers nothing — in particular not the
+        // enclosing element's close tag, whose edit would have replaced `<my-`.
+        // (`ü` because `\w` is ASCII-only, so a name ending in a non-ASCII
+        // letter was read the same way a hyphenated one was.)
+        for (const nameEnd of ["-", ".", ":", "ü"]) {
+            const labels = await labelsFor(`<p><my${nameEnd}|</p>`);
+            expect({ nameEnd, labels }).toEqual({ nameEnd, labels: [] });
+        }
+
+        // The enclosing element's close tag is still offered where it belongs:
+        // on a close tag the author is actually typing.
+        expect(await labelsFor(`<p>hello</p|`)).toContain("/p>");
+    });
+
+    it("matches element names by substring, not only by prefix (#1328)", async () => {
+        // Typing part of a tag name that appears in the *middle* of other tag
+        // names should still surface those tags (e.g. `num` -> `isNumber`), so
+        // authors don't have to remember how a name begins.
+        const elements = [
+            {
+                name: "root",
+                children: ["number", "isNumber", "text"],
+                attributes: [],
+                top: true,
+                acceptsStringChildren: false,
+            },
+            {
+                name: "number",
+                children: [],
+                attributes: [],
+                acceptsStringChildren: false,
+            },
+            {
+                name: "isNumber",
+                children: [],
+                attributes: [],
+                acceptsStringChildren: false,
+            },
+            {
+                name: "text",
+                children: [],
+                attributes: [],
+                acceptsStringChildren: false,
+            },
+        ];
+        const source = `<root><num</root>`;
+        const autoCompleter = new AutoCompleter(source, elements);
+        const offset = source.indexOf("<num") + 4; // right after `<num`
+        const labels = (await autoCompleter.getCompletionItems(offset)).map(
+            (i) => i.label,
+        );
+        expect(labels).toContain("number");
+        expect(labels).toContain("isNumber");
+        expect(labels).not.toContain("text");
+    });
+
+    it("assigns sortText that ranks prefix element-name matches before substring matches (#1328)", async () => {
+        const elements = [
+            {
+                name: "root",
+                children: ["isNumber", "number", "text"],
+                attributes: [],
+                top: true,
+                acceptsStringChildren: false,
+            },
+            {
+                name: "isNumber",
+                children: [],
+                attributes: [],
+                acceptsStringChildren: false,
+            },
+            {
+                name: "number",
+                children: [],
+                attributes: [],
+                acceptsStringChildren: false,
+            },
+            {
+                name: "text",
+                children: [],
+                attributes: [],
+                acceptsStringChildren: false,
+            },
+        ];
+        const source = `<root><num</root>`;
+        const autoCompleter = new AutoCompleter(source, elements);
+        const offset = source.indexOf("<num") + 4; // right after `<num`
+        const items = await autoCompleter.getCompletionItems(offset);
+        const number = items.find((i) => i.label === "number");
+        const isNumber = items.find((i) => i.label === "isNumber");
+        expect(number?.sortText).toBeDefined();
+        expect(isNumber?.sortText).toBeDefined();
+        expect(number!.sortText! < isNumber!.sortText!).toBe(true);
+    });
+
+    it("opens the element menu when `<` is typed immediately before another tag (#1328)", async () => {
+        // `<aa><<c></c></aa>` — the author types `<` to insert a new element in
+        // front of `<c>`. The menu should open with the container's allowed
+        // children rather than staying closed (which left the popup from never
+        // opening as the author kept typing).
+        const source = `<aa><<c></c></aa>`;
+        const autoCompleter = new AutoCompleter(source, schema.elements);
+        const offset = source.indexOf("<aa>") + 5; // right after the first inner `<`
+        const items = await autoCompleter.getCompletionItems(offset);
+        expect(items.map((i) => i.label)).toEqual(["b", "c", "d"]);
+    });
+
+    it("preserves the parent close-tag option when `<` is typed before another tag in an unclosed parent (#1328)", async () => {
+        // Same recovered empty-placeholder shape as the previous test, but the
+        // surrounding <aa> is still open. Match the normal body completion
+        // behavior by keeping the close-tag option before allowed children.
+        // The close-tag item must now include a textEdit (to replace the `<`
+        // with `</aa>`) so VS Code does not duplicate the `<` on acceptance.
+        const source = `<aa><<c></c>`;
+        const autoCompleter = new AutoCompleter(source, schema.elements);
+        const offset = source.indexOf("<aa>") + 5; // right after the first inner `<`
+        const items = await autoCompleter.getCompletionItems(offset);
+        expect(items.map((i) => i.label)).toEqual(["/aa>", "b", "c", "d"]);
+        expect(items[0].textEdit?.newText).toBe("</aa>");
+        expect(items[0].filterText).toBe("</aa>");
+    });
+
+    it("inserts a full close tag when explicit completion is invoked before another tag in an unclosed parent (#1328)", async () => {
+        // Without a typed `<`, the close-tag item needs a textEdit that inserts
+        // the full close tag. Element items already do this via their
+        // insertLeadingBracket path.
+        const source = `<aa><c></c>`;
+        const autoCompleter = new AutoCompleter(source, schema.elements);
+        const offset = source.indexOf("<c>");
+        const items = await autoCompleter.getCompletionItems(
+            offset,
+            undefined,
+            true,
+        );
+        expect(items.map((i) => i.label)).toEqual(["/aa>", "b", "c", "d"]);
+        expect(items[0].textEdit?.newText).toBe("</aa>");
+    });
+
+    it("opens the top-level element menu when `<` is typed before a top-level tag (#1328)", async () => {
+        // `<<aa></aa>` at the document start: the menu should offer top-level
+        // elements, climbing past the half-typed empty-named placeholder.
+        const source = `<<aa></aa>`;
+        const autoCompleter = new AutoCompleter(source, schema.elements);
+        const offset = 1; // right after the first `<`
+        const items = await autoCompleter.getCompletionItems(offset);
+        expect(items.map((i) => i.label)).toContain("aa");
     });
 
     it("Adds quotes via textEdit when completing right after `=`", async () => {
@@ -504,8 +804,22 @@ describe("AutoCompleter", () => {
             expect(elm).toMatchInlineSnapshot(`
               [
                 {
+                  "filterText": "</a>",
                   "kind": 10,
                   "label": "/a>",
+                  "textEdit": {
+                    "newText": "</a>",
+                    "range": {
+                      "end": {
+                        "character": 5,
+                        "line": 0,
+                      },
+                      "start": {
+                        "character": 4,
+                        "line": 0,
+                      },
+                    },
+                  },
                 },
               ]
             `);
@@ -518,8 +832,22 @@ describe("AutoCompleter", () => {
             expect(elm).toMatchInlineSnapshot(`
               [
                 {
+                  "filterText": "</a>",
                   "kind": 10,
                   "label": "/a>",
+                  "textEdit": {
+                    "newText": "</a>",
+                    "range": {
+                      "end": {
+                        "character": 6,
+                        "line": 0,
+                      },
+                      "start": {
+                        "character": 4,
+                        "line": 0,
+                      },
+                    },
+                  },
                 },
               ]
             `);
@@ -537,8 +865,22 @@ describe("AutoCompleter", () => {
             expect(elm).toMatchInlineSnapshot(`
               [
                 {
+                  "filterText": "</a>",
                   "kind": 10,
                   "label": "/a>",
+                  "textEdit": {
+                    "newText": "</a>",
+                    "range": {
+                      "end": {
+                        "character": 5,
+                        "line": 0,
+                      },
+                      "start": {
+                        "character": 4,
+                        "line": 0,
+                      },
+                    },
+                  },
                 },
               ]
             `);
@@ -551,8 +893,22 @@ describe("AutoCompleter", () => {
             expect(elm).toMatchInlineSnapshot(`
               [
                 {
+                  "filterText": "</a>",
                   "kind": 10,
                   "label": "/a>",
+                  "textEdit": {
+                    "newText": "</a>",
+                    "range": {
+                      "end": {
+                        "character": 6,
+                        "line": 0,
+                      },
+                      "start": {
+                        "character": 4,
+                        "line": 0,
+                      },
+                    },
+                  },
                 },
               ]
             `);
@@ -624,6 +980,7 @@ describe("AutoCompleter", () => {
                 {
                   "kind": 10,
                   "label": "aa",
+                  "sortText": "0:aa",
                 },
               ]
             `);
@@ -668,8 +1025,22 @@ describe("AutoCompleter", () => {
             expect(elm).toMatchInlineSnapshot(`
               [
                 {
+                  "filterText": "</aa>",
                   "kind": 10,
                   "label": "/aa>",
+                  "textEdit": {
+                    "newText": "</aa>",
+                    "range": {
+                      "end": {
+                        "character": 6,
+                        "line": 0,
+                      },
+                      "start": {
+                        "character": 5,
+                        "line": 0,
+                      },
+                    },
+                  },
                 },
                 {
                   "kind": 10,
@@ -702,8 +1073,22 @@ describe("AutoCompleter", () => {
             expect(elm).toMatchInlineSnapshot(`
               [
                 {
+                  "filterText": "</aa>",
                   "kind": 10,
                   "label": "/aa>",
+                  "textEdit": {
+                    "newText": "</aa>",
+                    "range": {
+                      "end": {
+                        "character": 7,
+                        "line": 0,
+                      },
+                      "start": {
+                        "character": 5,
+                        "line": 0,
+                      },
+                    },
+                  },
                 },
               ]
             `);
@@ -760,6 +1145,9 @@ describe("AutoCompleter", () => {
                 pathParts: ["foo", ""],
                 pathPartHasIndex: [true, false],
                 rawPathParts: ["foo[1]", ""],
+                // The `$` of ` $foo[1].`, and the `f` its path starts at.
+                macroStartOffset: source.indexOf("$"),
+                pathStartOffset: source.indexOf("$") + 1,
             });
         }
     });
@@ -1176,28 +1564,45 @@ describe("AutoCompleter", () => {
             expect(items.some((item) => item.label === "myP")).toBe(true);
         });
 
-        it("Suggests member completions after dot on completed parenthesized macros", async () => {
+        it("Offers nothing after a dot on a completed parenthesized macro", async () => {
+            // `$(foo-bar)` is a whole macro, so the `.` after it starts
+            // ordinary text — `$(foo-bar).myP` is not a reference and must not
+            // be suggested as though it were.
             const source = `<section name="foo-bar"><p name="myP" /></section>\n$(foo-bar).`;
             const autoCompleter = createRefAutoCompleter(source);
 
             const offset = source.length;
-            const completionContext =
-                autoCompleter.getCompletionContext(offset);
-            expect(completionContext).toMatchObject({
-                cursorPos: "refMember",
-                typedPrefix: "",
-            });
+            expect(
+                autoCompleter.getCompletionContext(offset),
+            ).not.toMatchObject({ cursorPos: "refMember" });
 
             const items = await autoCompleter.getCompletionItems(offset);
 
-            // Descendant and property suggestions should both be present.
-            expect(items.some((item) => item.label === "myP")).toBe(true);
+            expect(items.some((item) => item.label === "myP")).toBe(false);
             expect(items.some((item) => item.label === "sectionProp")).toBe(
-                true,
+                false,
             );
         });
 
-        it("Inserts parenthesized member text for hyphenated names after dot", async () => {
+        it("Offers nothing inside a parenthesized member segment", async () => {
+            // There is no `$base.(my-p)` form in the macro grammar, so the
+            // text after `.(` is not a member being typed.
+            const source = `<section name="base"><p name="my-p" /></section>\n$base.(my`;
+            const autoCompleter = createRefAutoCompleter(source);
+
+            expect(
+                autoCompleter.getCompletionContext(source.length),
+            ).not.toMatchObject({ cursorPos: "refMember" });
+
+            const items = await autoCompleter.getCompletionItems(source.length);
+
+            expect(items.some((item) => item.label === "my-p")).toBe(false);
+        });
+
+        it("Rewrites the macro to insert a hyphenated member after dot", async () => {
+            // The bare `$base.` form's segments are SimpleIdent, with no room
+            // for a hyphen, so accepting `my-p` replaces the macro typed so
+            // far with the parenthesized form that can hold it.
             const source = `<section name="base"><p name="my-p" /><p name="my_p" /></section>\n$base.my`;
             const autoCompleter = createRefAutoCompleter(source);
 
@@ -1209,18 +1614,137 @@ describe("AutoCompleter", () => {
             expect(underscoreItem).toBeDefined();
 
             const hyphenTextEdit = hyphenItem?.textEdit;
+            expect(hyphenTextEdit && "newText" in hyphenTextEdit).toBe(true);
             if (hyphenTextEdit && "newText" in hyphenTextEdit) {
-                expect(hyphenTextEdit.newText).toBe("(my-p)");
+                expect(hyphenTextEdit.newText).toBe("$(base.my-p)");
+                // The edit reaches back to the `$` of `$base.my`, which
+                // starts the second line.
+                expect(hyphenTextEdit.range.start).toEqual({
+                    line: 1,
+                    character: 0,
+                });
             }
+            // The text a client filters this item by is the text over the
+            // edit's range — `$base.my` — so it has to be the path as typed.
+            // Against the bare label `my-p` the item would be filtered out of
+            // the menu the moment it was offered.
+            expect(hyphenItem?.filterText).toBe("$base.my-p");
 
+            // An underscore needs no rewrite: `$base.my_p` is already a
+            // reference, so only the typed member prefix is replaced.
             const underscoreTextEdit = underscoreItem?.textEdit;
+            expect(underscoreTextEdit && "newText" in underscoreTextEdit).toBe(
+                true,
+            );
             if (underscoreTextEdit && "newText" in underscoreTextEdit) {
                 expect(underscoreTextEdit.newText).toBe("my_p");
+                // Only `my`, the typed member prefix, six characters into
+                // the second line.
+                expect(underscoreTextEdit.range.start).toEqual({
+                    line: 1,
+                    character: 6,
+                });
+            }
+            // and the label is what filters it, as for any ordinary item.
+            expect(underscoreItem?.filterText).toBeUndefined();
+        });
+
+        it("Rewrites the whole macro when the base carries an index", async () => {
+            // The rewrite has to start at the macro's own `$`. Scanning left
+            // from the member for one would stop at the `$` of the `$i`
+            // inside the index and produce `$sel[$(i].my-p)`.
+            const source = `<select name="sel"><p name="my-p" /></select>\n$sel[$i].my`;
+            const autoCompleter = createRefAutoCompleter(source);
+
+            const items = await autoCompleter.getCompletionItems(source.length);
+            const hyphenItem = items.find((item) => item.label === "my-p");
+            expect(hyphenItem).toBeDefined();
+
+            const textEdit = hyphenItem?.textEdit;
+            expect(textEdit && "newText" in textEdit).toBe(true);
+            if (textEdit && "newText" in textEdit) {
+                expect(textEdit.newText).toBe("$(sel[$i].my-p)");
+                expect(textEdit.range.start).toEqual({
+                    line: 1,
+                    character: 0,
+                });
+            }
+            expect(hyphenItem?.filterText).toBe("$sel[$i].my-p");
+        });
+
+        it("Rewrites the macro for a member typed inside an attribute value", async () => {
+            // The macro starts partway into the line, after the opening
+            // quote, and the rewrite must replace it without reaching back
+            // over the quote.
+            const source = `<section name="base"><p name="my-p" /></section>\n<p extend="$base.my`;
+            const autoCompleter = createRefAutoCompleter(source);
+
+            const items = await autoCompleter.getCompletionItems(source.length);
+            const hyphenItem = items.find((item) => item.label === "my-p");
+            expect(hyphenItem).toBeDefined();
+
+            const textEdit = hyphenItem?.textEdit;
+            expect(textEdit && "newText" in textEdit).toBe(true);
+            if (textEdit && "newText" in textEdit) {
+                expect(textEdit.newText).toBe("$(base.my-p)");
+                // The `$`, eleven characters into `<p extend="$base.my`.
+                expect(textEdit.range.start).toEqual({
+                    line: 1,
+                    character: 11,
+                });
             }
         });
 
-        it("Applies same member insertion policy after dot in parenthesized refs", async () => {
-            const source = `<section name="base"><p name="my-p" /><p name="my_p" /></section>\n$(base).my`;
+        it("Rewrites an indexed macro typed inside an attribute value", async () => {
+            // A macro in an attribute value is not found as a parsed node, so
+            // the context comes from the text scan. That scan has to step over
+            // the `[$i]` index whole; reading the `$` inside it as the macro's
+            // start makes the path `i].my` — which resolves to nothing, and
+            // would anchor the rewrite in the middle of the index.
+            const source = `<select name="sel"><p name="my-p" /></select>\n<p extend="$sel[$i].my`;
+            const autoCompleter = createRefAutoCompleter(source);
+
+            expect(
+                autoCompleter.getCompletionContext(source.length),
+            ).toMatchObject({
+                cursorPos: "refMember",
+                pathParts: ["sel", "my"],
+            });
+
+            const items = await autoCompleter.getCompletionItems(source.length);
+            const hyphenItem = items.find((item) => item.label === "my-p");
+            expect(hyphenItem).toBeDefined();
+
+            const textEdit = hyphenItem?.textEdit;
+            expect(textEdit && "newText" in textEdit).toBe(true);
+            if (textEdit && "newText" in textEdit) {
+                expect(textEdit.newText).toBe("$(sel[$i].my-p)");
+                // The `$`, eleven characters into `<p extend="$sel[$i].my`.
+                expect(textEdit.range.start).toEqual({
+                    line: 1,
+                    character: 11,
+                });
+            }
+        });
+
+        it("Offers nothing after a dot that follows a stray `)`", async () => {
+            // `$base)` is the macro `$base` and then literal text, so the `.`
+            // after it opens a sentence, not a member.
+            const source = `<section name="base"><p name="myP" /></section>\n$base).`;
+            const autoCompleter = createRefAutoCompleter(source);
+
+            expect(
+                autoCompleter.getCompletionContext(source.length),
+            ).not.toMatchObject({ cursorPos: "refMember" });
+
+            const items = await autoCompleter.getCompletionItems(source.length);
+            expect(items.some((item) => item.label === "myP")).toBe(false);
+        });
+
+        it("Inserts a hyphenated member as typed inside a parenthesized ref", async () => {
+            // `$(base.my-p)` holds the hyphen already, so there is nothing to
+            // rewrite — the member goes in as its plain name.
+            const source = `<section name="base"><p name="my-p" /><p name="my_p" /></section>\n$(base.my`;
             const autoCompleter = createRefAutoCompleter(source);
 
             const items = await autoCompleter.getCompletionItems(source.length);
@@ -1232,7 +1756,7 @@ describe("AutoCompleter", () => {
 
             const hyphenTextEdit = hyphenItem?.textEdit;
             if (hyphenTextEdit && "newText" in hyphenTextEdit) {
-                expect(hyphenTextEdit.newText).toBe("(my-p)");
+                expect(hyphenTextEdit.newText).toBe("my-p");
             }
 
             const underscoreTextEdit = underscoreItem?.textEdit;
@@ -1241,30 +1765,57 @@ describe("AutoCompleter", () => {
             }
         });
 
-        it("Classifies parenthesized member-segment syntax after dot as refMember", async () => {
-            const source = `<section name="base"><p name="my-p" /></section>\n$(base).(my`;
-            const autoCompleter = createRefAutoCompleter(source);
+        it("Keeps every ref item matchable by the text its own edit replaces", async () => {
+            // A client that filters items itself — VS Code — matches the
+            // document text from the start of an item's edit to the cursor
+            // against the item's `filterText`, falling back to its label. An
+            // item whose edit reaches back past the word being typed (the
+            // macro rewrite does, back to the `$`) is filtered out of the menu
+            // unless it carries a filter text spelled over that same reach.
+            const prelude = `<section name="base"><p name="my-p" /><p name="my_p" /><section name="sub-sec"><p name="p1" /></section></section><select name="sel"><p name="my-p" /></select>\n`;
+            const typedTails = [
+                "$",
+                "$s",
+                "$se",
+                "$(",
+                "$(b",
+                "$base.",
+                "$base.my",
+                "$base.sub-sec.",
+                "$base.sub-sec.p",
+                "$sel[1].my",
+                "$sel[$i].my",
+                "$(base.my",
+                "$(base.sub-sec.p",
+                `<p extend="$base.`,
+                `<p extend="$base.my`,
+            ];
 
-            const completionContext = autoCompleter.getCompletionContext(
-                source.length,
-            );
-            expect(completionContext).toMatchObject({
-                cursorPos: "refMember",
-                typedPrefix: "my",
-            });
-        });
+            for (const tail of typedTails) {
+                const source = prelude + tail;
+                const autoCompleter = createRefAutoCompleter(source);
+                const items = await autoCompleter.getCompletionItems(
+                    source.length,
+                );
+                expect(items.length, tail).toBeGreaterThan(0);
 
-        it("Does not double-parenthesize insertion in .(member) contexts", async () => {
-            const source = `<section name="base"><p name="my-p" /></section>\n$(base).(my`;
-            const autoCompleter = createRefAutoCompleter(source);
-
-            const items = await autoCompleter.getCompletionItems(source.length);
-            const hyphenItem = items.find((item) => item.label === "my-p");
-
-            expect(hyphenItem).toBeDefined();
-            const textEdit = hyphenItem?.textEdit;
-            if (textEdit && "newText" in textEdit) {
-                expect(textEdit.newText).toBe("my-p");
+                for (const item of items) {
+                    const textEdit = item.textEdit;
+                    if (!textEdit || !("range" in textEdit)) continue;
+                    const editStart = autoCompleter.sourceObj.rowColToOffset(
+                        textEdit.range.start,
+                    );
+                    const replacedText = source.slice(editStart);
+                    const matchedAgainst = item.filterText ?? item.label;
+                    expect(
+                        matchedAgainst
+                            .toLowerCase()
+                            .startsWith(replacedText.toLowerCase()),
+                        `${tail} → ${item.label} (filters by ${JSON.stringify(
+                            matchedAgainst,
+                        )}, edit replaces ${JSON.stringify(replacedText)})`,
+                    ).toBe(true);
+                }
             }
         });
 
@@ -1785,7 +2336,7 @@ describe("AutoCompleter", () => {
             ).toBe(true);
         });
 
-        it("Filters snippets by typed prefix", async () => {
+        it("Filters snippets by typed text substring", async () => {
             let source: string;
             let autoCompleter: AutoCompleter;
 
@@ -1811,20 +2362,20 @@ describe("AutoCompleter", () => {
             let offset = source.indexOf("<ta") + 3;
             let items = await autoCompleter.getCompletionItems(offset);
 
-            // The prefix "ta" doesn't match any snippet key, so no snippets should appear
+            // The text "ta" doesn't match any snippet key, so no snippets should appear
             // Even though "aa" is an allowed element
             const snippetItems = items.filter((item) => item.kind === 15); // CompletionItemKind.Snippet = 15
-            // Since no snippet key starts with "ta", expect empty results
+            // Since no snippet key contains "ta", expect empty results
             expect(snippetItems.length).toBe(0);
 
-            // Now test with a matching prefix
-            source = `<te`;
+            // Now test with a matching substring in the middle of the key
+            source = `<sni`;
             autoCompleter = new AutoCompleter(source, schema.elements);
             autoCompleter.snippetsByNormalizedElement = new Map(
                 Object.entries(testSnippets) as [string, any[]][],
             );
 
-            offset = source.indexOf("<te") + 3;
+            offset = source.indexOf("<sni") + 4;
             items = await autoCompleter.getCompletionItems(offset);
 
             const matchingSnippets = items.filter((item) => item.kind === 15);
@@ -1871,7 +2422,7 @@ describe("AutoCompleter", () => {
             expect(
                 snippetItem?.textEdit && "range" in snippetItem.textEdit,
             ).toBe(true);
-            expect(snippetItem?.filterText).toBe("test-snippet");
+            expect(snippetItem?.filterText).toBe("<test-snippet");
         });
 
         it("Snippet items indent multiline text", async () => {
@@ -1905,6 +2456,22 @@ describe("AutoCompleter", () => {
             expect(snippetItem?.textEdit?.newText).toBe(
                 "<aa>\n  <bb></bb>\n  </aa>",
             );
+        });
+
+        it("Adds the `<` filterText prefix to dynamic annotations snippets in prefigure graphs", async () => {
+            const source = `<graph renderer="prefigure">\n  <point name="P" />\n  <ann\n</graph>`;
+            const autoCompleter = new AutoCompleter(
+                source,
+                doenetSchema.elements,
+            );
+            const offset = source.indexOf("<ann") + 4;
+            const items = await autoCompleter.getCompletionItems(offset);
+
+            const snippetItem = items.find(
+                (item) => item.label === "annotations-skeleton",
+            );
+            expect(snippetItem).toBeDefined();
+            expect(snippetItem?.filterText).toBe("<annotations-skeleton");
         });
     });
 
@@ -2876,6 +3443,70 @@ describe("AutoCompleter", () => {
             const ac = new AutoCompleter(source, doenetSchema.elements);
             const items = await ac.getCompletionItems(source.length);
             expect(items.map((i) => i.label)).toContain("unordered");
+        });
+    });
+
+    describe("Bundled Doenet schema: `<document lang>` suggestions", () => {
+        // `lang` declares `suggestedValues`, generated from the locales this
+        // repo ships catalogs for. The list is offered but never enforced —
+        // see the schema-violation half of this contract in
+        // `doenet-auto-schema-check.test.ts`.
+        it("Offers every supported locale as a value for `lang`", async () => {
+            const source = `<document lang="`;
+            const ac = new AutoCompleter(source, doenetSchema.elements);
+            const items = await ac.getCompletionItems(source.length);
+            const labels = items.map((i) => i.label);
+            for (const { locale } of SUPPORTED_LOCALES) {
+                expect(labels).toContain(locale);
+            }
+        });
+
+        it("Documents each suggested locale with its name", async () => {
+            // The descriptions are derived at codegen time from
+            // `Intl.DisplayNames` — or, for the handful of tags CLDR has no
+            // data for, from `LOCALE_NAME_FALLBACKS` — so a new locale carries
+            // help text without anyone writing any. Every row is checked
+            // against the roster's own label rather than one row being spot-
+            // checked for non-emptiness, because the failure this guards
+            // against is a *stale* schema rather than a blank one: a locale
+            // whose name arrived after the last `build:schema` run documents
+            // itself with its bare tag, which is truthy and reads as a defect
+            // in the roster rather than in the generated file.
+            const source = `<document lang="`;
+            const ac = new AutoCompleter(source, doenetSchema.elements);
+            const items = await ac.getCompletionItems(source.length);
+            const documentationOf = (locale: string) => {
+                const documentation = items.find(
+                    (i) => i.label === locale,
+                )?.documentation;
+                return typeof documentation === "string"
+                    ? documentation
+                    : (documentation?.value ?? "");
+            };
+            expect(documentationOf("es")).toContain("Spanish");
+            for (const { locale, label } of SUPPORTED_LOCALES) {
+                expect(documentationOf(locale)).toBe(label);
+            }
+        });
+
+        it("Still offers to quote a bare tag that isn't on the list", async () => {
+            // An attribute whose values are only suggestions keeps the
+            // free-text affordance: typing `lang=de` unquoted matches no
+            // suggestion, and the author would otherwise lose the "wrap in
+            // quotes" hint that `lang` had before it carried a list at all.
+            const source = `<document lang=de`;
+            const ac = new AutoCompleter(source, doenetSchema.elements);
+            const items = await ac.getCompletionItems(source.length);
+            expect(items.map((i) => i.displayLabel)).toEqual(['"de"']);
+        });
+
+        it("Offers nothing for a bare value a closed enum rejects", async () => {
+            // The contrast that scopes the fallback: `simplify` enumerates its
+            // values, so `zzz` is a mistake and offering to quote it would
+            // only make the wrong value look blessed.
+            const source = `<math simplify=zzz`;
+            const ac = new AutoCompleter(source, doenetSchema.elements);
+            expect(await ac.getCompletionItems(source.length)).toEqual([]);
         });
     });
 });

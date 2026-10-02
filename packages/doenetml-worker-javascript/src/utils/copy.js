@@ -8,7 +8,6 @@ export function postProcessCopy({
     componentIdx,
     addShadowDependencies = true,
     markAsPrimaryShadow = false,
-    identifierPrefix = "",
     unlinkExternalCopies = false,
     copiesByRefIdx = {},
     componentIndicesFound = [],
@@ -82,54 +81,68 @@ export function postProcessCopy({
     // recurse after processing all components
     // so that first gather all active aliases
 
+    /** Recurse into components nested one level below this one. */
+    function recurse(nestedComponents) {
+        return postProcessCopy({
+            serializedComponents: nestedComponents,
+            componentIdx,
+            addShadowDependencies,
+            markAsPrimaryShadow,
+            unlinkExternalCopies,
+            copiesByRefIdx,
+            componentIndicesFound,
+            init: false,
+        });
+    }
+
+    /**
+     * The components inside a reference's path indices, such as the `$i` of
+     * `$m[$i]`, were copied along with the reference, so they shadow their
+     * originals just as a copied child does.
+     *
+     * Called for a reference in content — the component itself — and for each
+     * entry of an attribute's `references` (a reference in `target`, `from`,
+     * and the like). Only the indices are recursed into here: an attribute's
+     * reference resolves from its new location, and giving it a
+     * `referenceShadow` of its own would change index-free references that
+     * work today.
+     */
+    function recurseIntoPathIndices(component) {
+        if (!component.extending) {
+            return;
+        }
+        for (const pathPart of unwrapSource(component.extending).originalPath ??
+            []) {
+            for (const index of pathPart.index) {
+                recurse(index.value);
+            }
+        }
+    }
+
     for (let ind in serializedComponents) {
         let component = serializedComponents[ind];
         if (typeof component !== "object") {
             continue;
         }
 
-        postProcessCopy({
-            serializedComponents: component.children,
-            componentIdx,
-            addShadowDependencies,
-            markAsPrimaryShadow,
-            identifierPrefix,
-            unlinkExternalCopies,
-            copiesByRefIdx,
-            componentIndicesFound,
-            init: false,
-        });
+        recurse(component.children);
 
         for (let attrName in component.attributes) {
             let attribute = component.attributes[attrName];
             if (attribute.component) {
-                attribute.component = postProcessCopy({
-                    serializedComponents: [attribute.component],
-                    componentIdx,
-                    addShadowDependencies,
-                    markAsPrimaryShadow,
-                    identifierPrefix,
-                    unlinkExternalCopies,
-                    copiesByRefIdx,
-                    componentIndicesFound,
-                    init: false,
-                })[0];
+                attribute.component = recurse([attribute.component])[0];
+            } else if (attribute.references) {
+                for (const reference of attribute.references) {
+                    recurseIntoPathIndices(reference);
+                }
             }
         }
 
         if (component.replacements) {
-            postProcessCopy({
-                serializedComponents: component.replacements,
-                componentIdx,
-                addShadowDependencies,
-                markAsPrimaryShadow,
-                identifierPrefix,
-                unlinkExternalCopies,
-                copiesByRefIdx,
-                componentIndicesFound,
-                init: false,
-            });
+            recurse(component.replacements);
         }
+
+        recurseIntoPathIndices(component);
     }
 
     if (init && unlinkExternalCopies) {
@@ -603,6 +616,23 @@ export function calculateReplacementTypesFromChanges(
             if (change.replacementsToWithhold !== undefined) {
                 replacementsToWithhold = change.replacementsToWithhold;
             }
+        } else if (change.changeType === "rearrangeReplacements") {
+            // The same replacements in a new order, so the types travel
+            // with the components and are permuted rather than recalculated.
+            //
+            // Nothing reaches this branch today: `<sort>` is the only source
+            // of the change, and it does not run its changes through
+            // `verifyReplacementsMatchSpecifiedType`. It is here so that this
+            // function covers every change type a composite can emit rather
+            // than silently leaving the types in the old order.
+            const numActive =
+                replacementTypes.length - (replacementsToWithhold ?? 0);
+            const activeTypes = replacementTypes.slice(0, numActive);
+
+            replacementTypes = [
+                ...change.arrangement.map((ind) => activeTypes[ind]),
+                ...replacementTypes.slice(numActive),
+            ];
         }
     }
 
@@ -670,7 +700,12 @@ export function addAttributesToSingleReplacement(
 
 /**
  * Recurse through all `components` and substitute `newComponentIdx` for `prevComponentIdx`,
- * both for a component's `componentIdx` and also for any `nodeIdx` in an `extending` attribute.
+ * both for a component's `componentIdx` and also for any `nodeIdx` or `nodesInResolvedPath` entry
+ * in an `extending` attribute.
+ *
+ * The `nodesInResolvedPath` entries matter for the origin of a reference in the replacement's attributes,
+ * which is the replacement itself (see `convertRefsToCopies`). Left unsubstituted, that reference would be resolved
+ * from a component that does not exist.
  */
 function substituteComponentIdx(components, prevComponentIdx, newComponentIdx) {
     for (const component of components) {
@@ -687,6 +722,10 @@ function substituteComponentIdx(components, prevComponentIdx, newComponentIdx) {
             if (refResolution.nodeIdx === prevComponentIdx) {
                 refResolution.nodeIdx = newComponentIdx;
             }
+            refResolution.nodesInResolvedPath =
+                refResolution.nodesInResolvedPath.map((idx) =>
+                    idx === prevComponentIdx ? newComponentIdx : idx,
+                );
         }
 
         substituteComponentIdx(
@@ -765,4 +804,106 @@ export function addAttributesToSingleReplacementChange(
             }
         }
     }
+}
+
+/**
+ * When a Copy/Ref with no explicit prop is a descendant of its own source
+ * component (a self-referential copy), serializing the source throws. In a
+ * recognized rendering context we fall back to the source's `value` state
+ * variable instead of showing an error — but only when `value` is typed as
+ * `math` or `text` (or a component that inherits from one of those).
+ *
+ * The recognized contexts are any ancestor that inherits from:
+ * label, text, math, m, md, boolean, number, mathList, numberList,
+ * textList, or booleanList.
+ *
+ * Transparent composites (treatAsComponentForRecursiveReplacements, e.g.
+ * <group>) are walked through; any other ancestor type stops the search.
+ *
+ * Returns `"value"` if the fallback applies, otherwise `undefined`.
+ */
+export function getSelfReferentialFallbackPropName({
+    componentAncestors,
+    componentInfoObjects,
+    replacementSourceComponentType,
+}) {
+    // Determine whether we're inside a recognized rendering context.
+    let inRecognizedContext = false;
+    for (const ancestor of componentAncestors) {
+        const ancestorClass = ancestor.componentClass;
+        const ancestorType = ancestorClass.componentType;
+        if (
+            [
+                "label",
+                "text",
+                "math",
+                "m",
+                "md",
+                "boolean",
+                "number",
+                "mathList",
+                "numberList",
+                "textList",
+                "booleanList",
+            ].some((base) =>
+                componentInfoObjects.isInheritedComponentType({
+                    inheritedComponentType: ancestorType,
+                    baseComponentType: base,
+                }),
+            )
+        ) {
+            inRecognizedContext = true;
+            break;
+        }
+        // Only continue through transparent composites (e.g. <group>).
+        if (!ancestorClass.treatAsComponentForRecursiveReplacements) {
+            break;
+        }
+    }
+
+    if (!inRecognizedContext) {
+        return undefined;
+    }
+
+    // Look up the `value` state variable on the source component.
+    // `value` may be a direct public var or an alias to another var.
+    const publicVarInfo =
+        componentInfoObjects.publicStateVariableInfo[
+            replacementSourceComponentType
+        ];
+    if (!publicVarInfo) {
+        return undefined;
+    }
+
+    // Resolve alias if needed: Point's `value` aliases `coords`, etc.
+    let valueType =
+        publicVarInfo.stateVariableDescriptions?.value?.createComponentOfType;
+    if (valueType === undefined && publicVarInfo.aliases?.value) {
+        const aliasTarget = publicVarInfo.aliases.value.target;
+        valueType =
+            publicVarInfo.stateVariableDescriptions?.[aliasTarget]
+                ?.createComponentOfType;
+    }
+
+    if (!valueType) {
+        return undefined;
+    }
+
+    // Use `value` only when it is math- or text-typed (including subtypes like
+    // coords, which inherits from math). Math and text can adapt to each other,
+    // so no context-specific preference is needed.
+    if (
+        componentInfoObjects.isInheritedComponentType({
+            inheritedComponentType: valueType,
+            baseComponentType: "math",
+        }) ||
+        componentInfoObjects.isInheritedComponentType({
+            inheritedComponentType: valueType,
+            baseComponentType: "text",
+        })
+    ) {
+        return "value";
+    }
+
+    return undefined;
 }

@@ -1,11 +1,13 @@
 import {
     asFiniteNumber,
+    darkModeAxisStrokeAttr,
     escapeXml,
     formatNumber,
     pushWarning,
-    warningMessageForDescendant,
+    warningSubjectForDescendant,
 } from "./common";
-import { labelMarkup } from "./label";
+import { labelMarkup, THEME_AWARE_LABEL_COLOR_ATTR } from "./label";
+import { gridElementFromGrid } from "./grid";
 import { convertGraphicalDescendantToPrefigure } from "./descendant";
 import { convertDoenetMLAnnotationsToPreFigureXml } from "./annotations";
 import type {
@@ -16,6 +18,7 @@ import type {
     GraphDimensions,
 } from "./types";
 import type { DiagnosticRecord } from "@doenet/utils";
+import { codedDiagnostic } from "../diagnostics";
 
 function axisModeFromVisibility({
     displayXAxis,
@@ -44,28 +47,32 @@ function pushUnsupportedAxisPositionWarnings({
     diagnostics: DiagnosticRecord[];
 }): void {
     if (dependencyValues.xLabelPosition === "left") {
-        diagnostics.push({
-            type: "warning",
-            message:
-                '`<graph>`: xLabelPosition="left" is not supported in prefigure renderer; using right-position behavior.',
-        });
+        diagnostics.push(
+            codedDiagnostic({
+                type: "warning",
+                code: "doenet-w0060",
+            }),
+        );
     }
 
     if (dependencyValues.yLabelPosition === "bottom") {
-        diagnostics.push({
-            type: "warning",
-            message:
-                '`<graph>`: yLabelPosition="bottom" is not supported in prefigure renderer; using top-position behavior.',
-        });
+        diagnostics.push(
+            codedDiagnostic({
+                type: "warning",
+                code: "doenet-w0061",
+            }),
+        );
     }
 }
 
 function axesElementFromLabels({
     dependencyValues,
     axesMode,
+    darkMode,
 }: {
     dependencyValues: GraphDependencyValues;
     axesMode: "all" | "horizontal" | "vertical";
+    darkMode: boolean;
 }): string {
     const axisLabelElements = [];
 
@@ -74,7 +81,9 @@ function axesElementFromLabels({
         labelHasLatex: dependencyValues.xLabelHasLatex,
     });
     if (xLabel && dependencyValues.displayXAxis) {
-        axisLabelElements.push(`<xlabel alignment="nw">${xLabel}</xlabel>`);
+        axisLabelElements.push(
+            `<xlabel alignment="nw" ${THEME_AWARE_LABEL_COLOR_ATTR}>${xLabel}</xlabel>`,
+        );
     }
 
     const yLabel = labelMarkup({
@@ -82,13 +91,17 @@ function axesElementFromLabels({
         labelHasLatex: dependencyValues.yLabelHasLatex,
     });
     if (yLabel && dependencyValues.displayYAxis) {
-        axisLabelElements.push(`<ylabel alignment="se">${yLabel}</ylabel>`);
+        axisLabelElements.push(
+            `<ylabel alignment="se" ${THEME_AWARE_LABEL_COLOR_ATTR}>${yLabel}</ylabel>`,
+        );
     }
 
+    const strokeAttr = darkModeAxisStrokeAttr(darkMode);
+
     if (axisLabelElements.length > 0) {
-        return `<axes axes="${axesMode}">${axisLabelElements.join("")}</axes>`;
+        return `<axes axes="${axesMode}"${strokeAttr}>${axisLabelElements.join("")}</axes>`;
     }
-    return `<axes axes="${axesMode}" />`;
+    return `<axes axes="${axesMode}"${strokeAttr} />`;
 }
 
 /**
@@ -98,8 +111,12 @@ function axesElementFromLabels({
  * 1. Convert unsupported descendants into warnings.
  * 2. Convert supported descendants to element XML in stable order.
  * 3. Compute bbox/dimensions with defensive defaults.
- * 4. Build axis metadata + labels (including unsupported-position warnings).
- * 5. Assemble and return final `<diagram>` XML + warnings.
+ * 4. Build the grid from the bbox.
+ * 5. Build axis metadata + labels (including unsupported-position warnings).
+ * 6. Assemble and return final `<diagram>` XML + warnings.
+ *
+ * SVG paints in document order, so the grid is emitted ahead of the axes and
+ * the converted descendants to keep it behind everything it sits under.
  */
 export function createPrefigureXML({
     dependencyValues,
@@ -108,6 +125,7 @@ export function createPrefigureXML({
     annotations,
     graphComponentIdx,
     functionToCurveComponentIdx,
+    darkMode = false,
 }: {
     dependencyValues: GraphDependencyValues;
     descendants: Descendant[];
@@ -115,6 +133,7 @@ export function createPrefigureXML({
     annotations: AnnotationNode[] | null;
     graphComponentIdx: number;
     functionToCurveComponentIdx?: Record<number, number>;
+    darkMode?: boolean;
 }): { xml: string; diagnostics: DiagnosticRecord[] } {
     const diagnostics: DiagnosticRecord[] = [];
     const usedHandles = new Set<string>();
@@ -127,11 +146,12 @@ export function createPrefigureXML({
     const rawYMax = asFiniteNumber(dependencyValues.yMax);
 
     if ([rawXMin, rawYMin, rawXMax, rawYMax].some((x) => x === null)) {
-        diagnostics.push({
-            type: "warning",
-            message:
-                "`<graph>`: invalid axis bounds for prefigure conversion; using default bbox (-10,-10,10,10).",
-        });
+        diagnostics.push(
+            codedDiagnostic({
+                type: "warning",
+                code: "doenet-w0062",
+            }),
+        );
     }
 
     const graphBounds: GraphBounds =
@@ -144,21 +164,23 @@ export function createPrefigureXML({
 
     let dimensionWidth = asFiniteNumber(dependencyValues.width?.size);
     if (dimensionWidth === null || dimensionWidth <= 0) {
-        diagnostics.push({
-            type: "warning",
-            message:
-                "`<graph>`: invalid width for prefigure conversion; using default diagram width 425.",
-        });
+        diagnostics.push(
+            codedDiagnostic({
+                type: "warning",
+                code: "doenet-w0063",
+            }),
+        );
         dimensionWidth = 425;
     }
 
     let diagramAspectRatio = asFiniteNumber(dependencyValues.aspectRatio);
     if (diagramAspectRatio === null || diagramAspectRatio <= 0) {
-        diagnostics.push({
-            type: "warning",
-            message:
-                "`<graph>`: invalid aspectRatio for prefigure conversion; using default aspect ratio 1.",
-        });
+        diagnostics.push(
+            codedDiagnostic({
+                type: "warning",
+                code: "doenet-w0064",
+            }),
+        );
         diagramAspectRatio = 1;
     }
 
@@ -168,7 +190,8 @@ export function createPrefigureXML({
     for (const descendant of unsupported ?? []) {
         pushWarning({
             diagnostics,
-            message: `${warningMessageForDescendant(descendant)}: unsupported in graph prefigure renderer; descendant skipped.`,
+            code: "doenet-w0084",
+            args: { subject: warningSubjectForDescendant(descendant) },
             position: descendant?.position,
         });
     }
@@ -181,6 +204,7 @@ export function createPrefigureXML({
             diagnostics,
             graphBounds,
             graphDimensions,
+            darkMode,
         });
         if (converted) {
             elements.push(converted.xml);
@@ -210,12 +234,23 @@ export function createPrefigureXML({
     const heightText = formatNumber(dimensionHeight) ?? "425";
     const dimensions = `(${widthText},${heightText})`;
 
+    const gridElement = gridElementFromGrid({
+        grid: dependencyValues.grid,
+        graphBounds,
+        darkMode,
+        diagnostics,
+    });
+
     let axesElement = "";
     const axesMode = axisModeFromVisibility(dependencyValues);
 
     if (axesMode) {
         pushUnsupportedAxisPositionWarnings({ dependencyValues, diagnostics });
-        axesElement = axesElementFromLabels({ dependencyValues, axesMode });
+        axesElement = axesElementFromLabels({
+            dependencyValues,
+            axesMode,
+            darkMode,
+        });
     }
 
     const annotationsElement = convertDoenetMLAnnotationsToPreFigureXml({
@@ -227,7 +262,7 @@ export function createPrefigureXML({
         functionToCurveComponentIdx,
     });
 
-    const xml = `<diagram dimensions="${escapeXml(dimensions)}"><coordinates bbox="${escapeXml(bbox)}">${axesElement}${elements.join("")}</coordinates>${annotationsElement}</diagram>`;
+    const xml = `<diagram dimensions="${escapeXml(dimensions)}"><coordinates bbox="${escapeXml(bbox)}">${gridElement}${axesElement}${elements.join("")}</coordinates>${annotationsElement}</diagram>`;
 
     return { xml, diagnostics };
 }

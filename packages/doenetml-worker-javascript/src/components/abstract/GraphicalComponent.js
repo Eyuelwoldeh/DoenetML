@@ -47,20 +47,68 @@ export default class GraphicalComponent extends BaseComponent {
      */
     static styleOverrideCategories = [];
 
+    static returnStyleOverrideGroups() {
+        return resolveOverrideGroups(this);
+    }
+
+    static addStyleOverrideAttributes(attributes) {
+        for (const group of GraphicalComponent.returnStyleOverrideGroups.call(
+            this,
+        )) {
+            for (const [styleAttr, spec] of Object.entries(group)) {
+                attributes[styleAttr] = attributeSpecFromStyleAttribute(spec);
+            }
+        }
+    }
+
+    /**
+     * Whether this component can carry a label.
+     *
+     * Every graphical component gets the whole label surface from here — the
+     * `labels` child group, the `labelIsName`, `applyStyleToLabel` and
+     * `maskLabel` attributes, and the `label` state variables — which suits the
+     * ones drawn at a place a label can sit beside. A component that covers the
+     * whole viewport — a field, say — has no such place, and its renderer draws
+     * no label however one is written. Setting this false drops the surface
+     * whole, so a `<label>` is refused rather than accepted and ignored, and
+     * nothing is left offering to style or mask a label that cannot exist.
+     * Dropping only part of it would not do: the `label` state variable depends
+     * on the `labels` child group, so removing the group alone would leave it
+     * pointing at nothing.
+     *
+     * Tested against `false` rather than for truthiness because these methods
+     * are also borrowed by classes outside this hierarchy — `Function` calls
+     * `GraphicalComponent.returnStateVariableDefinitions.call(this)` — where
+     * the flag is simply absent and labels are wanted.
+     */
+    static includeLabels = true;
+
     static createAttributesObject() {
         let attributes = super.createAttributesObject();
 
-        Object.assign(attributes, returnLabelAttributes());
+        if (this.includeLabels !== false) {
+            Object.assign(attributes, returnLabelAttributes());
 
-        attributes.applyStyleToLabel = {
-            createComponentOfType: "boolean",
-            createStateVariable: "applyStyleToLabel",
-            defaultValue: false,
-            public: true,
-            forRenderer: true,
-            description:
-                "Whether to apply this component's selected style to its label.",
-        };
+            attributes.applyStyleToLabel = {
+                createComponentOfType: "boolean",
+                createStateVariable: "applyStyleToLabel",
+                defaultValue: false,
+                public: true,
+                forRenderer: true,
+                description:
+                    "Whether to apply this component's selected style to its label.",
+            };
+            attributes.maskLabel = {
+                createComponentOfType: "boolean",
+                createStateVariable: "maskLabel",
+                defaultValue: false,
+                public: true,
+                forRenderer: true,
+                description:
+                    "Whether to give the label an opaque background so it stays legible when it overlaps an axis, grid line, or another object.",
+            };
+        }
+
         attributes.layer = {
             createComponentOfType: "integer",
             createStateVariable: "layer",
@@ -76,18 +124,15 @@ export default class GraphicalComponent extends BaseComponent {
         // subclass opts into via `static styleOverrideCategories`. Colors
         // stay <styleDefinition>-only so per-styleNumber WCAG contrast
         // diagnostics remain authoritative.
-        for (const group of resolveOverrideGroups(this)) {
-            for (const styleAttr in group) {
-                attributes[styleAttr] = attributeSpecFromStyleAttribute(
-                    group[styleAttr],
-                );
-            }
-        }
+        GraphicalComponent.addStyleOverrideAttributes.call(this, attributes);
 
         return attributes;
     }
 
     static returnChildGroups() {
+        if (this.includeLabels === false) {
+            return [];
+        }
         return [
             {
                 group: "labels",
@@ -99,9 +144,10 @@ export default class GraphicalComponent extends BaseComponent {
     static returnStateVariableDefinitions() {
         let stateVariableDefinitions = super.returnStateVariableDefinitions();
 
-        const overrideAttributeNames = resolveOverrideGroups(this).flatMap(
-            (group) => Object.keys(group),
-        );
+        const overrideAttributeNames =
+            GraphicalComponent.returnStyleOverrideGroups
+                .call(this)
+                .flatMap((group) => Object.keys(group));
 
         let selectedStyleDefinition =
             returnSelectedStyleStateVariableDefinition({
@@ -110,9 +156,11 @@ export default class GraphicalComponent extends BaseComponent {
 
         Object.assign(stateVariableDefinitions, selectedStyleDefinition);
 
-        let labelDefinitions = returnLabelStateVariableDefinitions();
+        if (this.includeLabels !== false) {
+            let labelDefinitions = returnLabelStateVariableDefinitions();
 
-        Object.assign(stateVariableDefinitions, labelDefinitions);
+            Object.assign(stateVariableDefinitions, labelDefinitions);
+        }
 
         return stateVariableDefinitions;
     }

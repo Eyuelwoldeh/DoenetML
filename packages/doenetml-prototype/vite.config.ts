@@ -3,20 +3,48 @@ import { PluginOption, defineConfig } from "vite";
 import { viteStaticCopy, TransformOption } from "vite-plugin-static-copy";
 import dts from "vite-plugin-dts";
 import * as path from "node:path";
+import * as fs from "node:fs/promises";
 import { visualizer } from "rollup-plugin-visualizer";
 import { version } from "./package.json";
 import { createRequire } from "module";
-import { suppressLogPlugin } from "../../scripts/vite-plugins";
+import {
+    ignoreWireitCachesPlugin,
+    suppressLogPlugin,
+} from "../../scripts/vite-plugins";
 const require = createRequire(import.meta.url);
 
 // These are the dependencies that will not be bundled into the library.
-const EXTERNAL_DEPS = ["react", "react-dom"];
+//
+// `math-expressions` resolves to `@doenet/math`, which inlines the Rust core as
+// ~2.3 MiB of base64. Bundling it here puts a private copy in this library and
+// then in everything that bundles this library's `dist` — `test-viewer` and
+// `test-cypress`. Externalized, the application bundle resolves it once.
+// (`packages/doenetml/vite.config.ts` carries the same rule for the published
+// side, where the sibling that ends up carrying the copies is
+// `doenet-standalone.js`; standalone does not consume this package.)
+const EXTERNAL_DEPS = ["react", "react-dom", "math-expressions"];
 
 // https://vitejs.dev/config/
 export default defineConfig({
     base: "./",
     plugins: [
+        ignoreWireitCachesPlugin(),
         react(),
+        // Pre-create doenetml-worker/ before viteStaticCopy's closeBundle hook runs.
+        // Node's fs.cp for a directory calls mkdirAsync(dest) WITHOUT {recursive:true},
+        // so if the parent doesn't exist it races against sibling file copies that would
+        // have created it. Running mkdir here (in writeBundle, before closeBundle) breaks
+        // the race.
+        {
+            name: "pre-create-doenetml-worker-dir",
+            apply: "build",
+            async writeBundle(opts) {
+                await fs.mkdir(
+                    path.join(opts.dir ?? "dist", "doenetml-worker"),
+                    { recursive: true },
+                );
+            },
+        },
         viteStaticCopy({
             targets: [
                 {

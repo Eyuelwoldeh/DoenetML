@@ -22,6 +22,12 @@
         },
         "./style": {
             "import": "./dist/style.js"
+        },
+        "./components/mathInputFunctionNames": {
+            "import": "./dist/mathInputFunctionNames.js"
+        },
+        "./mathjax": {
+            "import": "./dist/mathjax.js"
         }
     },
     "scripts": {
@@ -35,6 +41,7 @@
             "command": "vite build",
             "files": [
                 "src/**/*.ts",
+                "src/**/*.tsx",
                 "src/**/*.js",
                 "vite.config.ts",
                 "tsconfig.json"
@@ -46,21 +53,21 @@
                 "dist/**/*.json"
             ],
             "dependencies": [
-                "../parser:build"
+                "../parser:build",
+                "../i18n:build",
+                "../math:build"
             ]
         }
     },
     "dependencies": {
+        "@doenet/i18n": "*",
         "color-name": "^1.1.4",
-        "get-contrast": "^3.0.0",
-        "math-expressions": "^2.0.0-alpha93",
-        "micromark": "^4.0.2",
-        "nearest-color": "^0.4.4",
-        "rgb": "^0.1.0"
+        "colord": "^2.9.3",
+        "math-expressions": "file:../math",
+        "micromark": "^4.0.2"
     },
     "devDependencies": {
         "@types/color-name": "^2.0.0",
-        "@types/nearest-color": "^0.4.1",
         "@types/sha256": "^0.2.2",
         "sha256": "^0.2.0"
     }

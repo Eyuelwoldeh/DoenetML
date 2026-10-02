@@ -22,6 +22,7 @@ import {
     findBareAttributeValuePairs,
     unquotedAttributeValueMessage,
 } from "../detect-bare-attribute-pairs";
+import { codedDastError } from "../coded-dast-error";
 import { createErrorNode } from "./create-error-node";
 import {
     OffsetToPositionMap,
@@ -38,6 +39,7 @@ import {
 } from "./lezer-to-dast-utils";
 import { parseMacros } from "../macros";
 import { gobbleFunctionArguments } from "./gobble-function-arguments";
+import { gobblePropIndices } from "./gobble-prop-indices";
 import { findNodesWithPositionInfo } from "../dast-to-xml/utils";
 
 /**
@@ -73,7 +75,13 @@ function _lezerToDast(node: SyntaxNode, source: string): DastRoot {
     const offsetMap = createOffsetToPositionMap(source);
     return {
         type: "root",
-        children: gobbleFunctionArguments(lezerNodeToDastNode(node)),
+        children: gobblePropIndices(
+            gobbleFunctionArguments(
+                gobblePropIndices(lezerNodeToDastNode(node), offsetMap),
+            ),
+            offsetMap,
+            { warnOnly: true },
+        ),
         position: lezerNodeToPosition(node, offsetMap),
         sources: [source],
     };
@@ -244,14 +252,20 @@ function _lezerToDast(node: SyntaxNode, source: string): DastRoot {
                         // that filter trips here instead of silently
                         // emitting a 0-length error at the document
                         // start.
-                        children.push({
-                            type: "error",
-                            message: unquotedAttributeValueMessage(
-                                pair.assignAttr.name,
-                                pair.valueAttr.name,
-                            ),
-                            position: pair.valueAttr.position!,
-                        });
+                        children.push(
+                            codedDastError({
+                                code: "doenet-e0020",
+                                message: unquotedAttributeValueMessage(
+                                    pair.assignAttr.name,
+                                    pair.valueAttr.name,
+                                ),
+                                args: {
+                                    attribute: pair.assignAttr.name,
+                                    value: pair.valueAttr.name,
+                                },
+                                position: pair.valueAttr.position!,
+                            }),
+                        );
                         continue;
                     }
                     if (pairedAssignAttrs.has(dastAttr)) {
@@ -278,8 +292,23 @@ function _lezerToDast(node: SyntaxNode, source: string): DastRoot {
                         (n) => lezerNodeToDastNode(n) as DastElementContent[],
                     ),
                 );
-                children = gobbleFunctionArguments(
-                    children,
+                // Indices are gobbled before function arguments so that the
+                // brackets are out of the sibling array by the time the
+                // arguments are looked for. `gobbleFunctionArguments` takes an
+                // argument list only from the node directly after the
+                // reference, so with `[`, the element and `]` still sitting
+                // there it would see `[` where it needs `(` and leave
+                // `$$f[<n/>](y)` uncalled. Reversing the two loses the call.
+                // The third pass reports the brackets the first cannot see —
+                // `$$f(<n/>)[<m/>]`, and `$$fs[<n/>](3)[<m/>]` too. Until the
+                // arguments are gobbled, either reference is followed by `(`
+                // rather than `[`.
+                children = gobblePropIndices(
+                    gobbleFunctionArguments(
+                        gobblePropIndices(children, offsetMap),
+                    ),
+                    offsetMap,
+                    { warnOnly: true },
                 ) as DastElementContent[];
 
                 return [
@@ -400,33 +429,18 @@ function _lezerToDast(node: SyntaxNode, source: string): DastRoot {
                 const parent = node.parent;
                 const openTag = parent?.getChild(OpenTag);
                 const closeTag = parent?.getChild(CloseTag);
-                if (!parent || !openTag) {
-                    const message = `Invalid DoenetML: Found closing tag \`${extractContent(
-                        node,
-                        source,
-                    )}\`, but no corresponding opening tag`;
+                const tag = extractContent(node, source);
+                // Nothing this could be closing: either there is no open tag
+                // at all, or the element already has its own close tag and
+                // this one is a stray. E.g. `<foo></bar></foo>`.
+                if (!parent || !openTag || closeTag) {
                     return [
-                        {
-                            type: "error",
-                            message,
+                        codedDastError({
+                            code: "doenet-e0021",
+                            message: `Invalid DoenetML: Found closing tag \`${tag}\`, but no corresponding opening tag`,
+                            args: { tag },
                             position: lezerNodeToPosition(node, offsetMap),
-                        },
-                    ];
-                }
-                // If we have a parent, check to see if we also have a close tag.
-                // This could arise in code like `<foo></bar></foo>`
-                if (closeTag) {
-                    const message = `Invalid DoenetML: Found closing tag \`${extractContent(
-                        node,
-                        source,
-                    )}\`, but no corresponding opening tag`;
-
-                    return [
-                        {
-                            type: "error",
-                            message,
-                            position: lezerNodeToPosition(node, offsetMap),
-                        },
+                        }),
                     ];
                 }
                 // In this case, there was an open tag, a mismatched close tag, but no actual close tag.
@@ -435,17 +449,14 @@ function _lezerToDast(node: SyntaxNode, source: string): DastRoot {
                 const openTagName = tagNameTag
                     ? extractContent(tagNameTag, source)
                     : "";
-                const message = `Invalid DoenetML: Mismatched closing tag. Expected \`</${openTagName}>\`. Found \`${extractContent(
-                    node,
-                    source,
-                )}\``;
 
                 return [
-                    {
-                        type: "error",
-                        message,
+                    codedDastError({
+                        code: "doenet-e0022",
+                        message: `Invalid DoenetML: Mismatched closing tag. Expected \`</${openTagName}>\`. Found \`${tag}\``,
+                        args: { expected: openTagName, found: tag },
                         position: lezerNodeToPosition(node, offsetMap),
-                    },
+                    }),
                 ];
             }
             case "MissingCloseTag":

@@ -22,6 +22,12 @@ import type {
     Node as UnistNode,
     Parent as UnistParent,
 } from "unist";
+// Types only, and deliberately so: `@doenet/i18n` is a devDependency here
+// because `@doenet/parser` is inside the language-server bundle, where a
+// message catalog is dead weight (`packages/lsp/scripts/check-server-bundle.mjs`).
+// `import type` is erased before bundling, so this costs nothing at runtime
+// while still checking every code the parser names against the registry.
+import type { DiagnosticArgs, DiagnosticCode } from "@doenet/i18n";
 import type {
     FunctionMacro as _FunctionMacro,
     Macro as _Macro,
@@ -402,6 +408,21 @@ export interface DastError extends DastAbstractNode {
     message: string;
     error_type?: "error" | "warning" | "info";
     data?: ErrorData;
+    /**
+     * The stable name of what went wrong, when the producing site named it.
+     *
+     * `message` stays the English the parser wrote; this is what lets it be
+     * re-rendered in the reader's language somewhere that has the catalogs.
+     * Both halves travel: through the Rust flattening into the worker's
+     * `_error` pipeline, and — via `extractDastErrors` — into the language
+     * server's LSP diagnostics. See {@link codedDastError} for why the parser
+     * writes the English itself rather than rendering it from a catalog.
+     *
+     * Optional, and absent on an error that has not been given a code.
+     */
+    code?: DiagnosticCode;
+    /** The values filling `code`'s blanks, absent when it has none. */
+    args?: DiagnosticArgs;
 }
 
 export interface ErrorData extends Data {}
@@ -430,7 +451,33 @@ export type DastMacro = Omit<_Macro, "attributes" | "path"> & {
 };
 export type DastMacroPathPart = Omit<_PathPart, "index"> & {
     index: (Omit<_PropIndex, "value"> & {
-        value: (DastText | DastMacro)[];
+        /**
+         * What is written between the brackets of an index.
+         *
+         * Wider than the grammar's own `PropIndex["value"]`, in two ways it has
+         * always been wider in practice. `macros.peggy` admits a `FunctionMacro`
+         * here, so `$m[$$f(2)]` has always produced one. And an element gets here
+         * the way a function reference's arguments do — not from the grammar, which
+         * only ever sees text, but from a post-pass over the assembled siblings
+         * once the elements between the brackets exist as nodes. See
+         * `gobblePropIndices` (#1909).
+         *
+         * Cdata, comments, instructions and doctypes are here because `lezerToDast` really
+         * does return them in an index — they are written between the brackets
+         * like anything else. `normalizeDocumentDast` is what removes them, so
+         * everything downstream of normalization sees only the first four. A
+         * consumer reading raw parser output has to handle all eight.
+         */
+        value: (
+            | DastText
+            | DastMacro
+            | DastFunctionMacro
+            | DastElement
+            | DastCdata
+            | DastComment
+            | DastInstruction
+            | DastDoctype
+        )[];
         source_doc?: number;
     })[];
     source_doc?: number;

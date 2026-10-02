@@ -1,5 +1,10 @@
 import { doenetSchema } from "@doenet/static-assets/schema";
 import { AttrInfo, PropInfo } from "../components";
+import {
+    loadSchemaHistory,
+    schemaSince,
+    type SchemaSince,
+} from "./schema-since";
 
 const SCHEMA: {
     elements: {
@@ -13,6 +18,7 @@ const SCHEMA: {
             defaultValue?: unknown;
             values?: string[];
             autocompleteValues?: { value: string; description: string }[];
+            isList?: boolean;
             groupName?: string;
             highlighted?: boolean;
         }[];
@@ -35,12 +41,19 @@ type OptimizedSchemaItem = {
     parents: string[];
     attrs: AttrInfo[];
     props: PropInfo[];
+    /**
+     * Release this element arrived in, or `"unreleased"` when it is in the
+     * working-tree schema but no release yet. Absent when there is nothing
+     * worth saying — see `schema-since.ts` for which those are.
+     */
+    since?: string;
 };
 
 /**
  * `doenet-schema.json` contains a lot of information. This function massages that information and adds more categories to it.
  */
 export function computeOptimizedSchema() {
+    const since = schemaSince(loadSchemaHistory());
     const optimizedSchema: Record<string, OptimizedSchemaItem> =
         Object.fromEntries(
             SCHEMA.elements.map((element) => [
@@ -60,8 +73,12 @@ export function computeOptimizedSchema() {
             optimizedSchema[element.name].children.push(child);
             optimizedSchema[child].parents.push(element.name);
         }
-        optimizedSchema[element.name].attrs = getAttrInfo(element);
-        optimizedSchema[element.name].props = getPropInfo(element);
+        optimizedSchema[element.name].attrs = getAttrInfo(element, since);
+        optimizedSchema[element.name].props = getPropInfo(element, since);
+        const elementSince = since.element(element.name);
+        if (elementSince !== undefined) {
+            optimizedSchema[element.name].since = elementSince;
+        }
     }
 
     // Now that all attributes are computed, we can count each attribute. If the attribute appears on > 90% of elements,
@@ -105,7 +122,10 @@ export function computeOptimizedSchema() {
 /**
  * Find information about all attributes, cross-referencing with identically-named props if available.
  */
-function getAttrInfo(element: (typeof SCHEMA)["elements"][number]) {
+function getAttrInfo(
+    element: (typeof SCHEMA)["elements"][number],
+    since: SchemaSince,
+) {
     const propLookup = Object.fromEntries(
         element.properties.map((prop) => [prop.name, prop]),
     );
@@ -121,6 +141,12 @@ function getAttrInfo(element: (typeof SCHEMA)["elements"][number]) {
         if (attr.type) {
             info.type = attr.type;
         }
+        // A list-valued enumerated attribute (`isList`) renders its type as a
+        // list (e.g. `[ keyword ]`) and signals that each item is drawn from
+        // the value table below.
+        if (attr.isList) {
+            info.isArray = true;
+        }
         if (attr.defaultValue !== undefined) {
             info.defaultValue = attr.defaultValue;
         }
@@ -133,6 +159,16 @@ function getAttrInfo(element: (typeof SCHEMA)["elements"][number]) {
         } else if (attr.values) {
             info.values = attr.values.map((value) => ({ value }));
         }
+        for (const value of info.values ?? []) {
+            const valueSince = since.value(
+                element.name,
+                attr.name,
+                value.value,
+            );
+            if (valueSince !== undefined) {
+                value.since = valueSince;
+            }
+        }
         // `isArray` is still cross-referenced from a same-named property.
         if (correspondingProp?.isArray) {
             info.isArray = true;
@@ -142,6 +178,10 @@ function getAttrInfo(element: (typeof SCHEMA)["elements"][number]) {
         }
         if (attr.highlighted) {
             info.highlighted = true;
+        }
+        const attrSince = since.attribute(element.name, attr.name);
+        if (attrSince !== undefined) {
+            info.since = attrSince;
         }
 
         attrInfo.push(info);
@@ -154,7 +194,10 @@ function getAttrInfo(element: (typeof SCHEMA)["elements"][number]) {
 /**
  * Find information about all props of an element.
  */
-function getPropInfo(element: (typeof SCHEMA)["elements"][number]) {
+function getPropInfo(
+    element: (typeof SCHEMA)["elements"][number],
+    since: SchemaSince,
+) {
     // Derive grouping for properties that share a name with an attribute, so
     // an attribute and its property always land in the same docs group. A
     // property's own group (set on a pure-output state def) wins; otherwise we
@@ -182,6 +225,10 @@ function getPropInfo(element: (typeof SCHEMA)["elements"][number]) {
         }
         if (prop.highlighted ?? correspondingAttr?.highlighted) {
             info.highlighted = true;
+        }
+        const propSince = since.property(element.name, prop.name);
+        if (propSince !== undefined) {
+            info.since = propSince;
         }
 
         propInfo.push(info);

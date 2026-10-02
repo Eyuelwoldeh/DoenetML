@@ -1,3 +1,4 @@
+import type { DiagnosticArgs, DiagnosticCode } from "@doenet/i18n";
 import type { DiagnosticRecord, Position } from "@doenet/utils";
 
 export type Point = [number, number];
@@ -18,9 +19,11 @@ export interface Dimensions {
     height: number;
 }
 
+/** Arguments to {@link pushWarning}: a code, not a finished sentence. */
 export interface PushDiagnosticArgs {
     diagnostics: DiagnosticRecord[];
-    message: string;
+    code: DiagnosticCode;
+    args?: DiagnosticArgs;
     position?: Position;
 }
 
@@ -34,7 +37,9 @@ export interface SelectedStyle {
     fillColorWord?: string;
     lineOpacity?: number;
     fillOpacity?: number;
+    fillPatternOpacity?: number;
     lineStyle?: string;
+    fillStyle?: string;
     markerStyle?: string;
     markerSize?: number;
     markerColor?: string;
@@ -141,6 +146,8 @@ export interface GraphDependencyValues extends Record<string, unknown> {
     yMax?: unknown;
     width?: { size?: unknown } | null;
     aspectRatio?: unknown;
+    /** `"none"`, `"medium"`, `"dense"`, or `[dx, dy]`. */
+    grid?: unknown;
     displayXAxis?: unknown;
     displayYAxis?: unknown;
     xLabel?: unknown;
@@ -157,4 +164,5 @@ export interface GraphDependencyValues extends Record<string, unknown> {
     curveDescendants?: Descendant[];
     curveDescendantComponentIndices?: number[];
     functionToCurveComponentIdx?: Record<number, number>;
+    document?: { stateValues?: { theme?: "dark" | "light" } } | null;
 }

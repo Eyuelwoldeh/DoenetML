@@ -1,5 +1,9 @@
 import { cesc } from "@doenet/utils";
 import { verifySideBySideColumnTopAlignment } from "./utils/listItemAlignment";
+import {
+    verifyListItemNumbersAlign,
+    verifySectionNumberSharesRowWith,
+} from "./utils/listItemNumberAlignment";
 
 describe("Problem Tag Tests", { tags: ["@group5"] }, function () {
     beforeEach(() => {
@@ -145,6 +149,150 @@ describe("Problem Tag Tests", { tags: ["@group5"] }, function () {
             cy.get("#sum3_button").should("contain.text", "Correct");
 
             cy.get("#theProblem_button").should("not.exist");
+        });
+    });
+
+    it("section wide check work with maxNumAttempts disables answers when exhausted", () => {
+        cy.window().then(async (win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+        <problem sectionWideCheckWork maxNumAttempts="2" name="theProblem">
+        <title>Problem 1</title>
+        <p>2x: <answer name="twox">2x</answer></p>
+        <p>3x: <answer name="threex">3x</answer></p>
+      </problem>
+    `,
+                },
+                "*",
+            );
+        });
+
+        // Two attempts remaining initially
+        cy.get("#theProblem_button").should("contain.text", "Check Work");
+        cy.get("[data-test=attempts-remaining]").should(
+            "contain.text",
+            "2 attempts remaining",
+        );
+        cy.get("#theProblem_button").should("not.be.disabled");
+
+        cy.window().then(async (win) => {
+            let stateVariables = await win.returnAllStateVariables1();
+
+            let twoxInputIdx =
+                stateVariables[await win.resolvePath1("twox")].stateValues
+                    .inputChildren[0].componentIdx;
+            let twoxInputAnchor = cesc("#_id_" + twoxInputIdx) + " textarea";
+
+            let threexInputIdx =
+                stateVariables[await win.resolvePath1("threex")].stateValues
+                    .inputChildren[0].componentIdx;
+            let threexInputAnchor =
+                cesc("#_id_" + threexInputIdx) + " textarea";
+
+            // First section-wide submission validates but leaves one attempt.
+            cy.get(twoxInputAnchor).type("y{enter}", { force: true });
+            cy.get(threexInputAnchor).type("y{enter}", { force: true });
+            cy.get("#theProblem_button").click();
+
+            cy.get("#theProblem_button").should("contain.text", "Incorrect");
+            cy.get("[data-test=attempts-remaining]").should(
+                "contain.text",
+                "1 attempt remaining",
+            );
+            cy.get("#theProblem_button").should("not.be.disabled");
+
+            cy.window().then(async (win2) => {
+                const problemIdx = await win2.resolvePath1("theProblem");
+                const sv = await win2.returnAllStateVariables1();
+                expect(sv[problemIdx].stateValues.numSubmissions).eq(1);
+            });
+
+            // Pressing the already-validated button does nothing: no new
+            // submission, the button stays "Incorrect", and the attempt count
+            // does not change until an input changes.
+            cy.get("#theProblem_button").click();
+            cy.get("#theProblem_button").should("contain.text", "Incorrect");
+            cy.get("[data-test=attempts-remaining]").should(
+                "contain.text",
+                "1 attempt remaining",
+            );
+            cy.get("#theProblem_button").should("not.be.disabled");
+
+            cy.window().then(async (win2) => {
+                const problemIdx = await win2.resolvePath1("theProblem");
+                const sv = await win2.returnAllStateVariables1();
+                expect(sv[problemIdx].stateValues.numSubmissions).eq(1);
+            });
+
+            // Changing an input returns the button to "Check Work"; submitting
+            // again exhausts the remaining attempt.
+            cy.get(twoxInputAnchor).type("{backspace}z{enter}", {
+                force: true,
+            });
+            cy.get("#theProblem_button").should("contain.text", "Check Work");
+            cy.get("#theProblem_button").click();
+
+            cy.get("[data-test=attempts-remaining]").should(
+                "contain.text",
+                "no attempts remaining",
+            );
+            cy.get("#theProblem_button").should("be.disabled");
+
+            cy.window().then(async (win2) => {
+                const problemIdx = await win2.resolvePath1("theProblem");
+                const sv = await win2.returnAllStateVariables1();
+                expect(sv[problemIdx].stateValues.numSubmissions).eq(2);
+            });
+
+            // Answer inputs are disabled once attempts are exhausted
+            cy.get(twoxInputAnchor).should("be.disabled");
+            cy.get(threexInputAnchor).should("be.disabled");
+        });
+    });
+
+    it("section wide check work buttons render for ordered and unordered lists", () => {
+        cy.window().then(async (win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+        <ol name="ordered" sectionWideCheckWork>
+          <li>1: <answer name="orderedAnswer">1</answer></li>
+        </ol>
+        <ul name="unordered" sectionWideCheckWork>
+          <li>2: <answer name="unorderedAnswer">2</answer></li>
+        </ul>
+    `,
+                },
+                "*",
+            );
+        });
+
+        cy.get("#ordered_button").should("contain.text", "Check Work");
+        cy.get("#unordered_button").should("contain.text", "Check Work");
+
+        cy.window().then(async (win) => {
+            let stateVariables = await win.returnAllStateVariables1();
+
+            let orderedInputIdx =
+                stateVariables[await win.resolvePath1("orderedAnswer")]
+                    .stateValues.inputChildren[0].componentIdx;
+            let orderedInputAnchor =
+                cesc("#_id_" + orderedInputIdx) + " textarea";
+
+            let unorderedInputIdx =
+                stateVariables[await win.resolvePath1("unorderedAnswer")]
+                    .stateValues.inputChildren[0].componentIdx;
+            let unorderedInputAnchor =
+                cesc("#_id_" + unorderedInputIdx) + " textarea";
+
+            cy.get(orderedInputAnchor).type("1{enter}", { force: true });
+            cy.get("#ordered_button").click();
+            cy.get("#ordered_button").should("contain.text", "Correct");
+
+            cy.get(unorderedInputAnchor).type("2{enter}", { force: true });
+            cy.get("#unordered_button").click();
+            cy.get("#unordered_button").should("contain.text", "Correct");
         });
     });
 
@@ -1025,6 +1173,53 @@ describe("Problem Tag Tests", { tags: ["@group5"] }, function () {
     });
 
     /**
+     * Run assertions against the CSS `::before` pseudo-element for an item.
+     *
+     * `should`, not `then`: a section's number arrives from the worker, so an
+     * assertion made once against whatever the first paint had is a coin flip —
+     * the flake tracked as #1320. `should` re-runs the callback until it passes
+     * or the command times out, which is what every other assertion in this file
+     * already gets from `cy.get(...).should(...)`. Every caller's callback only
+     * asserts, so re-running one has no other effect.
+     *
+     * #1320 lists more of this file than this one helper as sharing the pattern,
+     * and the rest are `should` now too: the boxed-heading `::before` read, both
+     * grid-layout reads, the `display` read in "untitled unboxed list items align
+     * numbering with block first children", and the three `align-items` reads in
+     * "answer list-item alignment only triggers flex-start for block choiceInput
+     * child" — plus `verifySideBySideColumnTopAlignment()`. Every value any of
+     * them reads is computed in the worker and arrives after the element does, so
+     * a single-shot callback is the same race in each case. There is no remaining
+     * `getComputedStyle` in this file outside a retried callback; keep it that
+     * way.
+     */
+    function withBeforeStyle(itemId, callback) {
+        const escapedItemId = cesc(itemId);
+
+        cy.get(`#${escapedItemId}`).should(($el) => {
+            const win = $el[0].ownerDocument.defaultView;
+            callback(win.getComputedStyle($el[0], "::before"));
+        });
+    }
+
+    /** Assert the CSS list marker rendered through the item's `::before`. */
+    function verifyBeforeContent(itemId, expectedContent) {
+        withBeforeStyle(itemId, (before) => {
+            expect(before.getPropertyValue("content")).to.equal(
+                expectedContent,
+            );
+        });
+    }
+
+    /** Assert that an item does not render a CSS list marker. */
+    function verifyNoBeforeContent(itemId) {
+        withBeforeStyle(itemId, (before) => {
+            const content = before.getPropertyValue("content");
+            expect(content).to.be.oneOf(["none", '""', ""]);
+        });
+    }
+
+    /**
      * Verifies baseline list-item numbering behavior for two non-boxed items.
      *
      * Asserts that:
@@ -1046,34 +1241,12 @@ describe("Problem Tag Tests", { tags: ["@group5"] }, function () {
         cy.get(`#${escapedItem2Id}`).should("have.text", item2Text);
 
         // Verify section numbers are rendered via CSS ::before pseudo-elements
-        cy.get(`#${escapedItem1Id}`).then(($el) => {
-            const win = $el[0].ownerDocument.defaultView;
-            const before = win.getComputedStyle($el[0], "::before");
-            const content = before.getPropertyValue("content");
-            expect(content).to.equal('"1."');
-        });
-
-        cy.get(`#${escapedItem2Id}`).then(($el) => {
-            const win = $el[0].ownerDocument.defaultView;
-            const before = win.getComputedStyle($el[0], "::before");
-            const content = before.getPropertyValue("content");
-            expect(content).to.equal('"2."');
-        });
+        verifyBeforeContent(item1Id, '"1."');
+        verifyBeforeContent(item2Id, '"2."');
 
         // Introduction and conclusion should NOT have section numbers
-        cy.get("#intro").then(($el) => {
-            const win = $el[0].ownerDocument.defaultView;
-            const before = win.getComputedStyle($el[0], "::before");
-            const content = before.getPropertyValue("content");
-            expect(content).to.be.oneOf(["none", '""', ""]);
-        });
-
-        cy.get("#conclusion").then(($el) => {
-            const win = $el[0].ownerDocument.defaultView;
-            const before = win.getComputedStyle($el[0], "::before");
-            const content = before.getPropertyValue("content");
-            expect(content).to.be.oneOf(["none", '""', ""]);
-        });
+        verifyNoBeforeContent("intro");
+        verifyNoBeforeContent("conclusion");
     }
 
     /**
@@ -1082,11 +1255,7 @@ describe("Problem Tag Tests", { tags: ["@group5"] }, function () {
      * (e.g., choiceInput/math on the first rendered line).
      */
     function verifyNonBoxedListItemUsesInlineBefore(itemId, expectedNumber) {
-        const escapedItemId = cesc(itemId);
-
-        cy.get(`#${escapedItemId}`).then(($el) => {
-            const win = $el[0].ownerDocument.defaultView;
-            const before = win.getComputedStyle($el[0], "::before");
+        withBeforeStyle(itemId, (before) => {
             expect(before.getPropertyValue("content")).to.equal(
                 `"${expectedNumber}."`,
             );
@@ -1109,20 +1278,9 @@ describe("Problem Tag Tests", { tags: ["@group5"] }, function () {
         const escapedItemId = cesc(itemId);
         const escapedHeadingClassName = cesc(`section-heading-${itemId}`);
 
-        cy.get(`#${escapedItemId}`).then(($sectionEl) => {
-            const win = $sectionEl[0].ownerDocument.defaultView;
-            const sectionBefore = win.getComputedStyle(
-                $sectionEl[0],
-                "::before",
-            );
-            expect(sectionBefore.getPropertyValue("content")).to.be.oneOf([
-                "none",
-                '""',
-                "",
-            ]);
-        });
+        verifyNoBeforeContent(itemId);
 
-        cy.get(`#${escapedItemId} .${escapedHeadingClassName}`).then(
+        cy.get(`#${escapedItemId} .${escapedHeadingClassName}`).should(
             ($headingEl) => {
                 const win = $headingEl[0].ownerDocument.defaultView;
                 const before = win.getComputedStyle($headingEl[0], "::before");
@@ -1143,45 +1301,47 @@ describe("Problem Tag Tests", { tags: ["@group5"] }, function () {
     }
 
     /**
-     * Verifies untitled, unboxed list items use the flex-row layout that keeps
-     * the section number and first child on the same line, even when first child
-     * is a block-level renderer.
+     * Verifies untitled, unboxed list items use the hanging-number grid layout:
+     * a fixed number column (holding the ::before marker) plus a content column,
+     * which keeps the number and first child on the same line — even when the
+     * first child is a block-level renderer — and keeps the number's horizontal
+     * position independent of the content.
      */
-    function verifyUntitledUnboxedListItemUsesFlexLayout(
+    function verifyUntitledUnboxedListItemUsesGridLayout(
         itemId,
         expectedNumber,
     ) {
         const escapedItemId = cesc(itemId);
         const escapedContentWrapperId = cesc(`${itemId}-content-wrapper`);
 
-        cy.get(`#${escapedItemId}`).then(($el) => {
+        cy.get(`#${escapedItemId}`).should(($el) => {
             const win = $el[0].ownerDocument.defaultView;
             const style = win.getComputedStyle($el[0]);
-            expect(style.getPropertyValue("display")).to.equal("flex");
+            expect(style.getPropertyValue("display")).to.equal("grid");
+        });
 
-            const before = win.getComputedStyle($el[0], "::before");
+        withBeforeStyle(itemId, (before) => {
             expect(before.getPropertyValue("content")).to.equal(
                 `"${expectedNumber}."`,
             );
             expect(before.getPropertyValue("position")).to.not.equal(
                 "absolute",
             );
+            // The number lives in the fixed first grid column.
+            expect(before.getPropertyValue("grid-column-start")).to.equal("1");
         });
 
-        cy.get(`#${escapedContentWrapperId}`).then(($el) => {
+        cy.get(`#${escapedContentWrapperId}`).should(($el) => {
             const win = $el[0].ownerDocument.defaultView;
             const style = win.getComputedStyle($el[0]);
-            expect(style.getPropertyValue("flex-grow")).to.equal("1");
+            expect(style.getPropertyValue("grid-column-start")).to.equal("2");
             expect(style.getPropertyValue("min-width")).to.equal("0px");
         });
     }
 
+    /** Assert that the section root itself owns the rendered list marker. */
     function verifySectionNumberRenderedOnRoot(itemId, expectedNumber) {
-        const escapedItemId = cesc(itemId);
-
-        cy.get(`#${escapedItemId}`).then(($el) => {
-            const win = $el[0].ownerDocument.defaultView;
-            const rootBefore = win.getComputedStyle($el[0], "::before");
+        withBeforeStyle(itemId, (rootBefore) => {
             expect(rootBefore.getPropertyValue("content")).to.equal(
                 `"${expectedNumber}."`,
             );
@@ -1339,14 +1499,14 @@ describe("Problem Tag Tests", { tags: ["@group5"] }, function () {
             );
         });
 
-        verifyUntitledUnboxedListItemUsesFlexLayout("task1", 1);
-        verifyUntitledUnboxedListItemUsesFlexLayout("task2", 2);
-        verifyUntitledUnboxedListItemUsesFlexLayout("task3", 3);
-        verifyUntitledUnboxedListItemUsesFlexLayout("task4", 4);
-        verifyUntitledUnboxedListItemUsesFlexLayout("task5", 5);
-        verifyUntitledUnboxedListItemUsesFlexLayout("task8", 8);
-        verifyUntitledUnboxedListItemUsesFlexLayout("task9", 9);
-        verifyUntitledUnboxedListItemUsesFlexLayout("task10", 10);
+        verifyUntitledUnboxedListItemUsesGridLayout("task1", 1);
+        verifyUntitledUnboxedListItemUsesGridLayout("task2", 2);
+        verifyUntitledUnboxedListItemUsesGridLayout("task3", 3);
+        verifyUntitledUnboxedListItemUsesGridLayout("task4", 4);
+        verifyUntitledUnboxedListItemUsesGridLayout("task5", 5);
+        verifyUntitledUnboxedListItemUsesGridLayout("task8", 8);
+        verifyUntitledUnboxedListItemUsesGridLayout("task9", 9);
+        verifyUntitledUnboxedListItemUsesGridLayout("task10", 10);
         verifySideBySideColumnTopAlignment({
             sideBySideId: "sbs",
             expectedAlignment: "baseline",
@@ -1368,10 +1528,10 @@ describe("Problem Tag Tests", { tags: ["@group5"] }, function () {
             "0px",
         );
 
-        cy.get(`#${cesc("task6")}`).then(($el) => {
+        cy.get(`#${cesc("task6")}`).should(($el) => {
             const win = $el[0].ownerDocument.defaultView;
             const style = win.getComputedStyle($el[0]);
-            expect(style.getPropertyValue("display")).to.not.equal("flex");
+            expect(style.getPropertyValue("display")).to.not.equal("grid");
         });
 
         verifyBoxedListItemNumberInHeadingBox("task7", 7);
@@ -1394,26 +1554,26 @@ describe("Problem Tag Tests", { tags: ["@group5"] }, function () {
         });
 
         // task1: answer with mathInput — section uses baseline alignment, not flex-start
-        cy.get(`#${cesc("task1")}`).then(($el) => {
+        cy.get(`#${cesc("task1")}`).should(($el) => {
             const win = $el[0].ownerDocument.defaultView;
             const style = win.getComputedStyle($el[0]);
-            expect(style.getPropertyValue("display")).to.equal("flex");
+            expect(style.getPropertyValue("display")).to.equal("grid");
             expect(style.getPropertyValue("align-items")).to.equal("baseline");
         });
 
         // task2: answer with inline choiceInput — section uses baseline alignment, not flex-start
-        cy.get(`#${cesc("task2")}`).then(($el) => {
+        cy.get(`#${cesc("task2")}`).should(($el) => {
             const win = $el[0].ownerDocument.defaultView;
             const style = win.getComputedStyle($el[0]);
-            expect(style.getPropertyValue("display")).to.equal("flex");
+            expect(style.getPropertyValue("display")).to.equal("grid");
             expect(style.getPropertyValue("align-items")).to.equal("baseline");
         });
 
         // task3: answer with block choiceInput — section uses flex-start, choiceInput margin is suppressed
-        cy.get(`#${cesc("task3")}`).then(($el) => {
+        cy.get(`#${cesc("task3")}`).should(($el) => {
             const win = $el[0].ownerDocument.defaultView;
             const style = win.getComputedStyle($el[0]);
-            expect(style.getPropertyValue("display")).to.equal("flex");
+            expect(style.getPropertyValue("display")).to.equal("grid");
             expect(style.getPropertyValue("align-items")).to.equal(
                 "flex-start",
             );
@@ -1444,6 +1604,358 @@ describe("Problem Tag Tests", { tags: ["@group5"] }, function () {
             "problem2",
             "Do this",
             "Do that",
+        );
+    });
+
+    it("problems render children as list through cascade", () => {
+        cy.window().then(async (win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+        <problems name="problems">
+            <cascade name="cascade">
+                <problem name="problem1">1+1=<answer>2</answer></problem>
+                <problem name="problem2">2+1=<answer>3</answer></problem>
+                <problem name="problem3">3+1=<answer>4</answer></problem>
+            </cascade>
+        </problems>
+    `,
+                },
+                "*",
+            );
+        });
+
+        // Wait for the document to render
+        cy.get("#problem1").should("exist");
+
+        verifyNoBeforeContent("cascade");
+        verifyBeforeContent("problem1", '"1."');
+        verifyBeforeContent("problem2", '"2."');
+        verifyBeforeContent("problem3", '"3."');
+    });
+
+    // The problems in a cascade and the ones around it are one list: the
+    // numbering continues through the cascade, and revealing a step moves no
+    // number.
+    it("problems number in one sequence through a cascade", () => {
+        cy.window().then(async (win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+        <problems name="problems">
+            <problem name="problem1">1+1=<answer name="ans1"><mathInput name="mi1" /><award>2</award></answer></problem>
+            <cascade name="cascade">
+                <problem name="problem2">2+1=<answer name="ans2"><mathInput name="mi2" /><award>3</award></answer></problem>
+                <cascade>
+                    <problem name="problem3">3+1=<answer name="ans3"><mathInput name="mi3" /><award>4</award></answer></problem>
+                </cascade>
+            </cascade>
+            <problem name="problem4">4+1=<answer name="ans4"><mathInput name="mi4" /><award>5</award></answer></problem>
+        </problems>
+        <p name="pNum">$problem4.sectionNumber</p>
+    `,
+                },
+                "*",
+            );
+        });
+
+        cy.get("#problem4").should("exist");
+
+        verifyBeforeContent("problem1", '"1."');
+        verifyBeforeContent("problem2", '"2."');
+        verifyBeforeContent("problem4", '"4."');
+        cy.get("#pNum").should("have.text", "4");
+
+        // The nested cascade is a step not yet reached, so nothing of it is
+        // drawn until the problem before it is answered.
+        cy.get("#problem3").should("not.exist");
+        cy.get("#mi2 textarea").type("3{enter}", { force: true });
+        cy.get("#mi3").should("exist");
+
+        verifyBeforeContent("problem1", '"1."');
+        verifyBeforeContent("problem2", '"2."');
+        verifyBeforeContent("problem3", '"3."');
+        verifyBeforeContent("problem4", '"4."');
+    });
+
+    // A list item lines its number up with its first child that renders
+    // something and suppresses that child's top margin, so a child that hid
+    // itself must not be picked. A `<cascade>` is where that has to be told apart
+    // from the other way a child goes off screen: the cascade hides a whole
+    // step's children until the step is revealed. Only the child's own `hide`
+    // moves the lead, so revealing a step never shifts a number.
+    it("a cascade step's hidden first child does not take the lead", () => {
+        cy.window().then(async (win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+        <problems name="problems">
+            <cascade name="cascade">
+                <problem name="problem1">
+                    <p name="hiddenLead" hide>Hidden setup text</p>
+                    <answer name="ans1">
+                        <choiceInput name="ci1">
+                            <label>Label behind a hidden paragraph</label>
+                            <choice credit="1">A</choice>
+                            <choice>B</choice>
+                        </choiceInput>
+                    </answer>
+                </problem>
+                <problem name="problem2">
+                    <p name="lead2">Later step</p>
+                </problem>
+            </cascade>
+        </problems>
+    `,
+                },
+                "*",
+            );
+        });
+
+        cy.get("#problem1").should("exist");
+        cy.get("#hiddenLead").should("not.exist");
+
+        // The `<answer>` behind the hidden `<p>` is the child whose top margin is
+        // suppressed.
+        cy.get(`#${cesc("ans1")} fieldset`).should(
+            "have.css",
+            "margin-top",
+            "0px",
+        );
+        verifyBeforeContent("problem1", '"1."');
+
+        // The step the cascade has not reached hides every child, so it has no
+        // lead at all — and its number is drawn just the same.
+        cy.get("#lead2").should("not.exist");
+        verifyBeforeContent("problem2", '"2."');
+    });
+
+    // `<cascadeMessage>` is the one child a section hides while showing
+    // everything else: its rule is inverted, so it is on screen exactly while the
+    // step around it is *not* revealed. That makes it the child that hides
+    // neither by kind nor by its own `hide` — so once a child's own `hide` is
+    // honored, it is the last child the renderer drops while the core could still
+    // hand it the lead, leaving the `<answer>` behind it with the top margin the
+    // item wanted suppressed.
+    it("a revealed step's hidden cascadeMessage does not take the lead", () => {
+        cy.window().then(async (win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+        <problems name="problems">
+            <cascade name="cascade">
+                <problem name="problem1">
+                    <cascadeMessage name="msg1">Finish the previous problem first</cascadeMessage>
+                    <answer name="ans1">
+                        <choiceInput name="ci1">
+                            <label>Label behind a hidden message</label>
+                            <choice credit="1">A</choice>
+                            <choice>B</choice>
+                        </choiceInput>
+                    </answer>
+                </problem>
+                <problem name="problem2">
+                    <cascadeMessage name="msg2">Finish the previous problem first</cascadeMessage>
+                    <p name="lead2">Later step</p>
+                </problem>
+            </cascade>
+        </problems>
+    `,
+                },
+                "*",
+            );
+        });
+
+        cy.get("#problem1").should("exist");
+
+        // The first step is revealed, so its message is hidden and the
+        // `<answer>` behind it is the child whose top margin is suppressed.
+        cy.get("#msg1").should("not.exist");
+        cy.get(`#${cesc("ans1")} fieldset`).should(
+            "have.css",
+            "margin-top",
+            "0px",
+        );
+        verifyBeforeContent("problem1", '"1."');
+
+        // The step still to come is the mirror image: the message shows and the
+        // content does not, so the message is the child the item leads with —
+        // asserted in the test below.
+        cy.get("#msg2").should("exist");
+        cy.get("#lead2").should("not.exist");
+        verifyBeforeContent("problem2", '"2."');
+    });
+
+    // The other half of that inversion, and what #1680 was: a held-back step
+    // shows exactly one child, its `<cascadeMessage>`, so that message is what
+    // its number lines up with. While the step was treated as showing nothing,
+    // the item delegated to nobody, fell out of the numbering grid, and the
+    // message kept its own top margin — which drew it a line *below* the number.
+    //
+    // Asserted as an outcome: the message has to start on the item's own first
+    // row, the row the number occupies. The layout that puts it there is pinned
+    // too, with the helper this file checks an ordinary untitled, unboxed item's
+    // numbering grid with, so the grid the item rejoined is held to the same
+    // standard as the grid it never left.
+    it("a held-back step's cascadeMessage shares the row with its number", () => {
+        cy.window().then(async (win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+        <problems name="problems">
+            <cascade name="cascade">
+                <problem name="problem1">
+                    <p name="lead1">What is 1+1? <answer name="ans1">2</answer></p>
+                </problem>
+                <problem name="problem2">
+                    <cascadeMessage name="msg2">Answer the previous question to continue</cascadeMessage>
+                    <p name="lead2">What is 2+2? <answer name="ans2">4</answer></p>
+                </problem>
+            </cascade>
+        </problems>
+    `,
+                },
+                "*",
+            );
+        });
+
+        cy.get("#problem2").should("exist");
+        cy.get("#msg2").should("be.visible");
+        cy.get("#lead2").should("not.exist");
+
+        // The margin the item suppresses for whichever child leads it. Without
+        // the suppression the message is a margin below its own number.
+        cy.get("#msg2").should("have.css", "margin-top", "0px");
+
+        // And it really renders on the item's first row. Measured rather than
+        // taken from the margin, because the row is what a reader sees and more
+        // than one thing could push the message off it.
+        cy.get("#problem2").should(($item) => {
+            const item = $item[0];
+            const message = item.ownerDocument.getElementById("msg2");
+            const offset =
+                message.getBoundingClientRect().top -
+                item.getBoundingClientRect().top;
+            expect(
+                offset,
+                "the cascadeMessage starts on its item's first row",
+            ).to.be.closeTo(0, 2);
+        });
+
+        // It is the ordinary grid item now: number in the fixed first column,
+        // content in the second. This is the layout it had dropped out of.
+        verifyUntitledUnboxedListItemUsesGridLayout("problem2", 2);
+    });
+
+    // ---------------------------------------------------------------------
+    // Outcome-based list-item number alignment (regression guard for #1482).
+    //
+    // These assert the RENDERED geometry — that sibling list-item numbers line
+    // up at the decimal / content is not shifted — which is technique-
+    // independent and would have caught #1482. See
+    // ./utils/listItemNumberAlignment.js for why this measures content-left.
+    // ---------------------------------------------------------------------
+
+    it("list-item numbers align across first-child types at narrow width (#1482)", () => {
+        cy.viewport(500, 800);
+        cy.window().then(async (win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+        <problems name="problems">
+            <problem name="p1"><text>Hello plus more text to make it longer so that it wraps to the next line here</text></problem>
+            <problem name="p2">Hello plus more text to make it longer so that it wraps to the next line here</problem>
+            <problem name="p3"><p>Hello plus more text to make it longer so that it wraps to the next line here</p></problem>
+            <problem name="p4">Hello <text>plus more text to make it longer so that it wraps to the next line here</text></problem>
+        </problems>
+    `,
+                },
+                "*",
+            );
+        });
+
+        cy.get("#p4").should("exist");
+
+        verifyListItemNumbersAlign(["p1", "p2", "p3", "p4"], {
+            label: "first-child types at 500px",
+        });
+    });
+
+    it("list-item numbers align across single- and multi-line items at narrow width (#1482)", () => {
+        cy.viewport(500, 800);
+        cy.window().then(async (win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+        <problems name="problems">
+            <problem name="p1"><answer><label>Hello.</label>x</answer></problem>
+            <problem name="p2"><answer><label>Hello plus more text to make it longer</label>x</answer></problem>
+            <problem name="p3"><answer><label>Hello plus more text to make it longer so that we wrap to the next line</label>x</answer></problem>
+            <problem name="p4"><answer><label>Write an unsimplified equation that shows the function evaluated. Do not simplify or rearrange any terms.</label>x</answer></problem>
+        </problems>
+    `,
+                },
+                "*",
+            );
+        });
+
+        cy.get("#p4").should("exist");
+
+        verifyListItemNumbersAlign(["p1", "p2", "p3", "p4"], {
+            label: "single- vs multi-line at 500px",
+        });
+    });
+
+    it("list-item numbers align through a cascade at narrow width (#1482)", () => {
+        cy.viewport(500, 800);
+        cy.window().then(async (win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+        <problems name="problems">
+            <cascade revealAll name="cascade">
+                <problem name="p1"><answer><label>Hello.</label>x</answer></problem>
+                <problem name="p2"><answer><label>Hello plus more text to make it longer</label>x</answer></problem>
+                <problem name="p3"><answer><label>Hello plus more text to make it longer so that we wrap to the next line</label>x</answer></problem>
+                <problem name="p4"><answer><label>Write an unsimplified equation that shows the function evaluated. Do not simplify or rearrange any terms.</label>x</answer></problem>
+            </cascade>
+        </problems>
+    `,
+                },
+                "*",
+            );
+        });
+
+        cy.get("#p4").should("exist");
+
+        verifyListItemNumbersAlign(["p1", "p2", "p3", "p4"], {
+            label: "cascade single- vs multi-line at 500px",
+        });
+    });
+
+    // The section-number counterpart of the `<li>` marker test in `list.cy.js`:
+    // the number lines up with its content's first baseline, which for a
+    // several-row display is the middle row unless the display is aligned on
+    // its first row.
+    it("a part's number sits beside the first row of a leading md", () => {
+        cy.window().then(async (win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+        <problem>
+            <part name="part1">
+                <md><mrow>a &= b</mrow><mrow>c &= d</mrow><mrow>e &= f</mrow></md>
+            </part>
+        </problem>
+    `,
+                },
+                "*",
+            );
+        });
+
+        verifySectionNumberSharesRowWith(
+            "part1",
+            `#${cesc("part1")} mjx-itable > :first-child`,
         );
     });
 });

@@ -1,7 +1,8 @@
 import InlineComponent from "./abstract/InlineComponent";
 import me from "math-expressions";
 import { normalizeMathExpression } from "@doenet/utils";
-import { returnNVariables } from "../utils/math";
+import { returnNVariables, toNumberOrNaN } from "../utils/math";
+import { codedDiagnostic } from "../utils/diagnostics";
 // import nerdamer from 'nerdamer'
 // import 'nerdamer/Algebra.js'
 // import 'nerdamer/Calculus.js'
@@ -212,13 +213,11 @@ export default class SolveEquations extends InlineComponent {
                 let expression =
                     dependencyValues.mathChild[0].stateValues.value;
 
-                if (
-                    !(
-                        Array.isArray(expression.tree) &&
-                        expression.tree.length === 3 &&
-                        expression.tree[0] === "="
-                    )
-                ) {
+                if (!(
+                    Array.isArray(expression.tree) &&
+                    expression.tree.length === 3 &&
+                    expression.tree[0] === "="
+                )) {
                     return { setValue: { allSolutions: [] } };
                 }
 
@@ -296,10 +295,13 @@ export default class SolveEquations extends InlineComponent {
                 try {
                     f_base = formula.f();
                 } catch (e) {
-                    let message =
-                        "Cannot solve equation as could not evaluate equation: " +
-                        expression.toString();
-                    let diagnostics = [{ message, type: "warning" }];
+                    let diagnostics = [
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0057",
+                            args: { equation: expression.toString() },
+                        }),
+                    ];
 
                     return {
                         setValue: { allSolutions: [] },
@@ -330,12 +332,11 @@ export default class SolveEquations extends InlineComponent {
                     try {
                         return f(x);
                     } catch (e) {
-                        let res = f_symbolic(x);
-                        if (res !== null) {
-                            return res;
-                        } else {
-                            return NaN;
-                        }
+                        // `f_symbolic` returns `evaluate_to_constant()`'s
+                        // answer, which is already `NaN` when there is none;
+                        // `toNumberOrNaN` is here for the complex arm, which a
+                        // root finder cannot use either.
+                        return toNumberOrNaN(f_symbolic(x));
                     }
                 };
 

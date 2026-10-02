@@ -1,6 +1,12 @@
-import { returnPassThroughListItemChildStateVariableDefinitions } from "../utils/listItemChild";
+import {
+    childRendersSomething,
+    listItemChildVisibilityDependency,
+    returnPassThroughListItemChildStateVariableDefinitions,
+} from "../utils/listItemChild";
 import BlockComponent from "./abstract/BlockComponent";
 import me from "math-expressions";
+import { codedDiagnostic } from "../utils/diagnostics";
+const { max } = me.math;
 
 export class SideBySide extends BlockComponent {
     constructor(args) {
@@ -32,15 +38,40 @@ export class SideBySide extends BlockComponent {
 
         attributes.margins = {
             createComponentOfType: "_componentSizeList",
-            description: "List of margin widths between panels.",
+            description:
+                "Two margin widths applied to every panel: the first on the panel's leading side and the second on its trailing side, following the writing direction.",
         };
 
         attributes.valign = {
             createComponentOfType: "text",
+            toLowerCase: true,
+            validValues: [
+                { value: "top", description: "Align panels to the top." },
+                {
+                    value: "middle",
+                    description: "Vertically center panels.",
+                },
+                {
+                    value: "bottom",
+                    description: "Align panels to the bottom.",
+                },
+            ],
             description: "Default vertical alignment for all panels.",
         };
         attributes.valigns = {
             createComponentOfType: "textList",
+            toLowerCase: true,
+            validValues: [
+                { value: "top", description: "Align the panel to the top." },
+                {
+                    value: "middle",
+                    description: "Vertically center the panel.",
+                },
+                {
+                    value: "bottom",
+                    description: "Align the panel to the bottom.",
+                },
+            ],
             description: "Per-panel vertical alignment values.",
         };
 
@@ -78,9 +109,14 @@ export class SideBySide extends BlockComponent {
                 blockChildren: {
                     dependencyType: "child",
                     childGroups: ["blocks"],
+                    ...listItemChildVisibilityDependency(),
                 },
             }),
-            definition({ dependencyValues, componentIdx }) {
+            definition({
+                dependencyValues,
+                componentIdx,
+                componentInfoObjects,
+            }) {
                 const shouldRenderInline =
                     dependencyValues.parentChildrenToRenderInlineForListItem
                         ?.map((c) => c.componentIdx)
@@ -95,15 +131,32 @@ export class SideBySide extends BlockComponent {
                     };
                 }
 
-                // Use baseline alignment when the first panel is a plain paragraph
-                // so the list-item number aligns with its text; use flex-start for
-                // block-level content (graphs, choiceInputs, etc.) so the number
-                // aligns with the top of the content instead.
-                const firstPanel = dependencyValues.blockChildren?.[0];
+                // Use baseline alignment when the leading panel is a plain
+                // paragraph so the list-item number aligns with its text; use
+                // flex-start for block-level content (graphs, choiceInputs, etc.)
+                // so the number aligns with the top of the content instead.
+                //
+                // The panel it is read off has to be one that is *on the screen*
+                // (`childRendersSomething()`, the same test the other links of
+                // this chain apply). A hidden panel keeps its slot in the row's
+                // widths but the renderer draws no box for it, so a `baseline`
+                // read off a `<p hide>` lines the number up with the next
+                // panel's baseline — the bottom of a `<graph>` — rather than the
+                // top of the content the reader sees.
+                //
+                // Only the alignment comes from one panel; the forward still goes
+                // to every panel, hidden or not, since that is what suppresses
+                // each panel's top margin and they all sit at the top of the row.
+                // A hidden panel has no margin to suppress, so leaving it in that
+                // list is invisible either way.
+                const leadingPanel = dependencyValues.blockChildren?.find(
+                    (child) =>
+                        childRendersSomething(child, componentInfoObjects),
+                );
                 return {
                     setValue: {
                         listItemInlineAlignment:
-                            firstPanel?.componentType === "p"
+                            leadingPanel?.componentType === "p"
                                 ? "baseline"
                                 : "flex-start",
                         childrenToRenderInlineForListItem:
@@ -288,11 +341,13 @@ export class SideBySide extends BlockComponent {
                 }
 
                 if (foundAbsolute) {
-                    diagnostics.push({
-                        message:
-                            "`<sideBySide>` is not implemented for absolute measurements. Setting widths to relative.",
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0018",
+                            args: { component: "sideBySide" },
+                        }),
+                    );
                 }
                 widthsAbsolute = false;
 
@@ -462,11 +517,13 @@ export class SideBySide extends BlockComponent {
                 }
 
                 if (secondMarginAbsolute || marginsAbsolute) {
-                    diagnostics.push({
-                        message:
-                            "`<sideBySide>` is not implemented for absolute measurements. Setting margins to relative.",
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0019",
+                            args: { component: "sideBySide" },
+                        }),
+                    );
                 }
 
                 marginsAbsolute = false;
@@ -607,7 +664,7 @@ export class SideBySide extends BlockComponent {
                         // 2. else, if there are any null margins,
                         //    define them to be the same value that makes the total 100%
                         // 3. else if there two or panels, set gapWidth to make the total 100%
-                        // 4. else if there is one panel, expand the right margin
+                        // 4. else if there is one panel, expand the trailing margin
                         // 5. do nothing (child groups aren't matched)
 
                         if (nWidthsUndefined > 0) {
@@ -654,11 +711,13 @@ export class SideBySide extends BlockComponent {
                             allMargins[1] =
                                 100 - (allMargins[0] + allWidths[0]);
                         } else {
-                            diagnostics.push({
-                                message:
-                                    "Invalid `<sideBySide>`: it must have at least one block child.",
-                                type: "warning",
-                            });
+                            diagnostics.push(
+                                codedDiagnostic({
+                                    type: "warning",
+                                    code: "doenet-w0020",
+                                    args: { component: "sideBySide" },
+                                }),
+                            );
                         }
                     }
                 } else {
@@ -888,16 +947,14 @@ export class SideBySide extends BlockComponent {
                                 desiredStateVariableValues.margins[arrayKey],
                         });
                     }
-                } else if (
-                    !(
+                } else if (!(
+                    globalDependencyValues.marginsAttr.stateValues
+                        .componentSize1 &&
+                    Number.isFinite(
                         globalDependencyValues.marginsAttr.stateValues
-                            .componentSize1 &&
-                        Number.isFinite(
-                            globalDependencyValues.marginsAttr.stateValues
-                                .componentSize1.size,
-                        )
+                            .componentSize1.size,
                     )
-                ) {
+                )) {
                     if ("0" in desiredStateVariableValues.margins) {
                         instructions.push({
                             setDependency: "marginsAttr",
@@ -1276,15 +1333,40 @@ export class SbsGroup extends BlockComponent {
 
         attributes.margins = {
             createComponentOfType: "_componentSizeList",
-            description: "List of margin widths between panels.",
+            description:
+                "Two margin widths applied to every panel: the first on the panel's leading side and the second on its trailing side, following the writing direction.",
         };
 
         attributes.valign = {
             createComponentOfType: "text",
+            toLowerCase: true,
+            validValues: [
+                { value: "top", description: "Align panels to the top." },
+                {
+                    value: "middle",
+                    description: "Vertically center panels.",
+                },
+                {
+                    value: "bottom",
+                    description: "Align panels to the bottom.",
+                },
+            ],
             description: "Default vertical alignment for all panels.",
         };
         attributes.valigns = {
             createComponentOfType: "textList",
+            toLowerCase: true,
+            validValues: [
+                { value: "top", description: "Align the panel to the top." },
+                {
+                    value: "middle",
+                    description: "Vertically center the panel.",
+                },
+                {
+                    value: "bottom",
+                    description: "Align the panel to the bottom.",
+                },
+            ],
             description: "Per-panel vertical alignment values.",
         };
 
@@ -1327,7 +1409,7 @@ export class SbsGroup extends BlockComponent {
                         maxNPanelsPerRow:
                             dependencyValues.sideBySideChildren.length === 0
                                 ? 0
-                                : me.math.max(
+                                : max(
                                       dependencyValues.sideBySideChildren.map(
                                           (x) => x.stateValues.numPanels,
                                       ),
@@ -1547,11 +1629,13 @@ export class SbsGroup extends BlockComponent {
                 }
 
                 if (foundAbsolute) {
-                    diagnostics.push({
-                        message:
-                            "`<sbsGroup>` is not implemented for absolute measurements. Setting widths to relative.",
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0018",
+                            args: { component: "sbsGroup" },
+                        }),
+                    );
                 }
                 widthsAbsolute = false;
 
@@ -1688,16 +1772,14 @@ export class SbsGroup extends BlockComponent {
                         setEssentialValue: "specifiedMargins",
                         value: desiredStateVariableValues.specifiedMargins,
                     });
-                } else if (
-                    !(
+                } else if (!(
+                    globalDependencyValues.marginsAttr.stateValues
+                        .componentSize1 &&
+                    Number.isFinite(
                         globalDependencyValues.marginsAttr.stateValues
-                            .componentSize1 &&
-                        Number.isFinite(
-                            globalDependencyValues.marginsAttr.stateValues
-                                .componentSize1.size,
-                        )
+                            .componentSize1.size,
                     )
-                ) {
+                )) {
                     if ("0" in desiredStateVariableValues.specifiedMargins) {
                         instructions.push({
                             setDependency: "marginsAttr",
@@ -1808,11 +1890,13 @@ export class SbsGroup extends BlockComponent {
                 }
 
                 if (foundAbsolute) {
-                    diagnostics.push({
-                        message:
-                            "`<sbsGroup>` is not implemented for absolute measurements. Setting margins to relative.",
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0019",
+                            args: { component: "sbsGroup" },
+                        }),
+                    );
                 }
                 marginsAbsolute = false;
 
@@ -1955,7 +2039,7 @@ export class SbsGroup extends BlockComponent {
                         // 2. else, if there are any null margins,
                         //    define them to be the same value that makes the total 100%
                         // 3. else if there two or panels, set gapWidth to make the total 100%
-                        // 4. else if there is one panel, expand the right margin
+                        // 4. else if there is one panel, expand the trailing margin
                         // 5. do nothing (child groups aren't matched)
 
                         if (nWidthsUndefined > 0) {
@@ -2002,11 +2086,13 @@ export class SbsGroup extends BlockComponent {
                             allMargins[1] =
                                 100 - (allMargins[0] + allWidths[0]);
                         } else {
-                            diagnostics.push({
-                                message:
-                                    "Invalid `<sbsGroup>`: it must have at least one block child.",
-                                type: "warning",
-                            });
+                            diagnostics.push(
+                                codedDiagnostic({
+                                    type: "warning",
+                                    code: "doenet-w0020",
+                                    args: { component: "sbsGroup" },
+                                }),
+                            );
                         }
                     }
                 } else {

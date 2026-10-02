@@ -2,6 +2,12 @@ import React, { useState, useEffect, useRef } from "react";
 import { DoenetEditor, DoenetViewer } from "@doenet/doenetml";
 import { Button } from "@doenet/ui-components";
 
+// Lazy-load the prototype renderer so its stylesheet (which starts with a
+// Tailwind preflight reset) is only applied when a spec actually renders the
+// prototype. A static import would leak that global CSS into the
+// `@doenet/doenetml` viewer used by the existing specs and change their layout.
+const PrototypeRenderer = React.lazy(() => import("./PrototypeRenderer"));
+
 export function CypressTest() {
     const defaultTestSettings: {
         updateNumber: number;
@@ -20,7 +26,7 @@ export function CypressTest() {
         render: boolean;
         darkMode: "light" | "dark";
         showEditor: boolean;
-        viewerLocation: "left" | "right" | "bottom" | "top";
+        viewerLocation: "start" | "end" | "bottom" | "top";
         includeVariantSelector: boolean;
     } = {
         updateNumber: 0,
@@ -39,7 +45,7 @@ export function CypressTest() {
         render: true,
         darkMode: "light",
         showEditor: false,
-        viewerLocation: "right",
+        viewerLocation: "end",
         includeVariantSelector: false,
     };
 
@@ -59,6 +65,9 @@ export function CypressTest() {
             attemptNumber,
             externalDoenetMLs,
             answerResponseCounts,
+            doenetImagesUrl,
+            usePrototype,
+            prototypeCoreType,
         },
         setBaseState,
     ] = useState<{
@@ -66,6 +75,9 @@ export function CypressTest() {
         attemptNumber: number;
         externalDoenetMLs: Record<string, string>;
         answerResponseCounts?: Record<string, number>;
+        doenetImagesUrl?: string;
+        usePrototype?: boolean;
+        prototypeCoreType?: "rust" | "javascript";
     }>({
         doenetMLstring: null,
         attemptNumber: testSettings.attemptNumber,
@@ -110,6 +122,16 @@ export function CypressTest() {
     const [includeVariantSelector, setIncludeVariantSelector] = useState(
         testSettings.includeVariantSelector,
     );
+    // For Cypress tests of click-to-navigate: set via `scrollToSourceOffset`
+    // in a postMessage to scroll the viewer to that source character offset.
+    const [scrollToSourceOffset, setScrollToSourceOffset] = useState<
+        number | null
+    >(null);
+    // Locale settings a spec can drive without reloading, so a test can show
+    // that `uiLocale` retranslates the chrome in place while `documentLocale`
+    // rebuilds the core.
+    const [documentLocale, setDocumentLocale] = useState<string | null>(null);
+    const [uiLocale, setUiLocale] = useState<string | null>(null);
     const diagnosticsSummaryRef = useRef<Record<string, number> | null>(null);
     const diagnosticsSummaryCallsRef = useRef<
         { summary: Record<string, number>; doenetML: string }[]
@@ -154,9 +176,23 @@ export function CypressTest() {
         let newExternalDoenetMLs: Record<string, string> = {};
         let newAnswerResponseCounts: Record<string, number> | undefined =
             undefined;
+        let newDoenetImagesUrl: string | undefined = undefined;
+        // Keep the selected renderer sticky across incremental messages (e.g. a
+        // later message that only changes `attemptNumber` or re-sends
+        // `doenetML`): default to the current values and only override when the
+        // message explicitly includes these fields.
+        let newUsePrototype: boolean | undefined = usePrototype;
+        let newPrototypeCoreType: "rust" | "javascript" | undefined =
+            prototypeCoreType;
 
         if (e.data.doenetML !== undefined) {
             newDoenetMLstring = e.data.doenetML;
+        }
+
+        if (e.data.darkMode !== undefined) {
+            setDarkMode(e.data.darkMode);
+            testSettings.darkMode = e.data.darkMode;
+            localStorage.setItem("test settings", JSON.stringify(testSettings));
         }
 
         if (e.data.requestedVariantIndex !== undefined) {
@@ -176,6 +212,30 @@ export function CypressTest() {
             newAnswerResponseCounts = e.data.answerResponseCounts;
         }
 
+        if (e.data.doenetImagesUrl !== undefined) {
+            newDoenetImagesUrl = e.data.doenetImagesUrl;
+        }
+
+        if (e.data.usePrototype !== undefined) {
+            newUsePrototype = e.data.usePrototype;
+        }
+
+        if (e.data.prototypeCoreType !== undefined) {
+            newPrototypeCoreType = e.data.prototypeCoreType;
+        }
+
+        if (e.data.scrollToSourceOffset !== undefined) {
+            setScrollToSourceOffset(e.data.scrollToSourceOffset);
+        }
+
+        if (e.data.documentLocale !== undefined) {
+            setDocumentLocale(e.data.documentLocale);
+        }
+
+        if (e.data.uiLocale !== undefined) {
+            setUiLocale(e.data.uiLocale);
+        }
+
         // don't do anything if receive a message from another source (like the youtube player)
         if (
             typeof newDoenetMLstring === "string" ||
@@ -186,6 +246,9 @@ export function CypressTest() {
                 attemptNumber: newAttemptNumber,
                 externalDoenetMLs: newExternalDoenetMLs,
                 answerResponseCounts: newAnswerResponseCounts,
+                doenetImagesUrl: newDoenetImagesUrl,
+                usePrototype: newUsePrototype,
+                prototypeCoreType: newPrototypeCoreType,
             });
         }
     };
@@ -536,8 +599,8 @@ export function CypressTest() {
                                 setUpdateNumber((was: number) => was + 1);
                             }}
                         >
-                            <option value="right">right</option>
-                            <option value="left">left</option>
+                            <option value="end">end</option>
+                            <option value="start">start</option>
                             <option value="top">top</option>
                             <option value="bottom">bottom</option>
                         </select>
@@ -604,7 +667,11 @@ export function CypressTest() {
                 fetchExternalDoenetML={fetchExternalDoenetML}
                 showAnswerResponseButton={answerResponseCounts !== undefined}
                 answerResponseCounts={answerResponseCounts}
+                doenetImagesUrl={doenetImagesUrl}
                 readOnly={readOnly}
+                darkMode={darkMode}
+                documentLocale={documentLocale}
+                uiLocale={uiLocale}
                 diagnosticsSummaryCallback={(
                     nextDiagnosticsSummary: Record<string, number>,
                     nextDoenetML: string,
@@ -645,6 +712,13 @@ export function CypressTest() {
                         });
                     }
                 }}
+                onSourcePositionClick={(position) => {
+                    window.postMessage({
+                        position,
+                        messageType: "sourcePositionClick",
+                    });
+                }}
+                scrollToSourceOffset={scrollToSourceOffset}
                 activityId="activityIdFromCypress"
                 render={render}
                 darkMode={darkMode}
@@ -652,10 +726,43 @@ export function CypressTest() {
                 showAnswerResponseButton={answerResponseCounts !== undefined}
                 answerResponseCounts={answerResponseCounts}
                 includeVariantSelector={includeVariantSelector}
+                doenetImagesUrl={doenetImagesUrl}
+                documentLocale={documentLocale}
+                uiLocale={uiLocale}
             />
         );
 
         editorOrViewer = showEditor ? editor : viewer;
+
+        if (usePrototype) {
+            // The prototype renderers are driven by the FlatDast format and can
+            // be backed by either the rust core (default) or the JavaScript core
+            // (`prototypeCoreType="javascript"`). Gated behind `usePrototype` so
+            // existing `@doenet/doenetml` specs are unaffected.
+            editorOrViewer = (
+                <React.Suspense fallback={null}>
+                    <PrototypeRenderer
+                        key={"prototype" + updateNumber}
+                        doenetML={doenetMLstring}
+                        flags={{
+                            showCorrectness,
+                            readOnly,
+                            solutionDisplayMode,
+                            showFeedback,
+                            showHints,
+                            allowLoadState,
+                            allowSaveState,
+                            saveRendererState,
+                            allowLocalState,
+                            allowSaveEvents,
+                            autoSubmit,
+                        }}
+                        darkMode={darkMode}
+                        coreType={prototypeCoreType ?? "rust"}
+                    />
+                </React.Suspense>
+            );
+        }
     }
 
     return (

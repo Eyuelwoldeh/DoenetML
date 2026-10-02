@@ -7,6 +7,7 @@ import {
     updateMathInputValue,
     updateValue,
 } from "../utils/actions";
+import { getDiagnosticsByType } from "../utils/diagnostics";
 
 const Mock = vi.fn();
 vi.stubGlobal("postMessage", Mock);
@@ -151,7 +152,7 @@ describe("Repeat tag tests @group1", async () => {
         }
 
         let pText = values
-            .map((v, i) => `( ${v.join(", ")} ): ( ${indices[i].join(", ")} )`)
+            .map((v, i) => `(${v.join(", ")}): (${indices[i].join(", ")})`)
             .join(", ");
 
         let stateVariables = await core.returnAllStateVariables(false, true);
@@ -196,7 +197,7 @@ describe("Repeat tag tests @group1", async () => {
         }
 
         let pText = values
-            .map((v, i) => `( ${v.join(", ")} ): ( ${indices[i].join(", ")} )`)
+            .map((v, i) => `(${v.join(", ")}): (${indices[i].join(", ")})`)
             .join(", ");
 
         let stateVariables = await core.returnAllStateVariables(false, true);
@@ -614,7 +615,7 @@ describe("Repeat tag tests @group1", async () => {
 
         let e_n2 = 6;
 
-        let maths1 = [1, 2, 3].map((n) => `( ${n}, ${e_n2} )`);
+        let maths1 = [1, 2, 3].map((n) => `(${n}, ${e_n2})`);
         let maths2 = [4, 5, 6].map((n) => `sin(${n})`);
         let names1 = ["r1[1].math", "r1[2].math", "r1[3].math"];
         let names2 = ["r2[1].math", "r2[2].math", "r2[3].math"];
@@ -654,7 +655,7 @@ describe("Repeat tag tests @group1", async () => {
 
         for (let b of [1, 2, 3]) {
             for (let a of [...Array(b).keys()].map((v) => v + 1)) {
-                texts.push(`( ${a}, ${b} )`);
+                texts.push(`(${a}, ${b})`);
             }
         }
 
@@ -1293,8 +1294,8 @@ describe("Repeat tag tests @group1", async () => {
             let points1 = sources1.map((n) => [n, 2 * n]);
             let points2 = points1.map((p) => [p[0] ** 2, p[1] ** 2]);
 
-            let point1Texts = points1.map((p) => `( ${p[0]}, ${p[1]} )`);
-            let point2Texts = points2.map((p) => `( ${p[0]}, ${p[1]} )`);
+            let point1Texts = points1.map((p) => `(${p[0]}, ${p[1]})`);
+            let point2Texts = points2.map((p) => `(${p[0]}, ${p[1]})`);
 
             let pNames1 = [
                 ["p1a", "p1b"],
@@ -1747,10 +1748,10 @@ describe("Repeat tag tests @group1", async () => {
         const stateVariables = await core.returnAllStateVariables(false, true);
         expect(
             stateVariables[await resolvePathToNodeIdx("p1")].stateValues.text,
-        ).eq("( 1, 1 ), ( 2, 4 ), ( 3, 9 )");
+        ).eq("(1, 1), (2, 4), (3, 9)");
         expect(
             stateVariables[await resolvePathToNodeIdx("p2")].stateValues.text,
-        ).eq("( 1, 1 ), ( 2, 4 ), ( 3, 9 )");
+        ).eq("(1, 1), (2, 4), (3, 9)");
         expect(
             stateVariables[await resolvePathToNodeIdx("p3")].stateValues.text,
         ).eq("y = 1, y = 2, y = 3");
@@ -1923,6 +1924,187 @@ describe("Repeat tag tests @group1", async () => {
                     .stateValues.value,
             ).eq(i ** 2);
         }
+    });
+
+    it("repeat over a group that mixes components and list references", async () => {
+        // The group's own children mix written components with references, so
+        // the repeat must number the group's items the way `$g` displays them.
+        const cases = [
+            {
+                children: "<math>7</math><math>8</math>",
+                values: ["7", "8"],
+            },
+            { children: "$l", values: ["1", "2", "3"] },
+            {
+                children: "<math>7</math><math>8</math>$l",
+                values: ["7", "8", "1", "2", "3"],
+            },
+            { children: "$l<math>7</math>", values: ["1", "2", "3", "7"] },
+            { children: "$m7 $l", values: ["7", "1", "2", "3"] },
+            {
+                children: "$l <math>8</math> $m7 $l",
+                values: ["1", "2", "3", "8", "7", "1", "2", "3"],
+            },
+        ];
+
+        for (const { children, values } of cases) {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML: `
+    <mathList name="l">1 2 3</mathList><math name="m7">7</math>
+    <setup><group name="g">${children}</group></setup>
+    <p name="p"><repeat for="$g" valueName="v" indexName="i"><math>($i, $v)</math></repeat></p>
+    `,
+            });
+
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            expect(
+                stateVariables[await resolvePathToNodeIdx("p")].stateValues
+                    .text,
+                children,
+            ).eq(values.map((v, i) => `(${i + 1}, ${v})`).join(", "));
+        }
+    });
+
+    it("repeat over a group holding composites written inside it", async () => {
+        const cases = [
+            {
+                children: `<mathList extend="$l" />`,
+                values: ["1", "2", "3"],
+            },
+            {
+                children: "<mathList>4 5</mathList><math>6</math>",
+                values: ["4", "5", "6"],
+            },
+            {
+                children: "<numberList>4 5</numberList>",
+                values: ["4", "5"],
+            },
+            {
+                children: `<math>0</math><sequence length="3" />`,
+                values: ["0", "1", "2", "3"],
+            },
+            {
+                children:
+                    "<group><math>4</math><math>5</math></group><math>6</math>",
+                values: ["4", "5", "6"],
+            },
+            {
+                children: `<repeat for="4 5" valueName="x"><math>$x</math></repeat>`,
+                values: ["4", "5"],
+            },
+        ];
+
+        for (const { children, values } of cases) {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML: `
+    <mathList name="l">1 2 3</mathList>
+    <setup><group name="g">${children}</group></setup>
+    <p name="p"><repeat for="$g" valueName="v" indexName="i"><math>($i, $v)</math></repeat></p>
+    `,
+            });
+
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            expect(
+                stateVariables[await resolvePathToNodeIdx("p")].stateValues
+                    .text,
+                children,
+            ).eq(values.map((v, i) => `(${i + 1}, ${v})`).join(", "));
+        }
+    });
+
+    it("repeat over a group or sort whose items contain references", async () => {
+        const cases = [
+            {
+                setup: `<group name="c"><math>$a</math><math>$b</math><math>5</math></group>`,
+                values: ["3", "1", "5"],
+            },
+            {
+                setup: `<sort name="c"><math>$a</math><math>$b</math><math>5</math></sort>`,
+                values: ["1", "3", "5"],
+            },
+        ];
+
+        for (const { setup, values } of cases) {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML: `
+    <math name="a">3</math><math name="b">1</math>
+    <setup>${setup}</setup>
+    <p name="p"><repeat for="$c" valueName="v" indexName="i"><math>($i, $v)</math></repeat></p>
+    `,
+            });
+
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            expect(
+                stateVariables[await resolvePathToNodeIdx("p")].stateValues
+                    .text,
+                setup,
+            ).eq(values.map((v, i) => `(${i + 1}, ${v})`).join(", "));
+            expect(getDiagnosticsByType(core).warnings, setup).toHaveLength(0);
+        }
+    });
+
+    it("repeat over a changing mixed group keeps each value with its item", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <mathInput name="n" prefill="2" />
+    <mathInput name="m" prefill="0" />
+    <setup>
+        <sequence name="s" length="$n" />
+        <group name="g"><math>0</math>$s<sequence length="$m" from="10" /></group>
+    </setup>
+    <p name="p"><repeat for="$g" valueName="v" indexName="i"><math>($i, $v)</math></repeat></p>
+    `,
+        });
+
+        async function check(values: number[]) {
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            expect(
+                stateVariables[await resolvePathToNodeIdx("p")].stateValues
+                    .text,
+            ).eq(values.map((v, i) => `(${i + 1}, ${v})`).join(", "));
+        }
+
+        async function set(name: string, value: number) {
+            await updateMathInputValue({
+                latex: `${value}`,
+                componentIdx: await resolvePathToNodeIdx(name),
+                core,
+            });
+        }
+
+        await check([0, 1, 2]);
+
+        await set("n", 3);
+        await check([0, 1, 2, 3]);
+
+        // Hiding the sequence's items hides the iterations that showed them.
+        await set("n", 0);
+        await check([0]);
+
+        // The hidden iterations come back with the other sequence's items.
+        await set("m", 2);
+        await check([0, 10, 11]);
+
+        await set("n", 1);
+        await check([0, 1, 10, 11]);
+
+        await set("m", 0);
+        await check([0, 1]);
+
+        await set("n", 3);
+        await check([0, 1, 2, 3]);
     });
 
     it("type attribute wraps string", async () => {
@@ -2236,5 +2418,195 @@ describe("Repeat tag tests @group1", async () => {
         }));
 
         await check_items(2, answers);
+    });
+
+    it("valueName matching a name inside an index of the items does not capture it", async () => {
+        // The repeat names each item after its `valueName`, and the items here are copies
+        // of iterations that carry a `$i` of their own inside the index of `$m[$i]`. That
+        // copied `$i` still means the iteration's `i`, not the item the repeat just named
+        // `i` — which is the item the index sits inside, so reading it that way is circular
+        // and puts an `_error` where the index belongs, taking the whole document down.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <mathList name="m">11 22 33 44</mathList>
+    <repeatForSequence from="2" to="3" valueName="i" name="rounded">
+      <round>$m[$i]</round>
+    </repeatForSequence>
+
+    <p name="p"><repeat for="$rounded" valueName="i">$i</repeat></p>
+    `,
+        });
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+
+        expect(
+            stateVariables[await resolvePathToNodeIdx("p")].stateValues.text,
+        ).eq("22, 33");
+    });
+
+    it("an index inside an attribute of the items survives being copied", async () => {
+        // Each button's target names the entry of `m` that its iteration's `i` picks out.
+        // The copies the repeat makes carry that `$i` along with the button, so each copy
+        // must still change the same entry the button it copied changes.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <numberList name="m">11 22 33 44</numberList>
+    <repeatForSequence from="2" to="3" valueName="i" name="items">
+      <updateValue target="$m[$i]" newValue="99" type="number" name="uv" />
+    </repeatForSequence>
+
+    <p name="p">$m</p>
+    <repeat for="$items" valueName="v" name="r">$v</repeat>
+    `,
+        });
+
+        let stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("p")].stateValues.text,
+        ).eq("11, 22, 33, 44");
+
+        // press only the copies, not the buttons they were copied from
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("r[1].v"),
+            core,
+        });
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("r[2].v"),
+            core,
+        });
+
+        stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("p")].stateValues.text,
+        ).eq("11, 99, 99, 44");
+    });
+
+    it("valueName matching a name inside an index of an attribute of the items does not capture it", async () => {
+        // As above, but the repeat names each item `i` as well, so a copied `$i` that were
+        // read as the item it sits inside would be circular.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <numberList name="m">11 22 33 44</numberList>
+    <repeatForSequence from="2" to="3" valueName="i" name="items">
+      <updateValue target="$m[$i]" newValue="99" type="number" name="uv" />
+    </repeatForSequence>
+
+    <p name="p">$m</p>
+    <repeat for="$items" valueName="i" name="r">$i</repeat>
+    `,
+        });
+
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("r[1].i"),
+            core,
+        });
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("r[2].i"),
+            core,
+        });
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("p")].stateValues.text,
+        ).eq("11, 99, 99, 44");
+    });
+    // A `<repeat>` over a repeat whose body holds a `<setup>` blanked the whole
+    // document with "Cannot read properties of undefined (reading
+    // 'source:sequence')" (#1950). The iteration's replacements are then not
+    // the single replacement that took the reference's component index -- the
+    // `<setup>` contributes one of its own, and the whitespace between the
+    // elements survives as a string replacement -- and `addReplacementsToResolver`
+    // read `.attributes` off whatever happened to be first.
+    //
+    // What these pin is that the document builds and the rest of it renders.
+    // The inner repeat still yields nothing, which is the other half of #1950
+    // and a question about what a reference to a multi-replacement iteration
+    // should mean; that half is deliberately not asserted here either way.
+    describe("a repeat over a repeat whose body is not a single element", () => {
+        const wrappers = [
+            ["bare", "$v"],
+            ["in a paragraph", "<p>$v</p>"],
+            ["in a numberList", "<numberList>$v</numberList>"],
+            ["in a mathList", "<mathList>$v</mathList>"],
+        ] as const;
+
+        for (const [description, body] of wrappers) {
+            it(`builds with a setup in the body, ${description}`, async () => {
+                const { core, resolvePathToNodeIdx } = await createTestCore({
+                    doenetML: `
+    <repeatForSequence from="1" to="3" indexName="i" name="Ps">
+      <setup><number name="n">$i</number></setup>
+      <point name="P">($n,0)</point>
+    </repeatForSequence>
+    <repeat for="$Ps" valueName="v">${body}</repeat>
+    <p name="after">after</p>
+    <count name="c">$Ps</count>
+    `,
+                });
+
+                const stateVariables = await core.returnAllStateVariables(
+                    false,
+                    true,
+                );
+
+                expect(
+                    stateVariables[await resolvePathToNodeIdx("after")]
+                        .stateValues.text,
+                ).eq("after");
+                expect(
+                    stateVariables[await resolvePathToNodeIdx("c")].stateValues
+                        .value.tree,
+                ).eq(3);
+            });
+        }
+
+        // This shape did not blank -- an iteration of two elements and no
+        // `<setup>` leaves no string first -- so it is here as the neighbour
+        // of the four above rather than as a regression test.
+        it("builds with two elements in the body and no setup", async () => {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML: `
+    <repeatForSequence from="1" to="3" valueName="v" name="Ps">
+      <number name="n">$v</number>
+      <point name="P">($v,0)</point>
+    </repeatForSequence>
+    <numberList name="values"><repeat for="$Ps" valueName="w">$w.x</repeat></numberList>
+    <p name="after">after</p>
+    `,
+            });
+
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+
+            expect(
+                stateVariables[await resolvePathToNodeIdx("after")].stateValues
+                    .text,
+            ).eq("after");
+        });
+
+        // The control, and the shape that always worked: one element in the
+        // body, so the iteration has the single replacement the reference
+        // expects. This is what says the tests above are about the extra
+        // replacements and not about repeating over a repeat at all.
+        it("control: one element in the body", async () => {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML: `
+    <repeatForSequence from="1" to="3" valueName="v" name="Ps"><point name="P">($v,0)</point></repeatForSequence>
+    <numberList name="values"><repeat for="$Ps" valueName="w">$w.x</repeat></numberList>
+    `,
+            });
+
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+
+            expect(
+                stateVariables[await resolvePathToNodeIdx("values")].stateValues
+                    .numbers,
+            ).eqls([1, 2, 3]);
+        });
     });
 });

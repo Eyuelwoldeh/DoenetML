@@ -1,7 +1,12 @@
 import type { ComponentIdx } from "@doenet/utils";
+import { codedDiagnostic } from "../utils/diagnostics";
 import type Core from "../Core";
-import { preprocessAttributesObject } from "../utils/attributes";
+import {
+    preprocessAttributesObject,
+    validateListItemsAgainstValidValues,
+} from "../utils/attributes";
 import type { AttributeDefinition } from "../utils/dast/types";
+import { normalizeArrayStateVariableDefaults } from "./StateVariableInitializer";
 
 /**
  * Map from `attributeSpecification.createPrimitiveOfType` codes to the
@@ -13,6 +18,102 @@ const PRIMITIVE_TO_COMPONENT_TYPE: Record<string, string> = {
     stringArray: "textList",
     numberArray: "numberList",
 };
+
+/**
+ * Marks a state-variable-definitions map whose values are class-shared
+ * definition objects (the cached non-shadow case). `BaseComponent` builds
+ * prototype-based per-instance wrappers over marked definitions; unmarked
+ * maps (adapter / reference-shadow) hold per-instance clones that the
+ * component may use directly. A symbol key so `for..in` over the map skips it.
+ */
+export const SHARED_STATE_VARIABLE_DEFINITIONS = Symbol(
+    "sharedStateVariableDefinitions",
+);
+
+/**
+ * Per-core cache of class-level state-variable definitions, so the
+ * definition objects (and, more importantly, the closures they hold:
+ * `definition`, `returnDependencies`, `inverseDefinition`, `markStale`, ...)
+ * are created once per component class rather than once per component
+ * instance. For a moderately sized document this is tens of MB of heap.
+ *
+ * The cache is keyed per core because attribute-derived definitions close
+ * over `core`, and class definitions close over `core.numerics`.
+ *
+ * Sharing contract: consumers must not mutate the cached definition objects
+ * or anything nested inside them.
+ *   - `BaseComponent`'s constructor shallow-copies each definition into
+ *     `component.state` and additionally clones the nested fields that are
+ *     mutated at runtime (`shadowingInstructions`,
+ *     `additionalStateVariablesDefined`, `stateVariablesDeterminingDependencies`)
+ *     and re-materializes definition `workspace`s per instance.
+ *   - The adapter / reference-shadow paths below mutate definitions while
+ *     building a component, so they operate on per-instance clones made by
+ *     `cloneStateVariableDefinition`.
+ */
+const classStateVariableDefinitionsCache: WeakMap<
+    Core,
+    Map<
+        any,
+        {
+            /** attribute-derived + class definitions (non-shadow path) */
+            combined: Record<string, any>;
+            /** class definitions only (adapter / reference-shadow path) */
+            normalized: Record<string, any>;
+        }
+    >
+> = new WeakMap();
+
+function getClassStateVariableDefinitions(core: Core, componentClass: any) {
+    let perCore = classStateVariableDefinitionsCache.get(core);
+    if (!perCore) {
+        perCore = new Map();
+        classStateVariableDefinitionsCache.set(core, perCore);
+    }
+    let entry = perCore.get(componentClass);
+    if (!entry) {
+        const combined: Record<string, any> = {};
+        createAttributeStateVariableDefinitions({
+            core,
+            stateVariableDefinitions: combined,
+            componentClass,
+        });
+        const normalized =
+            componentClass.returnNormalizedStateVariableDefinitions(
+                core.numerics,
+            );
+        // class definitions win on a name collision, as before
+        Object.assign(combined, normalized);
+        // Install the class-invariant array defaults (keyToIndex,
+        // getAllArrayKeys, entryPrefixes fallback, ...) once per class, so
+        // instances don't re-assign them as own properties. Covers the
+        // `normalized` map too: its values are the same objects.
+        for (const varName in combined) {
+            normalizeArrayStateVariableDefaults(combined[varName], varName);
+        }
+        (combined as any)[SHARED_STATE_VARIABLE_DEFINITIONS] = true;
+        entry = { combined, normalized };
+        perCore.set(componentClass, entry);
+    }
+    return entry;
+}
+
+/**
+ * Wrap a cached state-variable definition in a per-instance prototype
+ * wrapper so the adapter / reference-shadow code can freely override
+ * fields on it: writes create own properties that shadow the shared
+ * definition, exactly like the wrappers `BaseComponent`'s constructor
+ * makes over class-shared definitions. (Removals must be written as
+ * `field = undefined` rather than `delete` — a delete of an inherited
+ * field is a no-op.)
+ *
+ * Per-instance copies of the nested fields that get mutated in place are
+ * made at materialization time (`materializeNestedDefinitionFields` in
+ * `StateVariableInitializer`), not here.
+ */
+function wrapStateVariableDefinition(def: Record<string, any>) {
+    return Object.create(def);
+}
 
 /**
  * Builds the synchronous state-variable *shape* (the schema-like definition
@@ -88,38 +189,41 @@ export async function createStateVariableDefinitions({
         }
     }
 
-    let stateVariableDefinitions = {};
+    const classDefinitions = getClassStateVariableDefinitions(
+        core,
+        componentClass,
+    );
 
     if (!redefineDependencies) {
-        createAttributeStateVariableDefinitions({
+        // Shared class-level definitions. `BaseComponent`'s constructor
+        // makes the per-instance copies (see cache comment above).
+        return classDefinitions.combined;
+    }
+
+    // The adapter / reference-shadow paths mutate the definition objects,
+    // so give them per-instance prototype wrappers over the class
+    // definitions (own-property writes shadow the shared definition).
+    let stateVariableDefinitions: Record<string, any> = {};
+    for (const varName in classDefinitions.normalized) {
+        stateVariableDefinitions[varName] = wrapStateVariableDefinition(
+            classDefinitions.normalized[varName],
+        );
+    }
+
+    if (redefineDependencies.linkSource === "adapter") {
+        createAdapterStateVariableDefinitions({
             core,
+            redefineDependencies,
             stateVariableDefinitions,
             componentClass,
         });
-    }
-
-    //  add state variable definitions from component class
-    let newDefinitions =
-        componentClass.returnNormalizedStateVariableDefinitions(core.numerics);
-
-    Object.assign(stateVariableDefinitions, newDefinitions);
-
-    if (redefineDependencies) {
-        if (redefineDependencies.linkSource === "adapter") {
-            createAdapterStateVariableDefinitions({
-                core,
-                redefineDependencies,
-                stateVariableDefinitions,
-                componentClass,
-            });
-        } else {
-            await createReferenceShadowStateVariableDefinitions({
-                core,
-                redefineDependencies,
-                stateVariableDefinitions,
-                componentClass,
-            });
-        }
+    } else {
+        await createReferenceShadowStateVariableDefinitions({
+            core,
+            redefineDependencies,
+            stateVariableDefinitions,
+            componentClass,
+        });
     }
 
     return stateVariableDefinitions;
@@ -543,11 +647,11 @@ async function createReferenceShadowStateVariableDefinitions({
                         (targetVariableIsArray && targetVariable.length === 0)
                     ) {
                         // allow for case where we depend on array entry that does not yet exist
-                        return {
-                            useEssentialOrDefaultValue: {
-                                [primaryStateVariableForDefinition]: true,
-                            },
-                        };
+                        return missingTargetResult({
+                            core,
+                            stateDef,
+                            primaryStateVariableForDefinition,
+                        });
                     }
                     let valueFromTarget = stateDef.set(targetVariable);
                     if (setDefault && usedDefault.targetVariable) {
@@ -577,11 +681,11 @@ async function createReferenceShadowStateVariableDefinitions({
                         (targetVariableIsArray && targetVariable.length === 0)
                     ) {
                         // allow for case where we depend on array entry that does not yet exist
-                        return {
-                            useEssentialOrDefaultValue: {
-                                [primaryStateVariableForDefinition]: true,
-                            },
-                        };
+                        return missingTargetResult({
+                            core,
+                            stateDef,
+                            primaryStateVariableForDefinition,
+                        });
                     }
                     if (setDefault && usedDefault.targetVariable) {
                         return {
@@ -723,6 +827,208 @@ async function createReferenceShadowStateVariableDefinitions({
     });
 }
 
+/*
+ * Shared shadow definition functions.
+ *
+ * `modifyStateDefsToBeShadows` used to create 3 fresh closures (plus their
+ * shared context) per shadowed state variable per component instance — for
+ * copy/repeat-heavy documents this was the dominant remaining per-instance
+ * definition cost after the per-class definition cache (see
+ * https://github.com/Doenet/DoenetML/issues/1428). These module-level
+ * functions replace those closures; the per-variable parameters they need
+ * are stored as `shadow*` fields on the (per-instance) definition object.
+ *
+ * They read the parameters via `this`, which is safe because:
+ *  - shadow-path definitions ARE the state-variable objects (BaseComponent
+ *    uses the factory's per-instance clones directly), and
+ *  - every core call site invokes these as methods of the state-variable
+ *    object (`stateVarObj.definition(args)`, `stateVarObj.returnDependencies(...)`,
+ *    `stateVarObj.arrayDefinitionByKey(args)`, ...) or binds first
+ *    (`arrayStateVarObj.returnDependencies.bind(arrayStateVarObj)` in
+ *    `StateVariableInitializer`).
+ */
+function shadowReturnDependencies(this: any, args: any) {
+    // start from the original dependencies when they were kept for
+    // readyToExpandWhenResolved (see shadowOriginalReturnDependencies)
+    let dependencies: Record<string, any> = Object.assign(
+        {},
+        this.shadowOriginalReturnDependencies?.(args),
+    );
+
+    dependencies.targetVariable = {
+        dependencyType: "stateVariable",
+        componentIdx: this.shadowOfComponentIdx,
+        variableName: this.shadowVarNameInTarget,
+    };
+    if (this.shadowCopyComponentType) {
+        dependencies.targetVariableComponentType = {
+            dependencyType: "stateVariableComponentType",
+            componentIdx: this.shadowOfComponentIdx,
+            variableName: this.shadowVarNameInTarget,
+        };
+    }
+    return dependencies;
+}
+
+function shadowDefinition(
+    this: any,
+    { dependencyValues, usedDefault }: any,
+): Record<string, any> {
+    const varName = this.shadowVarName;
+    let result: Record<string, any> = {};
+
+    // TODO: how do we make it do this just once?
+    if ("targetVariableComponentType" in dependencyValues) {
+        result.setCreateComponentOfType = {
+            [varName]: dependencyValues.targetVariableComponentType,
+        };
+    }
+
+    if (
+        usedDefault.targetVariable &&
+        "defaultValue" in this &&
+        this.hasEssential
+    ) {
+        result.useEssentialOrDefaultValue = {
+            [varName]: {
+                defaultValue: dependencyValues.targetVariable,
+            },
+        };
+    } else {
+        result.setValue = {
+            [varName]: dependencyValues.targetVariable,
+        };
+    }
+
+    return result;
+}
+
+function shadowInverseDefinition(
+    this: any,
+    { desiredStateVariableValues }: any,
+) {
+    return {
+        success: true,
+        instructions: [
+            {
+                setDependency: "targetVariable",
+                desiredValue: desiredStateVariableValues[this.shadowVarName],
+                shadowedVariable: true,
+            },
+        ],
+    };
+}
+
+function shadowReturnArrayDependenciesByKey(this: any, { arrayKeys }: any) {
+    let dependenciesByKey: Record<string, any> = {};
+
+    for (let key of arrayKeys) {
+        dependenciesByKey[key] = {
+            targetVariable: {
+                dependencyType: "stateVariable",
+                componentIdx: this.shadowOfComponentIdx,
+                variableName:
+                    this.shadowOverrideVarName ||
+                    this.arrayVarNameFromArrayKey(key),
+            },
+        };
+    }
+
+    let globalDependencies: Record<string, any> = {};
+
+    if (this.shadowCopyComponentType) {
+        globalDependencies.targetVariableComponentType = {
+            dependencyType: "stateVariableComponentType",
+            componentIdx: this.shadowOfComponentIdx,
+            variableName: this.shadowVarName,
+        };
+    }
+
+    if (this.inverseShadowToSetEntireArray) {
+        globalDependencies.targetArray = {
+            dependencyType: "stateVariable",
+            componentIdx: this.shadowOfComponentIdx,
+            variableName: this.shadowVarName,
+        };
+    }
+
+    return { globalDependencies, dependenciesByKey };
+}
+
+function shadowArrayDefinitionByKey(
+    this: any,
+    { globalDependencyValues, dependencyValuesByKey, arrayKeys }: any,
+) {
+    const varName = this.shadowVarName;
+    let newEntries: Record<string, any> = {};
+
+    for (let arrayKey of arrayKeys) {
+        if ("targetVariable" in dependencyValuesByKey[arrayKey]) {
+            newEntries[arrayKey] =
+                dependencyValuesByKey[arrayKey].targetVariable;
+        } else {
+            // put in a placeholder value until this can be rerun
+            // with the updated dependencies
+            newEntries[arrayKey] = this.defaultValueByArrayKey?.(arrayKey);
+        }
+    }
+
+    let result: Record<string, any> = {
+        setValue: { [varName]: newEntries },
+    };
+
+    // TODO: how do we make it do this just once?
+    if ("targetVariableComponentType" in globalDependencyValues) {
+        result.setCreateComponentOfType = {
+            [varName]: globalDependencyValues.targetVariableComponentType,
+        };
+    }
+
+    return result;
+}
+
+function shadowInverseArrayDefinitionByKey(
+    this: any,
+    {
+        desiredStateVariableValues,
+        dependencyValuesByKey,
+        dependencyNamesByKey,
+        arraySize,
+        initialChange,
+    }: any,
+) {
+    const varName = this.shadowVarName;
+    if (this.inverseShadowToSetEntireArray) {
+        return {
+            success: true,
+            instructions: [
+                {
+                    setDependency: "targetArray",
+                    desiredValue: desiredStateVariableValues[varName],
+                    treatAsInitialChange: initialChange,
+                },
+            ],
+        };
+    }
+
+    let instructions = [];
+    for (let key in desiredStateVariableValues[varName]) {
+        if (!dependencyValuesByKey[key]) {
+            continue;
+        }
+
+        instructions.push({
+            setDependency: dependencyNamesByKey[key].targetVariable,
+            desiredValue: desiredStateVariableValues[varName][key],
+            shadowedVariable: true,
+        });
+    }
+    return {
+        success: true,
+        instructions,
+    };
+}
+
 /**
  * Rewrite each named state-variable definition in
  * `stateVariableDefinitions` so it reads from the corresponding variable
@@ -765,6 +1071,9 @@ function modifyStateDefsToBeShadows({
             }
         }
 
+        // `isShadow` is written eagerly: the shadow scans over a target
+        // component's state (including scans by later chained copies) read
+        // it before this variable is ever materialized.
         stateDef.isShadow = true;
 
         if (stateDef.additionalStateVariablesDefined) {
@@ -779,215 +1088,95 @@ function modifyStateDefsToBeShadows({
                 }
             }
         }
-        delete stateDef.additionalStateVariablesDefined;
-        if (!foundReadyToExpandWhenResolved) {
-            // if didn't find a readyToExpandWhenResolved,
-            // then won't use original dependencies so can delete any
+
+        // The rest of the modification (shared shadow function refs,
+        // severing the definition group, the shadow parameters) is recorded
+        // as a compact plan and applied by
+        // `applyPendingShadowModification` when the variable materializes.
+        stateDef.svShadowParams = {
+            targetComponentIdx: targetComponent.componentIdx,
+            overrideVarName: differentStateVariablesInTarget[varInd],
+            keepOriginalDependencies: Boolean(foundReadyToExpandWhenResolved),
+        };
+    }
+    for (let varName in deleteStateVariablesFromDefinition) {
+        stateVariableDefinitions[varName].svShadowDeleteVars =
+            deleteStateVariablesFromDefinition[varName];
+    }
+}
+
+/**
+ * Apply the shadow modification planned by `modifyStateDefsToBeShadows`
+ * to one state-variable object, at materialization time. Executes the
+ * same per-variable mutations the plan deferred; no-op for variables
+ * without pending markers.
+ */
+export function applyPendingShadowModification(stateVarObj: any) {
+    const params = stateVarObj.svShadowParams;
+    if (params) {
+        delete stateVarObj.svShadowParams;
+
+        const varName = stateVarObj.svVarName;
+
+        // assign `undefined` rather than `delete`: these state-variable
+        // objects are prototype wrappers, so the field must be shadowed
+        // with an own property (a delete of an inherited field is a
+        // no-op); all consumers of both fields test truthiness, never
+        // presence
+        const originalReturnDependencies = stateVarObj.returnDependencies;
+        stateVarObj.additionalStateVariablesDefined = undefined;
+        if (!params.keepOriginalDependencies) {
+            // won't use original dependencies so can remove any
             // stateVariablesDeterminingDependencies
-            delete stateDef.stateVariablesDeterminingDependencies;
+            stateVarObj.stateVariablesDeterminingDependencies = undefined;
         }
 
         let copyComponentType =
-            stateDef.public &&
-            stateDef.shadowingInstructions.hasVariableComponentType;
+            stateVarObj.public &&
+            stateVarObj.shadowingInstructions.hasVariableComponentType;
 
-        if (stateDef.isArray) {
-            let overrideVarNameWith = differentStateVariablesInTarget[varInd];
+        // Parameters for the shared shadow definition functions (see the
+        // module-level `shadow*` functions above), stored on the
+        // per-instance state-variable object instead of captured in
+        // per-variable closures.
+        stateVarObj.shadowOfComponentIdx = params.targetComponentIdx;
+        stateVarObj.shadowVarName = varName;
+        stateVarObj.shadowCopyComponentType = copyComponentType;
 
-            stateDef.returnArrayDependenciesByKey = function ({ arrayKeys }) {
-                let dependenciesByKey = {};
+        if (stateVarObj.isArray) {
+            stateVarObj.shadowOverrideVarName = params.overrideVarName;
 
-                for (let key of arrayKeys) {
-                    dependenciesByKey[key] = {
-                        targetVariable: {
-                            dependencyType: "stateVariable",
-                            componentIdx: targetComponent.componentIdx,
-                            variableName:
-                                overrideVarNameWith ||
-                                this.arrayVarNameFromArrayKey(key),
-                        },
-                    };
-                }
-
-                let globalDependencies = {};
-
-                if (copyComponentType) {
-                    globalDependencies.targetVariableComponentType = {
-                        dependencyType: "stateVariableComponentType",
-                        componentIdx: targetComponent.componentIdx,
-                        variableName: varName,
-                    };
-                }
-
-                if (stateDef.inverseShadowToSetEntireArray) {
-                    globalDependencies.targetArray = {
-                        dependencyType: "stateVariable",
-                        componentIdx: targetComponent.componentIdx,
-                        variableName: varName,
-                    };
-                }
-
-                return { globalDependencies, dependenciesByKey };
-            };
-
-            stateDef.arrayDefinitionByKey = function ({
-                globalDependencyValues,
-                dependencyValuesByKey,
-                arrayKeys,
-            }) {
-                let newEntries = {};
-
-                for (let arrayKey of arrayKeys) {
-                    if ("targetVariable" in dependencyValuesByKey[arrayKey]) {
-                        newEntries[arrayKey] =
-                            dependencyValuesByKey[arrayKey].targetVariable;
-                    } else {
-                        // put in a placeholder value until this can be rerun
-                        // with the updated dependencies
-                        newEntries[arrayKey] =
-                            stateDef.defaultValueByArrayKey?.(arrayKey);
-                    }
-                }
-
-                let result = {
-                    setValue: { [varName]: newEntries },
-                };
-
-                // TODO: how do we make it do this just once?
-                if ("targetVariableComponentType" in globalDependencyValues) {
-                    result.setCreateComponentOfType = {
-                        [varName]:
-                            globalDependencyValues.targetVariableComponentType,
-                    };
-                }
-
-                return result;
-            };
-
-            stateDef.inverseArrayDefinitionByKey = function ({
-                desiredStateVariableValues,
-                dependencyValuesByKey,
-                dependencyNamesByKey,
-                arraySize,
-                initialChange,
-            }) {
-                if (stateDef.inverseShadowToSetEntireArray) {
-                    return {
-                        success: true,
-                        instructions: [
-                            {
-                                setDependency: "targetArray",
-                                desiredValue:
-                                    desiredStateVariableValues[varName],
-                                treatAsInitialChange: initialChange,
-                            },
-                        ],
-                    };
-                }
-
-                let instructions = [];
-                for (let key in desiredStateVariableValues[varName]) {
-                    if (!dependencyValuesByKey[key]) {
-                        continue;
-                    }
-
-                    instructions.push({
-                        setDependency: dependencyNamesByKey[key].targetVariable,
-                        desiredValue: desiredStateVariableValues[varName][key],
-                        shadowedVariable: true,
-                    });
-                }
-                return {
-                    success: true,
-                    instructions,
-                };
-            };
+            stateVarObj.returnArrayDependenciesByKey =
+                shadowReturnArrayDependenciesByKey;
+            stateVarObj.arrayDefinitionByKey = shadowArrayDefinitionByKey;
+            stateVarObj.inverseArrayDefinitionByKey =
+                shadowInverseArrayDefinitionByKey;
         } else {
-            let returnStartingDependencies = () => ({});
-
-            if (foundReadyToExpandWhenResolved) {
+            if (params.keepOriginalDependencies) {
                 // even though won't use original dependencies
                 // if found a readyToExpandWhenResolved
                 // keep original dependencies so that readyToExpandWhenResolved
                 // won't be resolved until all its dependent variables are resolved
-                returnStartingDependencies =
-                    stateDef.returnDependencies.bind(stateDef);
+                stateVarObj.shadowOriginalReturnDependencies =
+                    originalReturnDependencies.bind(stateVarObj);
             }
 
-            let varNameInTarget = differentStateVariablesInTarget[varInd];
-            if (!varNameInTarget) {
-                varNameInTarget = varName;
-            }
+            stateVarObj.shadowVarNameInTarget =
+                params.overrideVarName || varName;
 
-            stateDef.returnDependencies = function (args) {
-                let dependencies = Object.assign(
-                    {},
-                    returnStartingDependencies(args),
-                );
-
-                dependencies.targetVariable = {
-                    dependencyType: "stateVariable",
-                    componentIdx: targetComponent.componentIdx,
-                    variableName: varNameInTarget,
-                };
-                if (copyComponentType) {
-                    dependencies.targetVariableComponentType = {
-                        dependencyType: "stateVariableComponentType",
-                        componentIdx: targetComponent.componentIdx,
-                        variableName: varNameInTarget,
-                    };
-                }
-                return dependencies;
-            };
-            stateDef.definition = function ({ dependencyValues, usedDefault }) {
-                let result = {};
-
-                // TODO: how do we make it do this just once?
-                if ("targetVariableComponentType" in dependencyValues) {
-                    result.setCreateComponentOfType = {
-                        [varName]: dependencyValues.targetVariableComponentType,
-                    };
-                }
-
-                if (
-                    usedDefault.targetVariable &&
-                    "defaultValue" in stateDef &&
-                    stateDef.hasEssential
-                ) {
-                    result.useEssentialOrDefaultValue = {
-                        [varName]: {
-                            defaultValue: dependencyValues.targetVariable,
-                        },
-                    };
-                } else {
-                    result.setValue = {
-                        [varName]: dependencyValues.targetVariable,
-                    };
-                }
-
-                return result;
-            };
-            stateDef.excludeDependencyValuesInInverseDefinition = true;
-            stateDef.inverseDefinition = function ({
-                desiredStateVariableValues,
-            }) {
-                return {
-                    success: true,
-                    instructions: [
-                        {
-                            setDependency: "targetVariable",
-                            desiredValue: desiredStateVariableValues[varName],
-                            shadowedVariable: true,
-                        },
-                    ],
-                };
-            };
+            stateVarObj.returnDependencies = shadowReturnDependencies;
+            stateVarObj.definition = shadowDefinition;
+            stateVarObj.excludeDependencyValuesInInverseDefinition = true;
+            stateVarObj.inverseDefinition = shadowInverseDefinition;
         }
     }
-    for (let varName in deleteStateVariablesFromDefinition) {
+
+    const deleteVars = stateVarObj.svShadowDeleteVars;
+    if (deleteVars) {
+        delete stateVarObj.svShadowDeleteVars;
         modifyStateDefToDeleteVariableReferences({
-            varNamesToDelete: deleteStateVariablesFromDefinition[varName],
-            stateDef: stateVariableDefinitions[varName],
+            varNamesToDelete: deleteVars,
+            stateDef: stateVarObj,
         });
     }
 }
@@ -1143,6 +1332,141 @@ function _resolvePrimaryStateVariableForDefinition({
         }
     }
     return { name, stateDef };
+}
+
+/**
+ * What a reference's primary state variable becomes when the target prop it
+ * shadows is not there — an array entry that does not exist, or does not
+ * exist *yet*.
+ *
+ * This is ordinary authoring, not a broken invariant. `$myList[$ci.selectedIndex]`
+ * on a `<choiceInput>` with nothing selected yet is the common case, and a list
+ * still being filled is another; both must render as nothing and resolve later
+ * if the entry appears.
+ *
+ * Most primaries carry `hasEssential`, and for those the essential-or-default
+ * request is right: it yields exactly what the component written empty would
+ * hold, which is the behavior to match (`<number extend="$P.x3" />` is `NaN`,
+ * the same as a bare `<number />`).
+ *
+ * Some primaries have neither an essential value nor a default, and for those
+ * the request cannot be honored: `StateVariableEvaluator` throws on
+ * `hasEssential` being unset, and supplying `hasEssential` alone only moves the
+ * throw to "Neither value nor default value specified" — the fallback has
+ * nothing to fall back to either way. The throw happens during initial
+ * dependency resolution, so it escapes document construction and blanks the
+ * page (#1938). `<integer>` is one such component, and index brackets always
+ * create an `<integer>`, so indexing is the usual way to reach it.
+ *
+ * For those, set the value directly instead, to the empty value
+ * `_emptyPrimaryValue` works out — which is asked of the class rather than
+ * guessed here.
+ */
+function missingTargetResult({
+    core,
+    stateDef,
+    primaryStateVariableForDefinition,
+}: {
+    core: Core;
+    stateDef: any;
+    primaryStateVariableForDefinition: string;
+}) {
+    if (stateDef.hasEssential) {
+        return {
+            useEssentialOrDefaultValue: {
+                [primaryStateVariableForDefinition]: true,
+            },
+        };
+    }
+
+    return {
+        setValue: {
+            [primaryStateVariableForDefinition]: _emptyPrimaryValue({
+                core,
+                stateDef,
+            }),
+        },
+    };
+}
+
+/**
+ * An empty value for a primary state variable that declares neither an
+ * essential value nor a default, and so cannot be asked for one.
+ *
+ * What it aims at is the value a bare component of the same type holds, since
+ * that is what the primaries that *do* declare an essential value fall back to.
+ * Both routes below ask a class for it rather than hard-coding a value per
+ * type, because the set of types that can reach here is wide — over sixty
+ * classes have a primary state variable without `hasEssential`.
+ *
+ * Returning a value of the wrong shape is not a safe failure: it is inherited
+ * by every state variable computed from the primary, and those are written
+ * expecting the class's own empty. `intComma`'s `numWords` calls `.trim()` on
+ * it, so handing that one `null` trades the crash in #1938 for a different
+ * crash a step later.
+ */
+function _emptyPrimaryValue({ core, stateDef }: { core: Core; stateDef: any }) {
+    // A class that defines `set` uses it to coerce incoming values, the absent
+    // one included -- `integer`'s maps `null` to `NaN`, which is exactly what a
+    // bare `<integer />` holds. Guarded because a `set` may be written only for
+    // values that are really there.
+    //
+    // No class needs the guard today -- of the seventeen whose primary defines
+    // `set`, only `integer` reaches here at all (the rest carry `hasEssential`
+    // and never get this far), and none of the seventeen throws on `null`,
+    // `undefined` or `[]`. It is not dead weight all the same: measured with
+    // `integer`'s `set` made to throw, the guard turns a blank page back into a
+    // rendered `NaN` from the walk below. A throw here escapes document
+    // construction, which is the #1938 failure this function exists to end.
+    if (stateDef.set) {
+        try {
+            return stateDef.set(null);
+        } catch (e) {
+            // Fall through and ask the type instead.
+        }
+    }
+
+    // Otherwise ask the component type that would be built to *hold* a value of
+    // this state variable's kind.
+    //
+    // `shadowingInstructions.createComponentOfType` is what a reference to this
+    // variable instantiates: `$myComponent.myStateVariable` creates a component
+    // of that type whose own primary state variable shadows this one to get its
+    // value. So that type's primary is, by construction, a holder for values of
+    // the kind this variable holds -- which makes its declared default a
+    // principled answer to "what is an empty one of these", rather than a value
+    // chosen here.
+    const createComponentOfType =
+        stateDef.shadowingInstructions?.createComponentOfType;
+    let shadowingClass = createComponentOfType
+        ? core.componentInfoObjects.allComponentClasses[createComponentOfType]
+        : undefined;
+
+    // Walking that class's prototype chain when it declares no default of its
+    // own, because a class in this state is almost always one that renamed its
+    // parent's primary out of the way and put a computed variable in its place:
+    // `integer` renames `number`'s `value` to `valuePreRound`, `intComma`
+    // renames `text`'s to `originalValue`. The essential value and the default
+    // went with the renamed variable, so the default lives one level up -- and
+    // it is still the right kind, which is what a bare component of the
+    // subclass ends up holding. `intComma` also names *itself* as its
+    // `createComponentOfType`, so without the walk the lookup arrives straight
+    // back at the class that has no default.
+    while (shadowingClass?.returnNormalizedStateVariableDefinitions) {
+        const { normalized } = getClassStateVariableDefinitions(
+            core,
+            shadowingClass,
+        );
+        const primary =
+            shadowingClass.primaryStateVariableForDefinition ?? "value";
+        const defaultValue = normalized[primary]?.defaultValue;
+        if (defaultValue !== undefined) {
+            return defaultValue;
+        }
+        shadowingClass = Object.getPrototypeOf(shadowingClass);
+    }
+
+    return null;
 }
 
 /**
@@ -1460,6 +1784,11 @@ function _buildAttributeDerivedDefinitions({
  * `validValues` (falling back to the default with a diagnostic when the
  * value isn't allowed) or `clamp`. Returns the (possibly modified)
  * value alongside any user-facing diagnostics produced along the way.
+ *
+ * When the value is an array (a list-valued attribute) and `validValues`
+ * is set, each item is validated individually: items are normalized
+ * (lower-cased/trimmed) and any that aren't in the allowed set are dropped
+ * with a single diagnostic listing them.
  */
 function validateAttributeValue({
     value,
@@ -1479,6 +1808,21 @@ function validateAttributeValue({
         !Number.isFinite(value)
     ) {
         value = attributeSpecification.transformNonFiniteTo;
+    }
+
+    // On a list-valued attribute, `validValues` constrains each item rather
+    // than the whole value. Validate each item, dropping invalid ones with a
+    // diagnostic. Returns early since the single-value coercions below assume
+    // a scalar string.
+    if (attributeSpecification.validValues && Array.isArray(value)) {
+        const res = validateListItemsAgainstValidValues({
+            items: value,
+            validValues: attributeSpecification.validValues,
+            toLowerCase: attributeSpecification.toLowerCase,
+            attribute,
+        });
+        diagnostics.push(...res.diagnostics);
+        return { value: res.value, diagnostics };
     }
 
     if (attributeSpecification.toLowerCase) {
@@ -1504,10 +1848,38 @@ function validateAttributeValue({
                     );
                 }
             }
-            diagnostics.push({
-                message: `Invalid value \`${valueOrig}\` for attribute \`${attribute}\`, using value \`${defaultValue}\``,
-                type: "info",
-            });
+            // Two messages, because there are two outcomes and the author
+            // can act on only one of them. An attribute with a real default
+            // is *replaced*, and naming the replacement is the whole point of
+            // saying anything — `displayMode="sideways"` draws as `block`,
+            // and an author who is not told that goes looking for a bug in
+            // the wrong place. An attribute whose default is `null` is
+            // *dropped* instead: nothing stood in for the value, and the
+            // component behaves as though the attribute had not been written.
+            // Reporting that as "using value `null`" describes a fallback
+            // that did not happen, and names a value no author could have
+            // typed. (`null` is the only nothing that reaches here — an
+            // undefined default threw above.)
+            diagnostics.push(
+                defaultValue === null
+                    ? codedDiagnostic({
+                          type: "info",
+                          code: "doenet-i0051",
+                          args: {
+                              value: String(valueOrig),
+                              attribute,
+                          },
+                      })
+                    : codedDiagnostic({
+                          type: "info",
+                          code: "doenet-i0048",
+                          args: {
+                              value: String(valueOrig),
+                              attribute,
+                              default: String(defaultValue),
+                          },
+                      }),
+            );
             value = defaultValue;
         }
     } else if (attributeSpecification.clamp) {

@@ -4,7 +4,7 @@ import useDoenetRenderer, {
     UseDoenetRendererProps,
 } from "../useDoenetRenderer";
 import { BoardContext, POINT_LAYER_OFFSET } from "./graph";
-import { MathJax } from "better-react-mathjax";
+import { DynamicMath } from "./utils/DynamicMath";
 import { textRendererStyle } from "@doenet/utils";
 import { characterizeOffGraphPoint } from "./utils/offGraphIndicators";
 import {
@@ -15,6 +15,7 @@ import {
     normalizePointStyle,
 } from "./utils/graph";
 import { DocContext } from "../DocViewer";
+import { useSourceNavigation } from "./utils/useSourceNavigation";
 import { JXGPoint } from "./jsxgraph-distrib/types";
 import { ChoiceInputInlineContext } from "./choiceInput";
 import { DraggableGraphicalSVs } from "./utils/graphicalSVs";
@@ -24,10 +25,15 @@ import { pointerEventToUserCoords } from "./utils/pointerToBoardCoords";
 import { resolveMarkerColor } from "./utils/styleColors";
 import {
     removeJXGEventHandlers,
+    syncLabelMaskCssStyle,
     syncLabelStrokeColor,
     syncLayer,
     syncWithLabelToggle,
 } from "./utils/jsxgraph";
+import {
+    attachLabelHoverHighlight,
+    computeLabelMaskCssStyle,
+} from "./utils/labelMaskStyle";
 import {
     DragCoordinationState,
     attachLineFamilyDragHandlers,
@@ -58,6 +64,7 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
     const dragState = usePointerDragState();
     let previousWithLabel = useRef<boolean | null>(null);
     let previousLabelPosition = useRef<LabelPosition | null>(null);
+    let previousUseOpenSymbol = useRef<boolean | null>(null);
     let calculatedX = useRef<number | null>(null);
     let calculatedY = useRef<number | null>(null);
 
@@ -83,6 +90,7 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
     switchable.current = SVs.switchable && !SVs.fixed;
 
     const { darkMode = undefined } = useContext(DocContext);
+    const sourceNavigation = useSourceNavigation(id);
 
     // Components with their own semantic open/closed state (Endpoint.open,
     // EquilibriumPoint.open) take precedence: when SVs.open is defined, it's
@@ -100,6 +108,8 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
         SVs.open ||
         (SVs.open === undefined && SVs.selectedStyle.markerFilled === false) ||
         ["cross", "plus"].includes(SVs.selectedStyle.markerStyle);
+
+    const fillOpacity = useOpenSymbol ? 1 : SVs.selectedStyle.markerOpacity;
 
     useBoardPointerTracking(board, dragState);
 
@@ -136,7 +146,7 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
             fillColor: fillColor,
             strokeColor,
             strokeOpacity: SVs.selectedStyle.markerOpacity,
-            fillOpacity: SVs.selectedStyle.markerOpacity,
+            fillOpacity,
             highlightFillColor: "var(--mainGray)",
             highlightStrokeColor: "var(--lightBlue)",
             size: normalizePointSize(
@@ -164,6 +174,11 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
                 anchorx,
                 anchory,
                 highlight: false,
+                ...computeLabelMaskCssStyle({
+                    layer: SVs.layer,
+                    masked: SVs.maskLabel,
+                }),
+                highlightStrokeOpacity: 1,
             };
 
             if (SVs.labelHasLatex) {
@@ -178,6 +193,11 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
         } else {
             jsxPointAttributes.label = {
                 highlight: false,
+                ...computeLabelMaskCssStyle({
+                    layer: SVs.layer,
+                    masked: SVs.maskLabel,
+                }),
+                highlightStrokeOpacity: 1,
             };
             if (SVs.labelHasLatex) {
                 jsxPointAttributes.label.useMathJax = true;
@@ -226,7 +246,18 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
             jsxPointAttributes,
         );
 
+        attachLabelHoverHighlight({
+            hoverTargetJXG: newShadowPointJXG,
+            getLabelJXG: () => pointJXG.current?.label,
+            ...computeLabelMaskCssStyle({
+                layer: SVs.layer,
+                masked: SVs.maskLabel,
+            }),
+            board,
+        });
+
         attachLineFamilyDragHandlers({
+            sourceNavigation,
             jxg: newShadowPointJXG,
             tag: 0,
             dragState,
@@ -343,6 +374,9 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
                     shadowPointJXG.current.visProp.highlightstrokeopacity =
                         pointJXG.current.visProp.strokeopacity;
                 }
+                // The label's hover mask style (border + raised z-index) is
+                // driven centrally by `attachLabelHoverHighlight` on the shadow
+                // point's over/out events, so nothing to do here.
             },
             onUpExtra: () => {
                 if (
@@ -361,6 +395,7 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
         pointJXG.current = newPointJXG;
         shadowPointJXG.current = newShadowPointJXG;
         previousWithLabel.current = withlabel;
+        previousUseOpenSymbol.current = useOpenSymbol;
     }
 
     if (board) {
@@ -507,9 +542,16 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
             ) {
                 pointJXG.current.visProp.strokeopacity =
                     SVs.selectedStyle.markerOpacity;
-                pointJXG.current.visProp.fillopacity =
-                    SVs.selectedStyle.markerOpacity;
+                // An open symbol has an opaque interior regardless of
+                // markerOpacity, so its fill stays fully opaque.
+                pointJXG.current.visProp.fillopacity = fillOpacity;
+            } else if (useOpenSymbol !== previousUseOpenSymbol.current) {
+                // markerOpacity didn't change, but the open/closed state did
+                // (e.g. a switchable endpoint toggled). Update the fill
+                // opacity to match the new state.
+                pointJXG.current.visProp.fillopacity = fillOpacity;
             }
+            previousUseOpenSymbol.current = useOpenSymbol;
 
             let newFace = normalizePointStyle(
                 SVs.selectedStyle.markerStyle,
@@ -556,6 +598,12 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
                 const label = pointJXG.current.label;
                 label.needsUpdate = true;
                 syncLabelStrokeColor(label, SVs.applyStyleToLabel, markerColor);
+                // Keep the point's label mask (and its live `highlightcssstyle`,
+                // which `attachLabelHoverHighlight` reads on hover) in sync with
+                // the current layer, preserving an active hover highlight.
+                syncLabelMaskCssStyle(label, SVs.layer, {
+                    maskLabel: SVs.maskLabel,
+                });
 
                 let labelPosition = adjustPointLabelPosition(
                     SVs.labelPosition,
@@ -599,9 +647,7 @@ export default React.memo(function Point(props: UseDoenetRendererProps) {
         : undefined;
     return (
         <span style={style} id={id}>
-            <MathJax hideUntilTypeset={"first"} inline dynamic>
-                {mathJaxify}
-            </MathJax>
+            <DynamicMath latex={mathJaxify} />
         </span>
     );
 });

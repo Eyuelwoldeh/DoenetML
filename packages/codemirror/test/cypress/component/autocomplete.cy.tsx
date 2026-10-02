@@ -1,13 +1,36 @@
 import React, { useRef } from "react";
 import { CodeMirror } from "../../../src/CodeMirror";
-// @ts-ignore — ?raw loads the pre-built inline core worker as a string so we
-// can create a blob: URL Worker.  The LSP spawns this worker behind the scenes
+// @ts-ignore — ?raw loads the pre-built core worker as a string so we can
+// create a blob: URL Worker.  The LSP spawns this worker behind the scenes
 // to power $ref / member completions; without a URL the LSP marks the rust
 // resolver "unavailable" and every ref test in this spec would fail.
 import coreWorkerSource from "@doenet/doenetml-worker/index.js?raw";
+// The worker locates its WASM at run time; a blob-URL worker cannot, so
+// supply it up front via `self.__doenetWorkerWasmUrl` (see the loading
+// ladder in @doenet/doenetml-worker's src/wasmLoading.ts). Fetched ONCE here and
+// re-shared as a blob: URL: this spec boots a fresh core sub-worker per
+// mounted document, and having every one of those pull its own multi-MB
+// copy from the component dev server makes the later tests miss their
+// timeouts. One shared Blob costs one fetch and one copy in memory.
+// @ts-ignore
+import coreWasmUrl from "@doenet/doenetml-worker/lib_doenetml_worker_bg.wasm?url";
+
+const coreWasmBlobUrl: string = coreWasmUrl.startsWith("data:")
+    ? coreWasmUrl
+    : URL.createObjectURL(
+          await (
+              await fetch(new URL(coreWasmUrl, window.location.href))
+          ).blob(),
+      );
 
 const doenetWorkerUrl = URL.createObjectURL(
-    new Blob([coreWorkerSource], { type: "application/javascript" }),
+    new Blob(
+        [
+            `self.__doenetWorkerWasmUrl = ${JSON.stringify(coreWasmBlobUrl)};\n`,
+            coreWorkerSource,
+        ],
+        { type: "application/javascript" },
+    ),
 );
 
 type LspInstance =
@@ -212,6 +235,40 @@ describe("CodeMirror LSP Autocomplete Plugin", () => {
         cy.get(".cm-content")
             .invoke("text")
             .should("not.contain", 'name="mcq"');
+    });
+
+    it("keeps element snippets listed across the hyphens of their names (#1780)", () => {
+        // Nine of the ten snippets have hyphenated names, so typing one
+        // straight through is the obvious way to reach it. The menu used to
+        // empty on the hyphen — the tag name was read as the text that
+        // followed it rather than as a name being typed — so the snippet
+        // could only be accepted by stopping short of the hyphen.
+        cy.mount(
+            <div style={{ height: "400px", width: "600px" }}>
+                <CodeMirror value="" doenetWorkerUrl={doenetWorkerUrl} />
+            </div>,
+        );
+
+        cy.get(".cm-content").click().type("<answer", { force: true });
+        cy.get(".cm-tooltip-autocomplete li").should(
+            "have.length.greaterThan",
+            1,
+        );
+
+        // `answer-labeled` is the only name that continues past the hyphen, so
+        // the menu narrowing to it alone is also how we know the list shown is
+        // the one queried after the hyphen rather than the one before it.
+        cy.get(".cm-content").type("-", { force: true });
+        cy.get(".cm-tooltip-autocomplete li").should("have.length", 1);
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").should(
+            "have.text",
+            "answer-labeled",
+        );
+
+        // Accepting it replaces everything typed, hyphen included.
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").click();
+        cy.get(".cm-content").invoke("text").should("contain", "<label>");
+        cy.get(".cm-content").invoke("text").should("not.contain", "answer-");
     });
 
     it("completes attribute names", () => {
@@ -573,6 +630,408 @@ describe("CodeMirror LSP Autocomplete Plugin", () => {
         );
     });
 
+    it("does not open autocomplete on a period ending a sentence", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="coords">(3,4)</math></point>\n'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        cy.get(".cm-content").type("Here is a sentence.", {
+            force: true,
+            delay: 200,
+        });
+
+        cy.wait(300);
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+    });
+
+    it("does not open autocomplete on a period after a word with no ref prefix", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="coords">(3,4)</math></point>\n'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        // `P.` looks like a member access but has no `$`, so it is prose.
+        cy.get(".cm-content").type("P.", { force: true, delay: 200 });
+
+        cy.wait(300);
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+    });
+
+    it("does not open autocomplete on a period after a closing tag", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="coords">(3,4)</math></point>\n'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        cy.get(".cm-content").type("<text>hi</text>.", {
+            force: true,
+            delay: 200,
+        });
+
+        cy.wait(300);
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+    });
+
+    it("still opens member autocomplete on a period after prose ending in a ref", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="coords">(3,4)</math></point>\n'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        // Warm the language server up on the ref itself, then dismiss, so the
+        // assertion below sees a popup opened by the `.` alone.
+        cy.get(".cm-content").type("The point is $P", {
+            force: true,
+            delay: 200,
+        });
+        openAutocomplete();
+        cy.get(".cm-content").type("{esc}", { force: true });
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+
+        cy.get(".cm-content").type(".", { force: true });
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "coords",
+        );
+    });
+
+    it("opens member autocomplete on a second period in a ref path", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="coords">(3,4)</math></point>\n'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        cy.get(".cm-content").type("$P.coords", { force: true, delay: 200 });
+        openAutocomplete();
+        cy.get(".cm-content").type("{esc}", { force: true });
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+
+        cy.get(".cm-content").type(".", { force: true });
+        cy.get(".cm-tooltip-autocomplete").should("be.visible");
+    });
+
+    it("opens member autocomplete on a period inside a parenthesized ref", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="coords">(3,4)</math></point>\n$(P'
+                }
+            />,
+        );
+
+        // Warm the language server up, then dismiss, so the assertion below
+        // sees a popup opened by the `.` alone.
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        openAutocomplete();
+        cy.get(".cm-content").type("{esc}", { force: true });
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+
+        cy.get(".cm-content").type(".", { force: true });
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "coords",
+        );
+    });
+
+    it("closes autocomplete when a character ends the reference path", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="coords">(3,4)</math></point>\n$P'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        cy.get(".cm-content").type(".", { force: true });
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "coords",
+        );
+
+        // `$P.(coords)` is not a reference — the macro grammar has no
+        // parenthesized property form — so the `(` ends the path, and the
+        // members of `$P.` no longer apply to what is being typed.
+        cy.get(".cm-content").type("(", { force: true });
+
+        cy.wait(300);
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+    });
+
+    it("closes autocomplete when a quote ends the reference path", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="coords">(3,4)</math></point>\n$P'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        cy.get(".cm-content").type(".", { force: true });
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "coords",
+        );
+
+        // Same for every other character a path cannot contain.
+        cy.get(".cm-content").type('"', { force: true });
+
+        cy.wait(300);
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+    });
+
+    it("still opens element completions when a tag starts right after a ref", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="coords">(3,4)</math></point>\n$P'
+                }
+            />,
+        );
+
+        // Warm the language server up on the ref itself, then dismiss, so the
+        // assertion below sees a popup opened by the `<` alone.
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        openAutocomplete();
+        cy.get(".cm-content").type("{esc}", { force: true });
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+
+        // Ending the ref path closes its popup, but `<` is a trigger in its
+        // own right and must still open the element menu.
+        cy.get(".cm-content").type("<", { force: true });
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "point",
+        );
+    });
+
+    it("opens ref-name autocomplete on a $ that starts a second ref", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={'<math name="myMath">x</math>\n$myMath'}
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        openAutocomplete();
+        cy.get(".cm-content").type("{esc}", { force: true });
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+
+        // `$myMath$` is two references back to back: the `$` ends the path it
+        // was typed into and opens a name list in the same keystroke.
+        cy.get(".cm-content").type("$", { force: true });
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "myMath",
+        );
+    });
+
+    it("opens member autocomplete on a period after an indexed ref", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<repeatForSequence name="rep"><math name="myMath">x</math></repeatForSequence>\n$rep[1]'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        openAutocomplete();
+        cy.get(".cm-content").type("{esc}", { force: true });
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+
+        cy.get(".cm-content").type(".", { force: true });
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "myMath",
+        );
+    });
+
+    it("opens member autocomplete on a period after a ref indexed by a ref", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<repeatForSequence name="rep" valueName="v" indexName="i"><math name="myMath">$v</math></repeatForSequence>\n$rep[$i]'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        openAutocomplete();
+        cy.get(".cm-content").type("{esc}", { force: true });
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+
+        // The idiomatic form inside a repeat, and the one whose index holds a
+        // `$` of its own: the `.` after it still reads as a property accessor
+        // on `$rep[$i]`.
+        cy.get(".cm-content").type(".", { force: true });
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "myMath",
+        );
+    });
+
+    it("closes autocomplete on a second period in a ref path", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="coords">(3,4)</math></point>\n$P'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        cy.get(".cm-content").type(".", { force: true });
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "coords",
+        );
+
+        // No reference has an empty segment, so `$P..` is not one, and the
+        // member list it was opened on no longer applies.
+        cy.get(".cm-content").type(".", { force: true });
+
+        cy.wait(300);
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+    });
+
+    it("closes autocomplete when a reference index is opened", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<p><repeatForSequence name="rep"><math name="myMath">x</math></repeatForSequence>$rep'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        openAutocomplete();
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains("rep");
+
+        // `[` puts the cursor inside the index, where the only reference that
+        // can be written is a fresh one — whose own `$` opens a list for it.
+        // The names of `$rep` do not apply there, and a session left running
+        // answers a cursor inside an index with the whole element menu.
+        cy.get(".cm-content").type("[", { force: true });
+
+        cy.wait(300);
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+    });
+
+    it("closes autocomplete when a reference index is closed", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<p><repeatForSequence name="rep"><math name="myMath">x</math></repeatForSequence>$rep[$re'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        openAutocomplete();
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains("rep");
+
+        // `]` closes the index, putting the cursor back on the outer path,
+        // where only a `.` can follow — nothing the name list inside the index
+        // applies to. Left running in an element body, it answers with that
+        // element's children.
+        cy.get(".cm-content").type("]", { force: true });
+
+        cy.wait(300);
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+    });
+
+    it("closes autocomplete when a reference has no name yet", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={'<p><math name="myMath">x</math>$'}
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        openAutocomplete();
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "myMath",
+        );
+
+        // The list opens on the bare `$`, before any name has been typed, and
+        // a space ends that reference exactly as it ends `$P.`. Left running
+        // in an element body, it answers with that element's children.
+        cy.get(".cm-content").type(" ", { force: true });
+
+        cy.wait(300);
+        cy.get(".cm-tooltip-autocomplete").should("not.exist");
+    });
+
+    it("keeps the member list on the hyphen that reaches a hyphenated name", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="my-coords">(3,4)</math></point>\n$P.my'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        openAutocomplete();
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "my-coords",
+        );
+
+        // A hyphen is the one path character that neither ends the path nor
+        // opens an index — it is how `$P.my` reaches `$(P.my-coords)` — so it
+        // must leave the list up, and the list must still anchor on the `my-`
+        // that was typed rather than on the macro the item would insert.
+        cy.get(".cm-content").type("-", { force: true });
+
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "my-coords",
+        );
+    });
+
+    it("rewrites the macro when a hyphenated member is accepted", () => {
+        cy.mount(
+            <AutocompleteTestHarness
+                initialValue={
+                    '<point name="P"><math name="my-coords">(3,4)</math></point>\n'
+                }
+            />,
+        );
+
+        cy.get(".cm-content").click().type("{ctrl}{end}", { force: true });
+        cy.get(".cm-content").type("$P.my", { force: true, delay: 200 });
+
+        // The member list has to survive the hyphenated item being in it: the
+        // item inserts a whole macro (`$(P.my-coords)`), which is not a
+        // continuation of the typed `$P.my`, and anchoring the list on that
+        // text would leave every option matched against `$P.my`.
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel")
+            .contains("my-coords")
+            .click();
+
+        // A member cannot be parenthesized on its own, so the accepted item
+        // replaces back to the `$`.
+        cy.get(".cm-content")
+            .invoke("text")
+            .then((text) => {
+                expect(text).to.contain("$(P.my-coords)");
+                expect(text).to.not.contain("$P.my-coords");
+            });
+    });
+
     it("shows member autocomplete after delete-then-dot on a completed ref", () => {
         cy.mount(
             <AutocompleteTestHarness
@@ -607,7 +1066,7 @@ describe("CodeMirror LSP Autocomplete Plugin", () => {
             .should("be.greaterThan", 0);
     });
 
-    it("shows member autocomplete after .( transition on a completed ref", () => {
+    it("offers nothing inside a parenthesized member segment", () => {
         cy.mount(
             <AutocompleteTestHarness
                 initialValue={
@@ -616,12 +1075,16 @@ describe("CodeMirror LSP Autocomplete Plugin", () => {
             />,
         );
 
+        // `$P.(coords)` is not a reference, so typing into the parentheses is
+        // typing into ordinary text — the language server has no members to
+        // offer there.
         cy.get(".cm-content")
             .click()
             .type("{ctrl}{end}(co", { force: true, delay: 200 });
 
-        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
-            "coords",
+        cy.wait(300);
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").should(
+            "not.exist",
         );
     });
 
@@ -922,5 +1385,212 @@ describe("CodeMirror LSP Autocomplete Plugin", () => {
                 "rgb(255, 255, 255)",
             );
         });
+    });
+
+    it("opens element-name completions when typing a tag immediately before another tag (#1328)", () => {
+        // The author inserts a new element in front of an existing `<text>`.
+        // Error recovery tentatively parses the half-typed `<nu` as a complete
+        // `<nu>` element wrapping `<text>`, which used to make the cursor look
+        // like it was in `<nu>`'s body and offer a `/nu>` close-tag completion.
+        cy.mount(<AutocompleteTestHarness initialValue={`<text></text>`} />);
+
+        cy.get(".cm-content").click().type("{ctrl}{home}", { force: true });
+        // Type the opening tag name in front of the existing `<text>`.
+        cy.get(".cm-content").type("<nu", { force: true });
+
+        // The popup opens from typing alone (no Ctrl+Space) and shows element
+        // names, not the bogus `/nu>` close-tag completion.
+        cy.get(".cm-tooltip-autocomplete").should("be.visible");
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "number",
+        );
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").should(
+            "not.contain.text",
+            "/nu",
+        );
+    });
+
+    it("opens element-name completions when typing a tag just before a closing tag (#1328)", () => {
+        // Cursor inside `<text>...</text>`, typing a new child tag right before
+        // the `</text>`: `<text><nu|</text>`.
+        cy.mount(<AutocompleteTestHarness initialValue={`<text></text>`} />);
+
+        // Move to just after the opening `<text>` (offset 6).
+        cy.get(".cm-content")
+            .click()
+            .type("{ctrl}{home}" + "{rightArrow}".repeat(6), { force: true });
+        cy.get(".cm-content").type("<nu", { force: true });
+
+        cy.get(".cm-tooltip-autocomplete").should("be.visible");
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "number",
+        );
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").should(
+            "not.contain.text",
+            "/nu",
+        );
+    });
+
+    it("opens element-name completions on explicit Ctrl+Space at a static tag-name cursor before another tag (#1328)", () => {
+        // The document already contains `<nu<text></text>`; the user places the
+        // cursor right after `nu` and presses Ctrl+Space (rather than reaching
+        // the position by typing). The menu must open with element names, not a
+        // `/nu>` close-tag completion.
+        cy.mount(<AutocompleteTestHarness initialValue={`<nu<text></text>`} />);
+
+        // Cursor right after `<nu` (offset 3). Keep `{ctrl}{home}` and the
+        // arrow movement in separate `type()` calls: Cypress holds `{ctrl}` for
+        // the rest of a single string, which would turn the arrows into
+        // word-wise Ctrl+Right and overshoot the intended offset.
+        cy.get(".cm-content").click().type("{ctrl}{home}", { force: true });
+        cy.get(".cm-content").type("{rightArrow}{rightArrow}{rightArrow}", {
+            force: true,
+        });
+        openAutocomplete();
+
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "number",
+        );
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").should(
+            "not.contain.text",
+            "/nu",
+        );
+    });
+
+    it("replaces bare filters around explicit element completions", () => {
+        // Ctrl+Space can open the element menu before the author has typed `<`.
+        // Whether the bare filter is typed before or after Ctrl+Space,
+        // accepting `<number>` must replace that word, not append after it as
+        // `num<number`.
+        cy.mount(<AutocompleteTestHarness initialValue={`<text></text>`} />);
+
+        cy.get(".cm-content").click().type("{ctrl}{home}", { force: true });
+        openAutocomplete();
+        cy.get(".cm-content").type("num", { force: true });
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel")
+            .contains(/^<number>$/)
+            .click();
+        cy.get(".cm-content").invoke("text").should("contain", "<number");
+        cy.get(".cm-content").invoke("text").should("not.contain", "num<");
+
+        cy.mount(<AutocompleteTestHarness initialValue={`<text></text>`} />);
+        cy.get(".cm-content").click().type("{ctrl}{home}", { force: true });
+        cy.get(".cm-content").type("num", { force: true });
+        openAutocomplete();
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel")
+            .contains(/^<number>$/)
+            .click();
+        cy.get(".cm-content").invoke("text").should("contain", "<number");
+        cy.get(".cm-content").invoke("text").should("not.contain", "num<");
+    });
+
+    it("matches element-name completions by substring, ranking prefix matches first (#1328)", () => {
+        // Typing `<num` should surface tags that *contain* `num` (so authors
+        // don't have to remember how a name begins), with the tags that *start*
+        // with `num` ranked first. The suggestions are the same whether reached
+        // by typing or by a fresh Ctrl+Space at the same position.
+        cy.mount(<AutocompleteTestHarness initialValue={`<text></text>`} />);
+
+        cy.get(".cm-content").click().type("{ctrl}{home}", { force: true });
+        cy.get(".cm-content").type("<num", { force: true });
+
+        cy.get(".cm-tooltip-autocomplete").should("be.visible");
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").should(
+            ($labels) => {
+                const texts = $labels
+                    .map((_, el) => Cypress.$(el).text().toLowerCase())
+                    .get();
+                expect(texts.length).to.be.greaterThan(0);
+                // Every suggestion contains the typed text.
+                texts.forEach((text) => {
+                    expect(text).to.contain("num");
+                });
+                // Prefix matches are ranked ahead of mid-name matches.
+                expect(texts[0]).to.match(/^num/);
+                // A mid-name (substring) match is offered too, e.g. `isNumber`.
+                expect(texts.some((t) => !t.startsWith("num"))).to.equal(true);
+            },
+        );
+    });
+
+    it("re-broadens element-name completions when the typed prefix is deleted (#1328)", () => {
+        // Open the menu at `<num` (only tags containing `num`), then backspace
+        // to `<`. The menu must re-query and show the full element list again,
+        // rather than keeping the cached `num` matches.
+        cy.mount(
+            <AutocompleteTestHarness initialValue={`<num<text></text>`} />,
+        );
+
+        // Cursor right after `<num` (offset 4). Separate `type()` calls so the
+        // held `{ctrl}` from `{ctrl}{home}` doesn't turn the arrows into
+        // word-wise Ctrl+Right.
+        cy.get(".cm-content").click().type("{ctrl}{home}", { force: true });
+        cy.get(".cm-content").type("{rightArrow}".repeat(4), { force: true });
+        openAutocomplete();
+
+        // Every suggestion contains `num` to start with.
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").should(
+            ($labels) => {
+                const texts = $labels
+                    .map((_, el) => Cypress.$(el).text().toLowerCase())
+                    .get();
+                expect(texts.length).to.be.greaterThan(0);
+                texts.forEach((text) => {
+                    expect(text).to.contain("num");
+                });
+            },
+        );
+
+        // Delete the `num` prefix, leaving `<|<text>`. The list re-broadens.
+        cy.get(".cm-content").type("{backspace}{backspace}{backspace}", {
+            force: true,
+        });
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").should(
+            ($labels) => {
+                const texts = $labels
+                    .map((_, el) => Cypress.$(el).text().toLowerCase())
+                    .get();
+                // Now includes tags that do not contain `num` (e.g. `p`).
+                expect(texts.some((t) => !t.includes("num"))).to.equal(true);
+            },
+        );
+    });
+
+    it("offers children and the close tag in an unclosed element's body, and inserts the close tag without clobbering the open tag (#1328)", () => {
+        // `<text><math>|</text>`: the cursor sits just after `<math>`'s open
+        // tag, in its (unclosed) body. Ctrl+Space must offer the close tag
+        // *and* `<math>`'s children — previously only `/math>` appeared, and
+        // accepting it replaced part of the open tag, yielding
+        // `<text><</math></text>`.
+        cy.mount(
+            <AutocompleteTestHarness initialValue={`<text><math></text>`} />,
+        );
+
+        // Cursor right after `<math>` (offset 12). Separate `type()` calls so
+        // the held `{ctrl}` from `{ctrl}{home}` doesn't turn the arrows into
+        // word-wise Ctrl+Right.
+        cy.get(".cm-content").click().type("{ctrl}{home}", { force: true });
+        cy.get(".cm-content").type("{rightArrow}".repeat(12), { force: true });
+        openAutocomplete();
+
+        // Both the close tag and at least one child element are offered.
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").contains(
+            "/math>",
+        );
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel").should(
+            ($labels) => {
+                const texts = $labels
+                    .map((_, el) => Cypress.$(el).text())
+                    .get();
+                expect(texts.some((t) => t !== "/math>")).to.equal(true);
+            },
+        );
+
+        // Accepting the close tag inserts `</math>` at the cursor, leaving the
+        // open tag intact.
+        cy.get(".cm-tooltip-autocomplete .cm-completionLabel")
+            .contains("/math>")
+            .click();
+        cy.get(".cm-content").should("have.text", `<text><math></math></text>`);
     });
 });

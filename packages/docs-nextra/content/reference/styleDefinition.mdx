@@ -1,0 +1,88 @@
+import { DoenetViewer, DoenetEditor, DoenetExample } from "../../components"
+
+import { ComponentDisplay, AttrPropDisplay } from "../../components"
+
+
+# `<styleDefinition>{:dn}`
+
+
+<ComponentDisplay name='styleDefinition'/>
+
+`<styleDefinition>{:dn}` is a [General Operator](../concepts/essentialConcepts#component-types) 
+component that allows the user to define custom styles for an individual document. Default styleNumbers, used in Graphical Components, are numbered $1$ to $6$. Additional styleNumbers are defined with a `<styleDefinition>{:dn}` component.
+
+
+These new styles are assigned unique numbers that can be used locally in that document.
+
+The styles a `<styleDefinition>{:dn}` starts from are those of the active **style palette** — $1$ to $6$ by default, but a different set, of a different size, wherever a [`<stylePalette>{:dn}`](stylePalette) is in effect. A `<styleDefinition>{:dn}` in the same section as a `<stylePalette>{:dn}`, or in a subsection of it, applies on top of the palette; one in an *ancestor* section does not carry into the palette's subtree.
+
+<AttrPropDisplay name='styleDefinition'/>
+
+## Examples
+
+### Example: Defining a custom style
+
+
+```doenet-editor-horiz
+<setup>
+  <styleDefinition styleNumber="10" 
+    fillColor="#D4042D" 
+    fillOpacity="0.1" 
+    markerSize="6" 
+    markerStyle="circle"
+    markerStyleWord="point"
+    markerColor="#D4042D" 
+    markerColorWord="red"
+    lineColor="#D4042D"
+    lineColorWord="red"
+    lineOpacity="0.7"  
+    lineWidth="4"
+    lineWidthWord="thick"
+    />
+</setup>
+
+<p>The $redCircle.styleDescriptionWithNoun passes through the $thickRedLine.styleDescriptionWithNoun at $redCircle.</p>
+
+<graph size="small"><shortDescription>A graph of two lines and two points</shortDescription>
+  <line name="thickRedLine" styleNumber="10" through="$redCircle (0,0)"/>
+  <line name="defLine" styleNumber="2">y = -x</line>
+  <point name="redCircle" styleNumber="10">(3,3)</point>
+  <point name="defPt" styleNumber="2">(-3,3)</point>
+</graph>
+```
+
+
+
+In this example, a custom style has been created and assigned a `styleNumber` of $10$. The custom 
+style is an adaptation of the default "red" `styleNumber` of $2$, generating a thicker line and a round rather than a square point. The
+attributes ending in `Word` define the way doenet will render the style descriptions in text references when the `styleDescription` or 
+`styleDescriptionWithNoun` properties are used.
+
+---
+
+### Example: Pattern fills and `fillPatternOpacity`
+
+```doenet-editor-horiz
+<setup>
+  <styleDefinition
+    styleNumber="11"
+    fillColor="#0f766e"
+    fillColorWord="teal"
+    fillStyle="dots"
+    fillPatternOpacity="0.5"
+    lineColor="#0f766e"
+    lineColorWord="teal"
+  />
+</setup>
+
+<p>The left polygon uses a patterned fill, while the right polygon uses a solid fill.</p>
+
+<graph xmin="-1" xmax="6" ymin="-1" ymax="3">
+  <shortDescription>A graph with one polygon filled with teal dots and another with a translucent solid teal fill</shortDescription>
+  <polygon styleNumber="11" filled vertices="(0,0) (2,0) (1,2)" />
+  <polygon filled fillColor="#0f766e" fillOpacity="0.2" vertices="(3,0) (5,0) (4,2)" />
+</graph>
+```
+
+Use `fillPatternOpacity` to control the opacity of a non-solid `fillStyle` pattern such as `dots` or `diamonds`. Keep using `fillOpacity` for solid fills.
+

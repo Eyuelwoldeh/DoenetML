@@ -1,4 +1,14 @@
 import BaseComponent from "./abstract/BaseComponent";
+import {
+    BORDER_VALUES,
+    HALIGN_VALUES,
+    VALIGN_VALUES,
+    readVocabularyValue,
+    returnBorderValidValues,
+    returnHalignValidValues,
+    returnValignValidValues,
+    effectiveColSpan,
+} from "../utils/tabularAttributes";
 
 export default class Row extends BaseComponent {
     static componentType = "row";
@@ -37,18 +47,27 @@ export default class Row extends BaseComponent {
         };
         attributes.halign = {
             createComponentOfType: "text",
+            toLowerCase: true,
+            validValues: returnHalignValidValues(),
             description: "Default horizontal alignment for cells in this row.",
         };
         attributes.valign = {
             createComponentOfType: "text",
+            toLowerCase: true,
+            validValues: returnValignValidValues(),
             description: "Default vertical alignment for cells in this row.",
         };
-        attributes.left = {
+        attributes.startBorder = {
             createComponentOfType: "text",
-            description: "Border style for the left edge of this row.",
+            toLowerCase: true,
+            validValues: returnBorderValidValues(),
+            description:
+                "Border style for the leading edge of this row: its left edge in a left-to-right document, its right edge in a right-to-left one.",
         };
-        attributes.bottom = {
+        attributes.bottomBorder = {
             createComponentOfType: "text",
+            toLowerCase: true,
+            validValues: returnBorderValidValues(),
             description: "Border style for the bottom edge of this row.",
         };
 
@@ -106,7 +125,8 @@ export default class Row extends BaseComponent {
             shadowingInstructions: {
                 createComponentOfType: "text",
             },
-            defaultValue: "left",
+            forRenderer: true,
+            defaultValue: "start",
             hasEssential: true,
             returnDependencies: () => ({
                 halignAttr: {
@@ -121,12 +141,11 @@ export default class Row extends BaseComponent {
             }),
             definition({ dependencyValues, usedDefault }) {
                 if (dependencyValues.halignAttr !== null) {
-                    let halign = dependencyValues.halignAttr.stateValues.value;
-                    if (
-                        !["left", "center", "right", "justify"].includes(halign)
-                    ) {
-                        halign = "left";
-                    }
+                    const halign = readVocabularyValue(
+                        dependencyValues.halignAttr.stateValues.value,
+                        HALIGN_VALUES,
+                        "start",
+                    );
                     return { setValue: { halign } };
                 } else if (
                     dependencyValues.parentHalign !== null &&
@@ -163,10 +182,11 @@ export default class Row extends BaseComponent {
             }),
             definition({ dependencyValues, usedDefault }) {
                 if (dependencyValues.valignAttr !== null) {
-                    let valign = dependencyValues.valignAttr.stateValues.value;
-                    if (!["top", "middle", "bottom"].includes(valign)) {
-                        valign = "middle";
-                    }
+                    const valign = readVocabularyValue(
+                        dependencyValues.valignAttr.stateValues.value,
+                        VALIGN_VALUES,
+                        "middle",
+                    );
                     return { setValue: { valign } };
                 } else if (
                     dependencyValues.parentValign !== null &&
@@ -181,8 +201,9 @@ export default class Row extends BaseComponent {
             },
         };
 
-        stateVariableDefinitions.left = {
-            description: "Border style for the left edge of the row.",
+        stateVariableDefinitions.startBorder = {
+            description:
+                "Border style for the leading edge of the row: its left edge in a left-to-right document, its right edge in a right-to-left one.",
             public: true,
             shadowingInstructions: {
                 createComponentOfType: "text",
@@ -191,72 +212,150 @@ export default class Row extends BaseComponent {
             defaultValue: "none",
             hasEssential: true,
             returnDependencies: () => ({
-                leftAttr: {
+                startBorderAttr: {
                     dependencyType: "attributeComponent",
-                    attributeName: "left",
+                    attributeName: "startBorder",
                     variableNames: ["value"],
                 },
-                parentLeft: {
+                parentStartBorder: {
                     dependencyType: "parentStateVariable",
-                    variableName: "left",
+                    variableName: "startBorder",
                 },
             }),
             definition({ dependencyValues, usedDefault }) {
-                if (dependencyValues.leftAttr !== null) {
-                    let left = dependencyValues.leftAttr.stateValues.value;
-                    if (!["none", "minor", "medium", "major"].includes(left)) {
-                        left = "none";
-                    }
-                    return { setValue: { left } };
+                if (dependencyValues.startBorderAttr !== null) {
+                    const startBorder = readVocabularyValue(
+                        dependencyValues.startBorderAttr.stateValues.value,
+                        BORDER_VALUES,
+                        "none",
+                    );
+                    return { setValue: { startBorder } };
                 } else if (
-                    dependencyValues.parentLeft !== null &&
-                    !usedDefault.parentLeft
+                    dependencyValues.parentStartBorder !== null &&
+                    !usedDefault.parentStartBorder
                 ) {
-                    return { setValue: { left: dependencyValues.parentLeft } };
+                    return {
+                        setValue: {
+                            startBorder: dependencyValues.parentStartBorder,
+                        },
+                    };
                 } else {
-                    return { useEssentialOrDefaultValue: { left: true } };
+                    return {
+                        useEssentialOrDefaultValue: { startBorder: true },
+                    };
                 }
             },
         };
 
-        stateVariableDefinitions.bottom = {
+        stateVariableDefinitions.bottomBorder = {
             description: "Border style for the bottom edge of the row.",
             public: true,
             shadowingInstructions: {
                 createComponentOfType: "text",
             },
+            forRenderer: true,
             defaultValue: "none",
             hasEssential: true,
             returnDependencies: () => ({
-                bottomAttr: {
+                bottomBorderAttr: {
                     dependencyType: "attributeComponent",
-                    attributeName: "bottom",
+                    attributeName: "bottomBorder",
                     variableNames: ["value"],
                 },
-                parentBottom: {
+                parentBottomBorder: {
                     dependencyType: "parentStateVariable",
-                    variableName: "bottom",
+                    variableName: "bottomBorder",
                 },
             }),
             definition({ dependencyValues, usedDefault }) {
-                if (dependencyValues.bottomAttr !== null) {
-                    let bottom = dependencyValues.bottomAttr.stateValues.value;
-                    if (
-                        !["none", "minor", "medium", "major"].includes(bottom)
-                    ) {
-                        bottom = "none";
-                    }
-                    return { setValue: { bottom } };
+                if (dependencyValues.bottomBorderAttr !== null) {
+                    const bottomBorder = readVocabularyValue(
+                        dependencyValues.bottomBorderAttr.stateValues.value,
+                        BORDER_VALUES,
+                        "none",
+                    );
+                    return { setValue: { bottomBorder } };
                 } else if (
-                    dependencyValues.parentBottom !== null &&
-                    !usedDefault.parentBottom
+                    dependencyValues.parentBottomBorder !== null &&
+                    !usedDefault.parentBottomBorder
                 ) {
                     return {
-                        setValue: { bottom: dependencyValues.parentBottom },
+                        setValue: {
+                            bottomBorder: dependencyValues.parentBottomBorder,
+                        },
                     };
                 } else {
-                    return { useEssentialOrDefaultValue: { bottom: true } };
+                    return {
+                        useEssentialOrDefaultValue: { bottomBorder: true },
+                    };
                 }
+            },
+        };
+
+        // The row's *own* `halign`, with no inheritance applied: `null` unless
+        // the author wrote `halign` on this `<row>`. `halign` above cannot
+        // answer this, because it has already folded in the `<tabular>`'s
+        // value, and a cell has to tell the two apart — PreTeXt resolves a
+        // cell's alignment as cell, then row, then col, then tabular, so a
+        // `<col halign>` outranks a `<tabular halign>` but not a `<row
+        // halign>`.
+        stateVariableDefinitions.authoredHalign = {
+            returnDependencies: () => ({
+                halignAttr: {
+                    dependencyType: "attributeComponent",
+                    attributeName: "halign",
+                    variableNames: ["value"],
+                },
+            }),
+            definition({ dependencyValues }) {
+                if (dependencyValues.halignAttr === null) {
+                    return { setValue: { authoredHalign: null } };
+                }
+                return {
+                    setValue: {
+                        authoredHalign: readVocabularyValue(
+                            dependencyValues.halignAttr.stateValues.value,
+                            HALIGN_VALUES,
+                            "start",
+                        ),
+                    },
+                };
+            },
+        };
+
+        // Where each cell of the row starts, counting the `colSpan` of the
+        // cells before it, and how far the row reaches in total. A `<cell>`
+        // reads its own entry out of this to find the `<col>` that applies to
+        // it; the `<tabular>` takes the maximum of `numColumns` over its rows
+        // to know how many columns the table has.
+        stateVariableDefinitions.cellColumnIndices = {
+            additionalStateVariablesDefined: ["numColumns"],
+            returnDependencies: () => ({
+                cellChildren: {
+                    dependencyType: "child",
+                    childGroups: ["cells"],
+                    variableNames: ["colSpan"],
+                },
+            }),
+            definition({ dependencyValues }) {
+                const cellColumnIndices = [];
+                let nextColumn = 0;
+                for (const cell of dependencyValues.cellChildren) {
+                    cellColumnIndices.push(nextColumn);
+                    const colSpan = cell.stateValues?.colSpan;
+                    // A cell whose `colSpan` is missing or nonsensical (null
+                    // from unparseable content, or zero or negative) still
+                    // occupies one column, which keeps the cells after it from
+                    // all collapsing onto the same index. A runaway one is
+                    // clamped to `MAX_COLSPAN`, so that a stray
+                    // `colSpan="2000000"` cannot make the table claim two
+                    // million columns for `columnSpecs` — and so the
+                    // `<colgroup>` — to be padded out to.
+                    nextColumn += effectiveColSpan(colSpan);
+                }
+                return {
+                    setValue: { cellColumnIndices, numColumns: nextColumn },
+                };
             },
         };
 

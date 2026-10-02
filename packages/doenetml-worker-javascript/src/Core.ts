@@ -1,4 +1,6 @@
+import type { RootNameChanges } from "@doenet/doenetml-worker";
 import ParameterStack from "./ParameterStack";
+import { codedDiagnostic } from "./utils/diagnostics";
 // `Numerics.js` is still JavaScript; cast at the import site once.
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 import Numerics from "./Numerics";
@@ -9,11 +11,21 @@ import {
     deepClone,
     findAllNewlines,
     type ComponentIdx,
+    type ReaderStyleOverrides,
 } from "@doenet/utils";
+import {
+    createTranslatorFromLocaleData,
+    DEFAULT_LOCALE_DATA,
+    type DiagnosticArgs,
+    type DiagnosticCode,
+    type LocaleData,
+    type Translator,
+} from "@doenet/i18n";
 import { getNumVariants } from "./utils/variants";
 import { removeFunctionsMathExpressionClass } from "./utils/math";
 import { reportTimerError, TimerLabels } from "./utils/timerErrors";
 import {
+    doenetMLStringForReference,
     getSourceLocationForComponent,
     narrowPositionToOpeningTag,
 } from "./utils/sourceLocation";
@@ -27,6 +39,7 @@ import { DiagnosticsManager } from "./core/DiagnosticsManager";
 import { EssentialValueWriter } from "./core/EssentialValueWriter";
 import { navigateToTarget } from "./core/NavigationHandler";
 import { ProcessQueue } from "./core/ProcessQueue";
+import { refreshRootNames } from "./core/ResolverAdapter";
 import { RendererInstructionBuilder } from "./core/RendererInstructionBuilder";
 import { StalenessPropagator } from "./core/StalenessPropagator";
 import { StatePersistence } from "./core/StatePersistence";
@@ -35,6 +48,9 @@ import { UpdateExecutor } from "./core/UpdateExecutor";
 import { VisibilityTracker } from "./core/VisibilityTracker";
 import * as nameResolver from "./StateVariableNameResolver";
 import { numberAnswers } from "./utils/answer";
+
+/** A coded diagnostic `ChildMatcher` recorded for `Core` to raise later. */
+type UnmatchedChildren = { code: DiagnosticCode; args: DiagnosticArgs };
 
 /**
  * Constructor arguments passed in from `CoreWorker`. The resolver callbacks
@@ -59,6 +75,8 @@ export interface CoreOptions {
     requestedVariantIndex?: number;
     initializeCounters?: Record<string, number>;
     theme?: "dark" | "light";
+    localeData?: LocaleData;
+    styleOverrides?: ReaderStyleOverrides | null;
     prerender?: boolean;
     stateVariableChanges?: string;
     coreId: string;
@@ -66,7 +84,7 @@ export interface CoreOptions {
     replaceIndexResolutionsInResolver?: (...args: any[]) => any;
     deleteNodesFromResolver?: (...args: any[]) => any;
     resolvePath?: (...args: any[]) => any;
-    calculateRootNames?: () => { names: Record<ComponentIdx, any> };
+    updateRootNames?: (reportAll: boolean) => RootNameChanges;
     updateRenderersCallback: (...args: any[]) => any;
     reportScoreAndStateCallback: (...args: any[]) => any;
     requestAnimationFrame: (...args: any[]) => any;
@@ -130,6 +148,39 @@ export default class Core {
     cid: string | null;
     flags: Record<string, any>;
     theme?: "dark" | "light";
+    /**
+     * The content locale and message catalogs supplied by the hosting page.
+     * Read via the `locale` dependency type; fixed for the core's lifetime.
+     */
+    localeData: LocaleData;
+    /**
+     * Content translators, one per locale actually asked for.
+     *
+     * The catalogs are fixed for the core's lifetime but the locale is not:
+     * a nested `<document lang="de">` resolves its own, and the state
+     * variables that compute prose ask for the one belonging to the document
+     * they sit in. Building a `FluentBundle` per locale is not free, and every
+     * style description in the document wants the same one, so they are cached
+     * here rather than rebuilt per definition call.
+     */
+    _contentTranslators = new Map<string, Translator>();
+    /**
+     * The content translator for `locale`, built once and reused.
+     *
+     * An arrow property rather than a method because it is handed out whole as
+     * the value of the `translator` dependency, and has to stay bound and
+     * stable across calls — dependency values are compared by identity.
+     */
+    getContentTranslator = (locale?: string): Translator => {
+        const tag = locale || this.localeData.locale;
+        let translator = this._contentTranslators.get(tag);
+        if (translator === undefined) {
+            translator = createTranslatorFromLocaleData(this.localeData, tag);
+            this._contentTranslators.set(tag, translator);
+        }
+        return translator;
+    };
+    styleOverrides?: ReaderStyleOverrides | null;
     initializeCounters: Record<string, number>;
 
     // ─── Resolver callbacks (from CoreWorker) ─────────────────────────────
@@ -137,8 +188,8 @@ export default class Core {
     replaceIndexResolutionsInResolver?: (...args: any[]) => any;
     deleteNodesFromResolver?: (...args: any[]) => any;
     resolvePath?: (...args: any[]) => any;
-    calculateRootNames?: () => { names: Record<ComponentIdx, any> };
-    rootNames: Record<ComponentIdx, any> | undefined;
+    updateRootNames?: (reportAll: boolean) => RootNameChanges;
+    rootNames: Record<ComponentIdx, string>;
 
     // ─── Host callbacks ───────────────────────────────────────────────────
     updateRenderersCallback: (...args: any[]) => any;
@@ -157,9 +208,38 @@ export default class Core {
     requestedVariant?: Record<string, any>;
     receivedStateVariableChanges: boolean;
     cumulativeStateVariableChanges: any;
+    /**
+     * The `stateId`s a reader's own action has written to, in this session or
+     * a previous one, and the `stateId`s whose entries were merged in from
+     * `essentialValuesSavedInDefinition` — the values ordinary *definitions*
+     * computed, which the reader's first interaction anywhere flushes into
+     * `cumulativeStateVariableChanges` document-wide.
+     *
+     * `StatePersistence` saves an entry unless it is in the second set and not
+     * in the first: what a definition computed and no reader ever touched. That
+     * is what made working one exercise persist state for every other exercise
+     * on a page — none of it the reader's, and all of it recomputed identically
+     * on a fresh load of the same document under the same variant
+     * (Doenet/DoenetML#1940).
+     *
+     * Two sets rather than one, and phrased as "drop what is known to be only a
+     * definition's" rather than "keep what is known to be the reader's", so an
+     * entry that arrives by some route neither set knows about is saved rather
+     * than silently dropped. The failure mode of a bookkeeping slip should not
+     * be losing a reader's work.
+     *
+     * The values stay in `cumulativeStateVariableChanges` either way: a partial
+     * write to an array merges into whatever entry is recorded there, and the
+     * definition path is what puts the `mergeObject` base in place (see
+     * `EssentialValueWriter.mergeIntoCumulative`). The filter is applied on the
+     * way out, in `buildDocStatePayload`, where both of `performUpdate`'s
+     * passes have already run — so a component touched for the first time in
+     * the current update is already accounted for.
+     */
+    readerTouchedStateIds!: Set<string>;
+    definitionSetStateIds!: Set<string>;
     canonicalGeneratedVariantString?: string;
     canonicalDocVariantStrings?: string[];
-    coreInfo?: CoreInfo;
     coreInfoString?: string;
     doenetMLNewlines?: any;
 
@@ -180,7 +260,12 @@ export default class Core {
     errorComponentsToAdd!: any[];
     essentialValuesSavedInDefinition!: Record<string, any>;
     rendererVariablesByComponentType!: Record<string, any>;
-    unmatchedChildren!: Record<number, any>;
+    /**
+     * The diagnostic to raise for each parent whose children did not match,
+     * keyed by parent index. `ChildMatcher` writes it and `Core` raises it a
+     * pass later, so the two are typed rather than left to agree by hand.
+     */
+    unmatchedChildren!: Record<number, UnmatchedChildren>;
     updateInfo: UpdateInfo;
     /** Set by `ComponentBuilder` once the document renderer tree exists. */
     documentRendererInstructions?: any;
@@ -228,6 +313,8 @@ export default class Core {
         requestedVariantIndex,
         initializeCounters = {},
         theme,
+        localeData = DEFAULT_LOCALE_DATA,
+        styleOverrides,
         prerender = false,
         stateVariableChanges: stateVariableChangesString,
         coreId,
@@ -235,7 +322,7 @@ export default class Core {
         replaceIndexResolutionsInResolver,
         deleteNodesFromResolver,
         resolvePath,
-        calculateRootNames,
+        updateRootNames,
         updateRenderersCallback,
         reportScoreAndStateCallback,
         requestAnimationFrame,
@@ -259,9 +346,10 @@ export default class Core {
             replaceIndexResolutionsInResolver;
         this.deleteNodesFromResolver = deleteNodesFromResolver;
         this.resolvePath = resolvePath;
-        this.calculateRootNames = calculateRootNames;
+        this.updateRootNames = updateRootNames;
 
-        this.rootNames = this.calculateRootNames?.().names;
+        this.rootNames = {};
+        refreshRootNames(this, true);
 
         this.updateRenderersCallback = updateRenderersCallback;
         this.reportScoreAndStateCallback = reportScoreAndStateCallback;
@@ -280,6 +368,8 @@ export default class Core {
         this.numerics = new (Numerics as any)();
         this.flags = flags;
         this.theme = theme;
+        this.localeData = localeData;
+        this.styleOverrides = styleOverrides;
 
         this.getStateVariableValue = this.getStateVariableValue.bind(this);
 
@@ -311,6 +401,17 @@ export default class Core {
             copyToClipboard: this.copyToClipboard.bind(this),
             navigateToTarget: (args: any) =>
                 navigateToTarget({ core: this, args }),
+            // The DoenetML behind a reference a component holds, so a
+            // component can name a `target` back to the author as they wrote
+            // it. The source text lives on core; the resolved path a
+            // component has is the half that needs looking up in it.
+            doenetMLStringForReference: (originalPath: any) =>
+                doenetMLStringForReference(originalPath, this.allDoenetMLs),
+            // State-variable runtime plumbing, not component-facing API:
+            // the shared state-variable functions in StateVariableInitializer
+            // reach core through `svComponent.coreFunctions`.
+            getStateVariableValue: this.getStateVariableValue, // bound above
+            addDiagnostic: this.addDiagnostic.bind(this),
         };
 
         this.updateInfo = {
@@ -345,6 +446,18 @@ export default class Core {
             JSON.stringify(stateVariableChanges, serializedComponentsReplacer),
             serializedComponentsReviver,
         );
+
+        // Everything restored from a previous session was saved as the
+        // reader's work, so it stays theirs now — otherwise re-saving would
+        // quietly drop it. `__componentNeedingUpdateValue` is a reserved
+        // sentinel rather than a component's entry (see `UpdateExecutor`), and
+        // `buildDocStatePayload` carries every `__` key across regardless.
+        this.readerTouchedStateIds = new Set(
+            Object.keys(this.cumulativeStateVariableChanges).filter(
+                (stateId) => !stateId.startsWith("__"),
+            ),
+        );
+        this.definitionSetStateIds = new Set();
 
         this.requestedVariantIndex = requestedVariantIndex;
         this.requestedVariant = requestedVariant;
@@ -393,6 +506,11 @@ export default class Core {
 
         let serializedComponents = [deepClone(this.serializedDocument)];
 
+        // The serialized document is consumed only by the clone above;
+        // release it so the worker does not retain a full serialized copy
+        // of the document for the life of the session.
+        this.serializedDocument = undefined;
+
         numberAnswers(serializedComponents, this.componentInfoObjects);
 
         this.documentIdx = serializedComponents[0].componentIdx;
@@ -401,6 +519,10 @@ export default class Core {
             serializedComponents[0].state = {};
         }
         serializedComponents[0].state.theme = this.theme;
+        if (this.styleOverrides != null) {
+            serializedComponents[0].state.readerStyleOverrides =
+                this.styleOverrides;
+        }
 
         serializedComponents[0].doenetAttributes.cid = this.cid;
 
@@ -534,7 +656,10 @@ export default class Core {
         // Note: `coreInfo` is fixed even though `this.rendererTypesInDocument`
         // could change. Both the canonical variant strings and the original
         // `rendererTypesInDocument` could differ depending on the initial state.
-        this.coreInfo = {
+        // Only the JSON string is retained on the instance (for saved-state
+        // payloads); keeping the object as well would duplicate the initial
+        // renderer instructions for the life of the session.
+        const coreInfo: CoreInfo = {
             generatedVariantString: this.canonicalGeneratedVariantString!,
             allPossibleVariants: deepClone(
                 await this.document.sharedParameters!.allPossibleVariants,
@@ -544,7 +669,7 @@ export default class Core {
         };
 
         this.coreInfoString = JSON.stringify(
-            this.coreInfo,
+            coreInfo,
             serializedComponentsReplacer,
         );
 
@@ -569,21 +694,30 @@ export default class Core {
             );
         }
 
+        // The circular-check memos now hold one entry per state variable
+        // created during the load; drop them and let them regrow with the
+        // (typically few) components involved in later updates.
+        this.dependencies.clearCircularCheckMemos();
+
         const returnResult = {
-            coreInfo: this.coreInfo,
+            coreInfo,
         };
 
         // Warn about any unmatched children.
         if (Object.keys(this.unmatchedChildren).length > 0) {
             for (const componentIdxStr in this.unmatchedChildren) {
                 let parent = this._components[Number(componentIdxStr)];
-                this.addDiagnostic({
-                    type: "warning",
-                    message:
-                        this.unmatchedChildren[Number(componentIdxStr)].message,
-                    position: parent.position,
-                    sourceDoc: parent.sourceDoc,
-                });
+                const unmatched =
+                    this.unmatchedChildren[Number(componentIdxStr)];
+                this.addDiagnostic(
+                    codedDiagnostic({
+                        type: "warning",
+                        code: unmatched.code,
+                        args: unmatched.args,
+                        position: parent.position,
+                        sourceDoc: parent.sourceDoc,
+                    }),
+                );
             }
         }
 
@@ -677,6 +811,65 @@ export default class Core {
 
     async updateRendererInstructions(args: any): Promise<any> {
         return this.rendererInstructionBuilder.updateRendererInstructions(args);
+    }
+
+    componentsOnVisibleGraphs(targets: number[]): Set<number> {
+        return this.rendererInstructionBuilder.componentsOnVisibleGraphs(
+            targets,
+        );
+    }
+
+    async updateRenderersForComponents(
+        componentIndices: Iterable<number>,
+        sourceInformation: any = {},
+        actionId?: string,
+    ): Promise<void> {
+        return this.rendererInstructionBuilder.updateRenderersForComponents(
+            componentIndices,
+            sourceInformation,
+            actionId,
+        );
+    }
+
+    scheduleDeferredRendererUpdate(
+        sourceInformation: any = {},
+        actionId?: string,
+    ): void {
+        return this.rendererInstructionBuilder.scheduleDeferredRendererUpdate(
+            sourceInformation,
+            actionId,
+        );
+    }
+
+    async updateOnScreenRenderers(
+        targets: number[],
+        sourceInformation: any = {},
+        actionId?: string,
+    ): Promise<void> {
+        return this.rendererInstructionBuilder.updateOnScreenRenderers(
+            targets,
+            sourceInformation,
+            actionId,
+        );
+    }
+
+    async flushPendingRenderers(): Promise<void> {
+        return this.rendererInstructionBuilder.flushPendingRenderers();
+    }
+
+    /**
+     * Record whether a block is near the viewport, and when it has just come
+     * near, wake the idle lane so anything it was holding there goes out first.
+     */
+    recordRenderVisibility(
+        componentIdx: number,
+        report: { isVisible?: boolean; isNear?: boolean },
+    ): void {
+        if (
+            this.visibilityTracker.recordRenderVisibility(componentIdx, report)
+        ) {
+            this.rendererInstructionBuilder.scheduleIdleRendererFlush();
+        }
     }
 
     async initializeRenderedComponentInstruction(
@@ -1003,6 +1196,28 @@ export default class Core {
         return this.statePersistence.saveImmediately();
     }
 
+    /**
+     * Flush-state-on-demand (Doenet/DoenetML#1440): wait briefly for
+     * in-flight action processing to settle (the same bounded wait
+     * `terminate` uses), then push any pending state through the normal
+     * `reportScoreAndState` pipeline so a persistence host saves it. Returns
+     * whether the viewer held any state. Hosts use this to unmount the
+     * document losslessly.
+     */
+    async flushState(): Promise<boolean> {
+        if (this.processQueue.processing) {
+            const pause100 = () =>
+                new Promise<void>((resolve) => setTimeout(resolve, 100));
+            for (let i = 0; i < 10; i++) {
+                await pause100();
+                if (!this.processQueue.processing) {
+                    break;
+                }
+            }
+        }
+        return this.statePersistence.flushState();
+    }
+
     async saveState(
         overrideThrottle: boolean = false,
         onSubmission: boolean = false,
@@ -1086,6 +1301,23 @@ export default class Core {
         await this.autoSubmitManager.flush();
 
         this.processQueue.stopProcessingRequests = true;
+
+        // A drag interrupted by teardown can leave a deferred renderer flush
+        // pending, and any update can leave offscreen components waiting in
+        // the idle lane; the viewer is going away, so drop both rather than
+        // push an update into it.
+        //
+        // The `saveImmediately` below therefore serializes a `rendererState`
+        // that is behind for the components those batches would have
+        // covered, and `DocViewer` skips core's init batch when it restores a
+        // saved one — so those components would come back drawn from the
+        // dropped state until something re-renders them. `coreState` is
+        // complete either way, and this needs `saveRendererState` (off in
+        // every package today) plus teardown before the batches went out, but
+        // it is the reason to look here first if a restored document ever
+        // comes back stale. `skipRendererUpdate` leaves the same kind of gap.
+        this.rendererInstructionBuilder.cancelDeferredRendererUpdate();
+        this.rendererInstructionBuilder.cancelIdleRendererFlush();
 
         if (this.processQueue.processing) {
             for (let i = 0; i < 10; i++) {

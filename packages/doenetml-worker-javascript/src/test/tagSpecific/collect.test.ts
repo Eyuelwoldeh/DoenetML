@@ -7,6 +7,7 @@ import {
     moveVector,
     updateBooleanInputValue,
     updateMathInputValue,
+    updateValue,
 } from "../utils/actions";
 
 const Mock = vi.fn();
@@ -2734,5 +2735,88 @@ describe("Collect tag tests @group4", async () => {
                 await resolvePathToNodeIdx("collect[2]")
             ].stateValues.xs.map((x) => x.tree),
         ).eqls([3, 4]);
+    });
+
+    it("an index inside an attribute of a collected component survives the collection", async () => {
+        // Each button's target names the entry of `m` that its iteration's `i`
+        // picks out. Collecting the buttons copies them, so each collected copy
+        // must still change the entry the button it was collected from changes.
+        let { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <numberList name="m">11 22 33 44</numberList>
+    <section name="s">
+      <repeatForSequence from="2" to="3" valueName="i" name="items">
+        <updateValue target="$m[$i]" newValue="99" type="number" name="uv" />
+      </repeatForSequence>
+    </section>
+
+    <collect from="$s" componentType="updateValue" name="c" />
+    <p name="p">$m</p>
+    `,
+        });
+
+        let stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("p")].stateValues.text,
+        ).eq("11, 22, 33, 44");
+
+        // press only the collected copies, not the buttons inside the section
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("c[1]"),
+            core,
+        });
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("c[2]"),
+            core,
+        });
+
+        stateVariables = await core.returnAllStateVariables(false, true);
+        expect(
+            stateVariables[await resolvePathToNodeIdx("p")].stateValues.text,
+        ).eq("11, 99, 99, 44");
+    });
+    it("gives its replacements ids that a rebuild reproduces", async () => {
+        // Saved reader state is keyed by `stateId`, and without one of its own
+        // a `<collect>` replacement falls back to its `componentIdx`, which is
+        // reassigned on every build (Doenet/DoenetML#1944).
+        const doenetML = `
+    <graph name="g">
+      <point name="A">(1,2)</point>
+      <point name="B">(3,4)</point>
+    </graph>
+    <collect name="c" from="$g" componentType="point" />
+  `;
+
+        async function replacementStateIds() {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML,
+            });
+            const components = core.core!._components!;
+            const composite = components[await resolvePathToNodeIdx("c")];
+            return {
+                prefix: `${composite.stateId}|`,
+                stateIds: composite.replacements.map(
+                    (replacement: any) =>
+                        components[replacement.componentIdx].stateId,
+                ),
+            };
+        }
+
+        const { prefix, stateIds } = await replacementStateIds();
+        expect(stateIds.length).eq(2);
+        for (const stateId of stateIds) {
+            // Minted by the composite, off its own document-derived id — not
+            // the component index, which is reassigned on every build.
+            expect(
+                stateId,
+                `a collect replacement fell back to its component index: ${stateId}`,
+            ).satisfy(
+                (id: string) =>
+                    id.startsWith(prefix) &&
+                    /^\d+$/.test(id.slice(prefix.length)),
+            );
+        }
+        expect(new Set(stateIds).size, "two replacements share an id").eq(2);
+        expect((await replacementStateIds()).stateIds).eqls(stateIds);
     });
 });

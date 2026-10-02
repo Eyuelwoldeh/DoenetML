@@ -5,24 +5,34 @@ import useDoenetRenderer, {
 } from "../useDoenetRenderer";
 import { BoardContext, LINE_LAYER_OFFSET, VERTEX_LAYER_OFFSET } from "./graph";
 import { DocContext } from "../DocViewer";
+import { useSourceNavigation } from "./utils/useSourceNavigation";
 import {
     applyLineFamilyLabelPlacement,
     buildLineFamilyLabelAttributes,
     removeJXGEventHandlers,
     stabilizeInitialLineFamilyLabelPlacement,
+    syncLabelMaskCssStyle,
     syncLabelStrokeColor,
     syncLayer,
     syncLineFamilyVisibility,
     syncLineStrokeStyle,
+    syncVisPropValues,
     syncWithLabelToggle,
 } from "./utils/jsxgraph";
-import { buildLineLikeAttributes } from "./utils/buildGraphicalAttributes";
+import {
+    attachLabelHoverHighlight,
+    computeLabelMaskCssStyle,
+} from "./utils/labelMaskStyle";
+import {
+    buildDragHandleAttributes,
+    buildLineLikeAttributes,
+} from "./utils/buildGraphicalAttributes";
 import { JXGLine, JXGPoint } from "./jsxgraph-distrib/types";
 import { DraggableGraphicalSVs } from "./utils/graphicalSVs";
 import { usePointerDragState } from "./utils/pointerDragState";
 import { useBoardPointerTracking } from "./utils/useBoardPointerTracking";
 import { pointerEventToUserCoords } from "./utils/pointerToBoardCoords";
-import { resolveLineColor } from "./utils/styleColors";
+import { resolveLineColor, resolveHandleColor } from "./utils/styleColors";
 import { styleToDash } from "./utils/styleToDash";
 import { useDraggableRefs } from "./utils/useDraggableRefs";
 import { useJSXGraphCleanup } from "./utils/useJSXGraphCleanup";
@@ -70,6 +80,7 @@ export default React.memo(function LineSegment(props: UseDoenetRendererProps) {
         !SVs.endpointsDraggable || SVs.fixed || SVs.fixLocation;
 
     const { darkMode } = useContext(DocContext) || {};
+    const sourceNavigation = useSourceNavigation(id);
 
     useBoardPointerTracking(board, dragState);
 
@@ -115,25 +126,21 @@ export default React.memo(function LineSegment(props: UseDoenetRendererProps) {
             labelHasLatex: SVs.labelHasLatex,
             applyStyleToLabel: SVs.applyStyleToLabel,
             lineColor,
+            layer: SVs.layer,
+            maskLabel: SVs.maskLabel,
         });
 
         let endpointsVisible = !endpointsFixed.current && !SVs.hidden;
 
-        let jsxPointAttributes = Object.assign({}, jsxSegmentAttributes);
-        Object.assign(jsxPointAttributes, {
-            withlabel: false,
-            fixed: false,
-            highlight: true,
-            fillColor: "none",
-            strokeColor: "none",
-            highlightStrokeColor: "none",
-            highlightFillColor: getComputedStyle(
-                document.documentElement,
-            ).getPropertyValue("--mainGray"),
-            layer: 10 * SVs.layer + VERTEX_LAYER_OFFSET,
-            showInfoBox: SVs.showCoordsWhenDragging,
+        let jsxPointAttributes = {
+            ...buildDragHandleAttributes({
+                elementAttributes: jsxSegmentAttributes,
+                layer: 10 * SVs.layer + VERTEX_LAYER_OFFSET,
+                darkMode,
+                showInfoBox: SVs.showCoordsWhenDragging,
+            }),
             visible: endpointsVisible,
-        });
+        };
 
         let endpoints = [
             [...SVs.numericalEndpoints[0]],
@@ -162,6 +169,16 @@ export default React.memo(function LineSegment(props: UseDoenetRendererProps) {
         lineSegmentJXG.current = newSegmentJXG;
         newSegmentJXG.isDraggable = !fixLocation.current;
 
+        attachLabelHoverHighlight({
+            hoverTargetJXG: newSegmentJXG,
+            getLabelJXG: () => lineSegmentJXG.current?.label,
+            ...computeLabelMaskCssStyle({
+                layer: SVs.layer,
+                masked: SVs.maskLabel,
+            }),
+            board,
+        });
+
         const segmentBuildCommit = (): Record<string, any> | null => {
             if (!pointCoords.current) {
                 return null;
@@ -173,6 +190,7 @@ export default React.memo(function LineSegment(props: UseDoenetRendererProps) {
         };
 
         attachLineFamilyDragHandlers({
+            sourceNavigation,
             jxg: newSegmentJXG,
             tag: 0,
             dragState,
@@ -249,6 +267,7 @@ export default React.memo(function LineSegment(props: UseDoenetRendererProps) {
             argKey: "point1coords" | "point2coords",
         ) {
             attachLineFamilyDragHandlers({
+                sourceNavigation,
                 jxg: point,
                 tag: tagN,
                 dragState,
@@ -435,6 +454,14 @@ export default React.memo(function LineSegment(props: UseDoenetRendererProps) {
             }
 
             const lineColor = resolveLineColor(SVs.selectedStyle, darkMode);
+            const handleColor = resolveHandleColor(darkMode);
+
+            syncVisPropValues(point1JXG.current, {
+                highlightfillcolor: handleColor,
+            });
+            syncVisPropValues(point2JXG.current, {
+                highlightfillcolor: handleColor,
+            });
 
             syncLineStrokeStyle(lineSegmentJXG.current, {
                 lineColor,
@@ -466,6 +493,9 @@ export default React.memo(function LineSegment(props: UseDoenetRendererProps) {
                 const label = lineSegmentJXG.current.label;
                 label.needsUpdate = true;
                 syncLabelStrokeColor(label, SVs.applyStyleToLabel, lineColor);
+                syncLabelMaskCssStyle(label, SVs.layer, {
+                    maskLabel: SVs.maskLabel,
+                });
 
                 applyLineFamilyLabelPlacement({
                     board,

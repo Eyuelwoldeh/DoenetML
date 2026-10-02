@@ -3,10 +3,12 @@
     /* `display: inline-block` and `vertical-align` are set inline in
        booleanInput.tsx so the checkbox flows beside a wrapping label (#1245). */
     position: relative;
-    padding-left: 24px;
-    margin-bottom: 4px;
-    margin-right: 2px; /* 2px less than other components (6px marginRight) due to the 2px marginLeft on label */
-    margin-left: 4px;
+    padding-inline-start: 24px;
+    /* No bottom margin: the container is inline content, so a bottom margin
+       would hang below the text and, in a table cell or anything else that
+       centers its content vertically, lift the label above neighboring text. */
+    margin-inline-end: 2px; /* 2px less than other components (6px inline-end margin) because an end label adds 2px of its own (see labelStyle in booleanInput.tsx) */
+    margin-inline-start: 4px;
     cursor: pointer;
     -webkit-user-select: none;
     -moz-user-select: none;
@@ -43,7 +45,7 @@
 .doenet-viewer .checkmark {
     position: absolute;
     top: 0;
-    left: 0;
+    inset-inline-start: 0;
     height: 18px;
     width: 18px;
     background-color: var(--mainGray);
@@ -59,9 +61,9 @@
     border-color: var(--mainGray);
 }
 
-/* On mouse-over, add a light blue background color */
+/* On mouse-over, use the theme-aware indicator hover color */
 .doenet-viewer .boolean-container:hover input[type="checkbox"] ~ .checkmark {
-    background-color: var(--lightBlue);
+    background-color: var(--indicatorHoverBlue);
 }
 
 /* On mouse-over of disabled, keep the grey background color */
@@ -101,7 +103,13 @@
     display: block;
 }
 
-/* Style the checkmark/indicator */
+/*
+ * Style the checkmark/indicator.
+ *
+ * Physical `left` on purpose: the tick is two borders of a rotated box, and a
+ * check mark is the same shape and sits at the same offset within its own box
+ * in every language. The marker box around it is what follows the direction.
+ */
 .doenet-viewer .boolean-container .checkmark:after {
     left: 5px;
     top: 1px;

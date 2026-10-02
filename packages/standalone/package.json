@@ -2,7 +2,7 @@
     "name": "@doenet/standalone",
     "type": "module",
     "description": "Standalone renderer for DoenetML suitable for being included in a web page",
-    "version": "0.7.20",
+    "version": "0.7.27",
     "license": "AGPL-3.0-or-later",
     "homepage": "https://github.com/Doenet/DoenetML#readme",
     "private": true,
@@ -24,26 +24,75 @@
     "scripts": {
         "dev": "vite",
         "build": "wireit",
-        "test": "echo \"No tests \"",
+        "check:size": "node scripts/check-bundle-size.mjs",
+        "test": "vitest",
         "preview": "vite preview",
-        "publish": "npm run build && cd dist && npm publish"
+        "publish": "npm run build && node ../../.github/scripts/npm-publish-with-retry.mjs dist"
     },
     "wireit": {
         "build": {
+            "command": "vite -c vite.config-coordinator.ts build",
+            "files": [
+                "src/coordinator.ts",
+                "../doenetml-iframe/src/shared-core-pool.ts",
+                "vite.config-coordinator.ts",
+                "../../scripts/vite-plugins.ts",
+                "tsconfig.json"
+            ],
+            "output": [
+                "dist/coordinator.js",
+                "dist/coordinator.js.map"
+            ],
+            "dependencies": [
+                "build:main",
+                "build:inline"
+            ]
+        },
+        "build:inline": {
+            "command": "vite -c vite.config-inline.ts build",
+            "files": [
+                "src/**/*.ts",
+                "src/**/*.tsx",
+                "tsconfig.json",
+                "vite.config-inline.ts",
+                "../../scripts/vite-plugins.ts",
+                "package.json",
+                "../i18n/locales/**/*.ftl"
+            ],
+            "output": [
+                "dist/doenet-standalone-inline.js"
+            ],
+            "dependencies": [
+                "build:main",
+                "../doenetml:build"
+            ]
+        },
+        "build:main": {
             "command": "vite build",
             "files": [
                 "src/**/*.ts",
                 "src/**/*.tsx",
                 "tsconfig.json",
-                "vite.config.ts"
+                "vite.config.ts",
+                "../../scripts/transform-package-json.ts",
+                "../../scripts/vite-plugins.ts",
+                "scripts/pin-chunk-urls-plugin.ts",
+                "package.json",
+                "../i18n/locales/**/*.ftl"
             ],
             "output": [
                 "dist/**/*.js",
+                "!dist/coordinator.js",
+                "!dist/doenet-standalone-inline.js",
                 "dist/**/*.map",
+                "!dist/coordinator.js.map",
+                "!dist/doenet-standalone-inline.js.map",
                 "dist/**/*.d.ts",
                 "dist/**/*.json",
+                "dist/**/*.wasm*",
                 "dist/**/*.css",
-                "dist/fonts/**/*"
+                "dist/fonts/**/*",
+                "dist/locales/**/*"
             ],
             "dependencies": [
                 "../doenetml:build"

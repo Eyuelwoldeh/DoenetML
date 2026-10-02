@@ -101,7 +101,7 @@ describe("resolveActiveStyle — built-in presets", () => {
         // Assert against a field where the preset path and the bare-fallback
         // path differ. styleNumber=1's preset runs through
         // `addMissingColorWordsToStyleDefinition`, so its `lineColorWord`
-        // is the word derived from `#648FFF`. The unknown-styleNumber
+        // is the word derived from `#1f5dff`. The unknown-styleNumber
         // fallback skips that derivation and `resolveStyleDefinition` fills
         // the missing word with `""`. Asserting on `markerStyle="circle"`
         // alone wouldn't distinguish the paths since both seeds share it.
@@ -370,8 +370,10 @@ describe("resolveActiveStyle — runtime per-block derivation", () => {
     });
 
     it("fills missing dark-mode color from same-block light-mode color", () => {
-        // The runtime's `addMissingChildStyleColorFields` mirrors light → dark
-        // when the dark value isn't explicit on the block.
+        // The runtime's `addMissingChildStyleColorFields` derives an accessible
+        // dark-mode color from the light-mode color (lightening it until it
+        // clears WCAG AA on the dark canvas) when the dark value isn't explicit
+        // on the block.
         const source = `
             <setup>
                 <styleDefinition styleNumber="1" markerColor="#FF0000"/>
@@ -381,7 +383,7 @@ describe("resolveActiveStyle — runtime per-block derivation", () => {
         const sourceObj = new DoenetSourceObject(source);
         const point = findElement(sourceObj, "point");
         const resolved = resolveActiveStyle(sourceObj, point);
-        expect(resolved!.style.markerColorDarkMode).toBe("#ff0000");
+        expect(resolved!.style.markerColorDarkMode).toBe("#ff3333");
         expect(resolved!.style.markerColorWordDarkMode).toBe("red");
     });
 });
@@ -427,9 +429,9 @@ describe("resolveActiveStyleAttributeValue", () => {
     });
 
     it("attaches colorWord for a hex color attribute (built-in styleNumber=1 default lineColor)", () => {
-        // Built-in styleNumber=1 ships lineColor="#648FFF"; the resolver
+        // Built-in styleNumber=1 ships lineColor="#1f5dff"; the resolver
         // should ride along the styleDefinition's own number (1) and pair
-        // the hex with whatever word `colorValueToWord` derives.
+        // the hex with the canonical "blue" color word shown in the help UI.
         const sourceObj = new DoenetSourceObject(
             `<setup><styleDefinition styleNumber="1"/></setup>`,
         );
@@ -440,11 +442,23 @@ describe("resolveActiveStyleAttributeValue", () => {
             "lineColor",
             { excludeAttribute: { node: sd, attributeName: "lineColor" } },
         );
-        expect(result?.value).toBe("#648FFF");
-        // The derived word is whatever the nearest-canonical-color lookup
-        // returns; just assert it's present and not the raw hex.
-        expect(typeof result?.colorWord).toBe("string");
-        expect(result?.colorWord).not.toBe(result?.value);
+        expect(result?.value).toBe("#1f5dff");
+        expect(result?.colorWord).toBe("blue");
+    });
+
+    it("keeps built-in styleNumber=3's accessible preset color in the orange family", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<setup><styleDefinition styleNumber="3"/></setup>`,
+        );
+        const sd = findElement(sourceObj, "styleDefinition");
+        const result = resolveActiveStyleAttributeValue(
+            sourceObj,
+            sd,
+            "lineColor",
+            { excludeAttribute: { node: sd, attributeName: "lineColor" } },
+        );
+        expect(result?.value).toBe("#a6510c");
+        expect(result?.colorWord).toBe("orange");
     });
 
     it("suppresses colorWord when the value already IS a CSS named color", () => {
@@ -702,5 +716,171 @@ describe("resolveActiveStyleBreakdown", () => {
             "lineWidth",
             "markerStyle",
         ]);
+    });
+});
+
+describe("resolveActiveStyle — style palettes", () => {
+    it("seeds from the palette selected by an ancestor <stylePalette>", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<stylePalette palette="okabeito"/><point/>`,
+        );
+        const point = findElement(sourceObj, "point");
+        const resolved = resolveActiveStyle(sourceObj, point);
+        expect(resolved.style.markerColor).toBe("#0072b2");
+        expect(resolved.style.markerStyle).toBe("circle");
+    });
+
+    it("finds a <stylePalette> inside <setup>", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<setup><stylePalette palette="okabeito"/></setup><point/>`,
+        );
+        const point = findElement(sourceObj, "point");
+        expect(resolveActiveStyle(sourceObj, point).style.markerColor).toBe(
+            "#0072b2",
+        );
+    });
+
+    it("a palette selection discards styleDefinition blocks above it", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<styleDefinition styleNumber="1" markerColor="green"/>
+<section><stylePalette palette="okabeito"/><point/></section>`,
+        );
+        const point = findElement(sourceObj, "point");
+        expect(resolveActiveStyle(sourceObj, point).style.markerColor).toBe(
+            "#0072b2",
+        );
+    });
+
+    it("styleDefinition blocks at or below the palette apply on top of it", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<section><stylePalette palette="okabeito"/>
+<styleDefinition styleNumber="1" markerColor="green"/><point/></section>`,
+        );
+        const point = findElement(sourceObj, "point");
+        const resolved = resolveActiveStyle(sourceObj, point);
+        expect(resolved.style.markerColor).toBe("green");
+        expect(resolved.style.lineColor).toBe("#0072b2");
+    });
+
+    it("the deepest palette selection wins", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<stylePalette palette="okabeito"/>
+<section><stylePalette palette="tolbright"/><point/></section>`,
+        );
+        const point = findElement(sourceObj, "point");
+        expect(resolveActiveStyle(sourceObj, point).style.markerColor).toBe(
+            "#4477aa",
+        );
+    });
+
+    it("style numbers beyond the palette size cycle onto the palette", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<stylePalette palette="okabeito"/><point styleNumber="10"/>`,
+        );
+        const point = findElement(sourceObj, "point");
+        const resolved = resolveActiveStyle(sourceObj, point);
+        // okabeito has 8 styles; 10 cycles to 2.
+        expect(resolved.styleNumber).toBe(10);
+        expect(resolved.style.markerColor).toBe("#c15400");
+        expect(resolved.style.markerStyle).toBe("square");
+    });
+
+    it("an authored block for an out-of-range number merges over the cycled seed", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<stylePalette palette="okabeito"/>
+<styleDefinition styleNumber="10" lineColor="black"/><point styleNumber="10"/>`,
+        );
+        const point = findElement(sourceObj, "point");
+        const resolved = resolveActiveStyle(sourceObj, point);
+        expect(resolved.style.lineColor).toBe("black");
+        expect(resolved.style.markerColor).toBe("#c15400");
+    });
+
+    it("an unknown palette name falls back to the default palette", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<stylePalette palette="noSuchPalette"/><point/>`,
+        );
+        const point = findElement(sourceObj, "point");
+        expect(resolveActiveStyle(sourceObj, point).style.markerColor).toBe(
+            "#1f5dff",
+        );
+    });
+
+    it("palette names match case-insensitively, mirroring the runtime's toLowerCase", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<stylePalette palette="OkabeIto"/><point/>`,
+        );
+        const point = findElement(sourceObj, "point");
+        expect(resolveActiveStyle(sourceObj, point).style.markerColor).toBe(
+            "#0072b2",
+        );
+    });
+
+    it("a bare <stylePalette/> selects the default palette explicitly, so it still resets", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<styleDefinition styleNumber="1" markerColor="green"/>
+<section><stylePalette/><point/></section>`,
+        );
+        // The ancestor override is discarded and style 1 returns to the
+        // stock blue.
+        const point = findElement(sourceObj, "point");
+        expect(resolveActiveStyle(sourceObj, point).style.markerColor).toBe(
+            "#1f5dff",
+        );
+    });
+
+    it("a bare <stylePalette/> also activates cycling for out-of-range numbers", () => {
+        const sourceObj = new DoenetSourceObject(
+            `<stylePalette/><point styleNumber="10"/>`,
+        );
+        const point = findElement(sourceObj, "point");
+        // default has 6 styles; 10 cycles to 4 (purple).
+        expect(resolveActiveStyle(sourceObj, point).style.markerColor).toBe(
+            "#644CD6",
+        );
+    });
+
+    it("without a palette, out-of-range numbers keep the historical default fallback", () => {
+        const sourceObj = new DoenetSourceObject(`<point styleNumber="10"/>`);
+        const point = findElement(sourceObj, "point");
+        expect(resolveActiveStyle(sourceObj, point).style.markerColor).toBe(
+            "#1f5dff",
+        );
+    });
+
+    it("resolving inside a <setup> attributes its palette to the parent scope, keeping sibling blocks", () => {
+        // The runtime attributes a <stylePalette> inside <setup> to the
+        // setup's parent section, so a styleDefinition owned by that parent
+        // *outside* the setup still applies on top of the palette. A cursor
+        // inside the setup (context help on the styleDefinition there) must
+        // not reset the walk at the setup itself and lose the sibling block.
+        const sourceObj = new DoenetSourceObject(
+            `<styleDefinition styleNumber="1" markerColor="green"/>
+<setup><stylePalette palette="okabeito"/><styleDefinition styleNumber="1" lineColor="black"/></setup>`,
+        );
+        // Target the styleDefinition inside the setup (findElement's BFS
+        // would return the shallower top-level one).
+        const setup = findElement(sourceObj, "setup");
+        const insideSetup = setup.children.find(
+            (child): child is DastElement =>
+                child.type === "element" && child.name === "styleDefinition",
+        )!;
+        const resolved = resolveActiveStyle(sourceObj, insideSetup);
+        expect(resolved.style.lineColor).toBe("black");
+        expect(resolved.style.markerColor).toBe("green");
+    });
+
+    it("last-wins ordering follows document order across the setup boundary", () => {
+        // A setup-hosted palette earlier in the document loses to a direct
+        // one later in it, mirroring the runtime's document-order interleave
+        // of the two arrival routes.
+        const sourceObj = new DoenetSourceObject(
+            `<setup><stylePalette palette="tolbright"/></setup>
+<stylePalette palette="okabeito"/><point/>`,
+        );
+        const point = findElement(sourceObj, "point");
+        expect(resolveActiveStyle(sourceObj, point).style.markerColor).toBe(
+            "#0072b2",
+        );
     });
 });

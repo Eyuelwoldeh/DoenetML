@@ -204,6 +204,37 @@ describe.skipIf(!wasmAvailable)(
             expect(rustResult!.unresolvedPathParts).toEqual([]);
         });
 
+        it("resolves a reference written inside a reference's index brackets", async () => {
+            // An element written between index brackets (#1909) is not a child
+            // of anything, so the adapter's offset table used to have no entry
+            // for it: a cursor inside it found no origin and every reference
+            // written there resolved to null. The control is the same markup
+            // written as an ordinary child, which has always resolved.
+            const inParagraph = (inner: string) =>
+                `<section name="sec"><numberList name="nums">1 2 3</numberList>\n<p>${inner}</p></section>`;
+
+            const results = [];
+            for (const source of [
+                inParagraph(`$nums[<indexOf target="2">$nums.</indexOf>]`),
+                inParagraph(`<indexOf target="2">$nums.</indexOf>`),
+            ]) {
+                const { adapter } = await createCoreAndAdapter(source);
+                const offset = source.lastIndexOf("$nums.") + "$nums.".length;
+                const result = await adapter.createResolver()({
+                    offset,
+                    pathParts: ["nums", ""],
+                });
+                expect(result).not.toBeNull();
+                expect(
+                    (result!.node as any)?.attributes?.name?.children?.[0]
+                        ?.value,
+                ).toBe("nums");
+                expect(result!.unresolvedPathParts).toEqual([]);
+                results.push(result!.node);
+            }
+            expect(results[0]).toEqual(results[1]);
+        });
+
         it("visibleDescendantNames respects ChildrenInvisibleToTheirGrandparents for <repeat>", async () => {
             // "inside" is a child of <repeat>, which is
             // ChildrenInvisibleToTheirGrandparents.  From the section's
@@ -347,6 +378,28 @@ describe.skipIf(!wasmAvailable)(
                 const labels = items.map((i) => i.label);
                 expect(labels).toContain("sec");
                 expect(labels).not.toContain("sec[]");
+            }
+
+            // A hyphenated name needs the `$(…)` form, and the index is part
+            // of the path segment, so it goes inside the parentheses:
+            // `$(my-rep[])`. `$(my-rep)[]` would end the macro at its `)` and
+            // leave `[]` as literal text.
+            {
+                const source = `<section name="sec"><repeat name="my-rep"><math name="inside">x</math></repeat></section>\n$my`;
+                const { completer } = await createCompleterWithAdapter(source);
+                const items = await completer.getCompletionItems(source.length);
+                const snippetItem = items.find((i) => i.label === "my-rep[]");
+                expect(snippetItem).toBeDefined();
+                const textEdit = snippetItem!.textEdit;
+                expect(textEdit && "newText" in textEdit).toBe(true);
+                if (textEdit && "newText" in textEdit) {
+                    expect(textEdit.newText).toBe("(my-rep[])");
+                }
+                expect(snippetItem!.data).toEqual({
+                    // Offset 8 of `(my-rep[])` is its `]`, so the caret lands
+                    // between the brackets, with the closing `)` after them.
+                    snippetCursor: { caretOffset: 8 },
+                });
             }
         });
 
@@ -1071,6 +1124,50 @@ describe.skipIf(!wasmAvailable)(
             expect(
                 await adapter.isNameAddressableFromOffset(outsideOffset, "cc"),
             ).toBe(true);
+        });
+
+        it("member completion resolves a name that repeats once per sibling scope", async () => {
+            // The same `name="P"` appears in each <exercise>.  Resolution has
+            // to start from inside the exercise holding the cursor, or the
+            // parent-scope walk sees both points and throws NonUniqueReferent.
+            const source = `<exercise><graph><point name="P">(3,4)</point></graph>$P.</exercise>\n<exercise><graph><point name="P" styleNumber="2">(2,2)</point></graph>$P.</exercise>`;
+            const { completer } = await createCompleterWithAdapter(source);
+
+            const secondExerciseStart = source.lastIndexOf("<exercise>");
+            const cases = [
+                {
+                    refOffset: source.indexOf("$P.") + 3,
+                    pointOffset: source.indexOf("<point"),
+                },
+                {
+                    refOffset: source.lastIndexOf("$P.") + 3,
+                    pointOffset: source.lastIndexOf("<point"),
+                },
+            ];
+            // Guard the fixture: the two points really are in different
+            // exercises, so the offset assertions below can tell them apart.
+            expect(cases[0].pointOffset).toBeLessThan(secondExerciseStart);
+            expect(cases[1].pointOffset).toBeGreaterThan(secondExerciseStart);
+
+            for (const { refOffset, pointOffset } of cases) {
+                const resolved =
+                    await completer.resolveRefMemberContainerAtOffset(
+                        refOffset,
+                        ["P", ""],
+                        [false, false],
+                    );
+                expect(resolved.node?.name).toBe("point");
+                // The point in the *same* exercise as the reference, not the other.
+                expect(resolved.node?.position?.start?.offset).toBe(
+                    pointOffset,
+                );
+                expect(resolved.unresolvedPathParts).toEqual([]);
+
+                const items = await completer.getCompletionItems(refOffset);
+                expect(items.map((item) => item.label)).toContain(
+                    "styleDescription",
+                );
+            }
         });
     },
 );

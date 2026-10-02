@@ -1,125 +1,363 @@
 import { EditorView } from "@codemirror/view";
 
-// WCAG 2.1 AA compliant color theme
-export const colorTheme = EditorView.theme({
-    "&": {
-        color: "var(--canvasText)",
-        height: "100%",
-        //backgroundColor: "var(--canvas)",
-    },
-    ".cm-content": {
-        caretColor: "#0e9",
-        borderDownColor: "var(--canvasText)",
-    },
-    ".cm-editor": {
-        caretColor: "#0e9",
-        backgroundColor: "var(--canvas)",
-    },
-    "&.cm-focused .cm-cursor": {
-        backgroundColor: "var(--lightBlue)",
-        borderLeftColor: "var(--canvasText)",
-    },
-    "&.cm-focused .cm-selectionBackground, ::selection": {
-        backgroundColor: "var(--mainGray)",
-    },
-    "&.cm-focused": {
-        color: "var(--canvasText)",
-    },
-    "cm-selectionLayer": {
-        backgroundColor: "var(--mainGreen)",
-    },
-    ".cm-gutters": {
-        backgroundColor: "var(--mainGray)",
-        // Changed from "black" to ensure proper contrast on gray background
-        // #595959 has 4.54:1 contrast on #e3e3e3 (light mode mainGray)
-        color: "#595959",
-        border: "none",
-    },
-    ".cm-activeLine": {
-        backgroundColor: "#50505020",
-        color: "black",
-    },
-});
+export type ThemeMode = "dark" | "light";
 
-// Left-column glyphs for the autocomplete dropdown, one per DoenetML category.
-// CodeMirror renders these from each completion's `type` via the built-in class
-// `.cm-completionIcon-<type>` (types assigned by `deriveCompletionType` in
-// `@doenet/lsp-tools`). Its base theme only defines glyphs for a fixed set of
-// types (and dims them to 0.6 opacity), so we override the one we reuse
-// (`enum`) and add glyphs for our custom types. Uses EditorView.theme (not
-// baseTheme) so these win over CodeMirror's built-in rules by later injection
-// at equal CSS specificity. Glyph-only (CSS `::after` content) — no image
-// assets. Colors checked for WCAG AA contrast on the dropdown background;
-// opacity bumped to 1 so the color reads clearly.
-export const completionIconTheme = EditorView.theme({
-    ".cm-completionIcon-component::after": { content: '"\\25C8"' }, // ◈
-    ".cm-completionIcon-refproperty::after": { content: '"."' },
-    ".cm-completionIcon-closetag::after": { content: '"/"' },
-    ".cm-completionIcon-enum::after": { content: '"@"' }, // attribute name
-    ".cm-completionIcon-value::after": { content: '"\\25AA"' }, // ▪ (enum value)
-    ".cm-completionIcon-reference::after": { content: '"$"' },
-    ".cm-completionIcon-snippet::after": { content: '"\\274F"' }, // ❏
+/**
+ * Three things the editor points at behind or around text, shared by the
+ * editable and read-only themes so they can't drift. Each gets its own visual
+ * channel, because when all three were fills of similar strength an author
+ * could not tell which was which:
+ *
+ *  - `selection` — a solid fill under the text the author selected, including
+ *    every range Ctrl+D has collected. By far the loudest of the three: it
+ *    marks what the next keystroke acts on.
+ *  - `match` — a faint fill under the other occurrences of that text on
+ *    screen (see `selection-highlight.ts`). A hint, nothing more.
+ *  - `tagMatch` / `tagMismatch` — the tag pair under the cursor, drawn as an
+ *    outline with no fill at all. CodeMirror's `bracketMatching` ships a
+ *    translucent teal fill for this, which on the dark canvas landed at
+ *    1.51:1 — indistinguishable from the other two. An outline says the same
+ *    thing in a channel neither fill can be confused with.
+ *
+ * What caps a fill is the text on top of it: the syntax palette must clear
+ * WCAG AA (4.5:1) against whatever it is painted over. For `match` that is the
+ * binding constraint and the reason it stays faint. The selection escapes it
+ * by recoloring its own text — `selectedText` below — so only that one color
+ * has to clear AA there, which is what buys the fill its strength. Ratios are
+ * against the canvas of the mode; `selectionAccessibility.cy.tsx` measures the
+ * text side.
+ *
+ * Two of the editor's own tints are painted on elements that sit *above* the
+ * selection layer — CodeMirror gives that layer a negative z-index, so a line
+ * background covers it — and they therefore shade whatever the selection
+ * covers rather than sitting under it: `.cm-activeLine` on the line holding a
+ * cursor, and `.cm-content` throughout the read-only theme. Only the first
+ * darkens the dark selection, and it is the case that matters — selecting a
+ * word puts the cursor on that very line — so the value below is chosen to
+ * clear 3:1 *after* that shading (3.27:1), not just before it. The read-only
+ * tint is lighter than the selection and nudges it the other way, to 3.50:1.
+ * `selectionAccessibility.cy.tsx` measures both composites, not just the
+ * values below.
+ */
+function getHighlightColors(darkMode: ThemeMode) {
+    if (darkMode === "dark") {
+        return {
+            // 3.48:1 on #121212, and 3.27:1 once `.cm-activeLine` shades it —
+            // clearing WCAG's 3:1 for non-text contrast either way, where the
+            // #092c4d this replaces sat at 1.32:1 and authors read it as no
+            // highlight at all. White text on it is 5.39:1.
+            selection: "#1e6ac2",
+            selectedText: "#ffffff",
+            match: "#14335a", // 1.47:1
+            tagMatch: "#3fa8a0", // 6.53:1 as an outline
+            tagMismatch: "#f0665e", // 6.04:1
+        };
+    }
 
-    ".cm-completionIcon-component": { color: "#1f6feb", opacity: "1" }, // blue
-    ".cm-completionIcon-enum": { color: "#1a7f37", opacity: "1" }, // green
-    ".cm-completionIcon-value": { color: "#0e7c86", opacity: "1" }, // teal
-    ".cm-completionIcon-reference": { color: "#8250df", opacity: "1" }, // purple
-    ".cm-completionIcon-refproperty": { color: "#8250df", opacity: "1" }, // purple
-    ".cm-completionIcon-snippet": { color: "#bc4c00", opacity: "1" }, // orange
-    ".cm-completionIcon-closetag": { color: "#1f6feb", opacity: "1" }, // blue
+    return {
+        // 1.96:1 on white, up from the 1.28:1 of the neutral `--mainGray`
+        // (#e3e3e3) this replaces — a gray that is also the gutter's
+        // background, so the selection read as a piece of the editor chrome.
+        // Near-black text on it is 9.64:1. `.cm-activeLine` darkens rather
+        // than lightens this one, taking it to 2.28:1.
+        selection: "#93bcf0",
+        selectedText: "#0d1117",
+        match: "#e2edfc", // 1.18:1
+        tagMatch: "#0f6e66", // 6.10:1 as an outline
+        tagMismatch: "#c9372c", // 5.16:1
+    };
+}
 
-    // The highlighted option has a solid blue background (CodeMirror's
-    // baseTheme: #17c light / #347 dark, with white label text), against which
-    // the category colors above are nearly invisible. Render the glyph white on
-    // the selected row so it stays legible, matching the label. The descendant
-    // selector outranks the single-class color rules above, so it wins
-    // regardless of order.
-    ".cm-tooltip-autocomplete ul li[aria-selected] .cm-completionIcon": {
-        color: "#fff",
-        opacity: "1",
-    },
-});
+/**
+ * Highlight rules shared by the editable and read-only themes.
+ *
+ * CodeMirror's base theme colors the selection itself, and does so with a
+ * high-specificity selector for the *focused* state
+ * (`&<light|dark>.cm-focused > .cm-scroller > .cm-selectionLayer
+ * .cm-selectionBackground`). We mirror that full path so our color actually
+ * wins when focused, and add a focus-agnostic rule so the *blurred* selection
+ * (base default `#d9d9d9` light / `#222` dark) is overridden too — otherwise
+ * clicking away from the editor reverts the highlight to the washed-out base
+ * color. `::selection` colors the native selection; `drawSelection` (part of
+ * `basicSetup`) forces that transparent inside `.cm-line`, so on the document
+ * it is a fallback for an editor configured without the drawn selection, and
+ * what it paints today is the selection in the search panel's input.
+ */
+function highlightThemeRules(darkMode: ThemeMode) {
+    const { selection, selectedText, match, tagMatch, tagMismatch } =
+        getHighlightColors(darkMode);
+    return {
+        "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground":
+            { backgroundColor: selection },
+        "& > .cm-scroller > .cm-selectionLayer .cm-selectionBackground": {
+            backgroundColor: selection,
+        },
+        "::selection": { backgroundColor: selection, color: selectedText },
 
-// WCAG 2.1 AA compliant read-only color theme
-export const readOnlyColorTheme = EditorView.theme({
-    "&": {
-        color: "var(--canvasText)",
-        height: "100%",
-    },
-    ".cm-content": {
-        caretColor: "#0e9",
-        borderDownColor: "var(--canvasText)",
-        backgroundColor: "#77777720",
-    },
-    ".cm-editor": {
-        caretColor: "#0e9",
-    },
-    "&.cm-focused .cm-cursor": {
-        backgroundColor: "var(--lightBlue)",
-        borderLeftColor: "var(--canvasText)",
-    },
-    "&.cm-focused .cm-selectionBackground, ::selection": {
+        // The syntax palette writes `color` onto a generated class of its own,
+        // and whether that span ends up inside the selection's span, outside
+        // it, or merged with it is CodeMirror's business, not ours. A theme
+        // rule is emitted prefixed with the theme's own class, so
+        // `.cm-selectedText` outranks the palette's single generated class
+        // wherever the two land on the same span; the descendant selector
+        // covers the case where the palette colors a span *inside* the
+        // selection, which plain inheritance would lose to.
+        ".cm-selectedText, .cm-selectedText span": {
+            color: selectedText,
+        },
+
+        ".cm-selectionMatch": { backgroundColor: match },
+        // Mirrors the rule that shipped with `highlightSelectionMatches`: the
+        // search panel's own highlight is the answer to a question the author
+        // just asked, so the ambient hint gets out of its way.
+        ".cm-searchMatch .cm-selectionMatch": {
+            backgroundColor: "transparent",
+        },
+
+        "&.cm-focused .cm-matchingBracket, .cm-matchingBracket":
+            tagOutline(tagMatch),
+        "&.cm-focused .cm-nonmatchingBracket, .cm-nonmatchingBracket":
+            tagOutline(tagMismatch),
+    };
+}
+
+/**
+ * A box around a tag with nothing inside it — the channel neither fill uses.
+ *
+ * `backgroundColor: transparent` is doing real work here: it cancels the fill
+ * CodeMirror's base theme sets for the tag pair, which is the fill that
+ * competed with the selection.
+ */
+function tagOutline(color: string) {
+    return {
+        backgroundColor: "transparent",
+        outline: `1px solid ${color}`,
+        borderRadius: "2px",
+    };
+}
+
+/**
+ * The page's canvas color, with a fallback for a host that has not defined
+ * `--canvas` (the dev sites, and anything embedding this package without
+ * `@doenet/doenetml`'s stylesheet). The fallback matters because `CodeMirror`
+ * turns off `@uiw/react-codemirror`'s own theme, which used to paint an
+ * unconditional white here; without a value of our own the editor would fall
+ * through to whatever is behind it.
+ */
+function canvasBackground(darkMode: ThemeMode) {
+    return darkMode === "dark"
+        ? "var(--canvas, #121212)"
+        : "var(--canvas, #fff)";
+}
+
+// Shared gutter palette used by both the editable and read-only themes to keep colors aligned per mode.
+function getGutterColors(darkMode: ThemeMode) {
+    if (darkMode === "dark") {
+        return {
+            backgroundColor: "#1e1e1e",
+            textColor: "#8b949e",
+            borderRight: "1px solid #333",
+            activeLineBackgroundColor: "#363636",
+        };
+    }
+
+    return {
         backgroundColor: "var(--mainGray)",
-    },
-    "&.cm-focused": {
-        color: "var(--canvasText)",
-    },
-    "cm-selectionLayer": {
-        backgroundColor: "var(--mainGreen)",
-    },
-    ".cm-gutters": {
-        backgroundColor: "var(--mainGray)",
-        // Changed from "black" to ensure proper contrast on gray background
-        color: "#595959",
-        border: "none",
-    },
-    ".cm-activeLine": {
-        backgroundColor: "var(--mainGray)",
-        color: "black",
-    },
-    ".cm-line": {
-        // Changed from #666666 (3.46:1 on white) to #595959 (4.54:1 on white)
-        // to meet WCAG 2.1 AA requirements (minimum 4.5:1)
-        color: "#595959",
-    },
-});
+        textColor: "#595959",
+        borderRight: "none",
+        activeLineBackgroundColor: "var(--lightBlue)",
+    };
+}
+
+/**
+ * WCAG 2.1 AA compliant color theme for the editable code area.
+ *
+ * `darkMode` switches a handful of colors that cannot be expressed with a
+ * single CSS variable because the light and dark gutters need different
+ * treatments:
+ *  - light: gutter bg = `--mainGray` (#e3e3e3) with text #595959 (4.54:1)
+ *  - dark:  gutter bg = #1e1e1e (VS Code-style, barely lighter than canvas)
+ *           with muted text #8b949e (5.2:1 on #1e1e1e)
+ *
+ * The dark gutter values are also emitted in `editor-viewer.css` under
+ * `[data-theme="dark"] .editor-panel .cm-gutters` for belt-and-suspenders
+ * coverage inside `EditorViewer`.
+ */
+export function colorTheme(darkMode: ThemeMode) {
+    const gutterColors = getGutterColors(darkMode);
+    return EditorView.theme(
+        {
+            "&": {
+                color: "var(--canvasText)",
+                height: "100%",
+                backgroundColor: canvasBackground(darkMode),
+            },
+            ".cm-content": {
+                caretColor: "#0e9",
+            },
+            "&.cm-focused .cm-cursor": {
+                borderLeftColor: "var(--canvasText)",
+            },
+            ...highlightThemeRules(darkMode),
+            "&.cm-focused": {
+                color: "var(--canvasText)",
+            },
+            ".cm-gutters": {
+                backgroundColor: gutterColors.backgroundColor,
+                color: gutterColors.textColor,
+                border: "none",
+                borderRight: gutterColors.borderRight,
+            },
+            ".cm-activeLine": {
+                backgroundColor: "#50505020",
+                // Must be explicit: CodeMirror's base theme sets activeLine color
+                // to a dark value which is invisible on a dark canvas.
+                color: "var(--canvasText)",
+            },
+            // Subtle gutter highlight on the active line — CodeMirror's base
+            // theme uses #e2f2ff (light blue) which is glaring on a dark gutter.
+            ".cm-activeLineGutter": {
+                backgroundColor: gutterColors.activeLineBackgroundColor,
+            },
+        },
+        // Tell CodeMirror the actual brightness so its base theme applies
+        // dark-appropriate defaults (e.g. the blurred selection color) instead
+        // of light ones.
+        { dark: darkMode === "dark" },
+    );
+}
+
+// Shared icon palette so all completion types flip together between modes.
+function getCompletionIconColors(darkMode: ThemeMode) {
+    if (darkMode === "dark") {
+        return {
+            // Verified ≥4.5:1 on #2a2a2a (the dark tooltip surface)
+            component: "#58a6ff", // blue   ~7.6:1
+            enumAttr: "#3fb950", // green  ~7.0:1
+            value: "#4dd0e1", // teal   ~8.8:1
+            reference: "#bc8cff", // purple ~6.5:1
+            snippet: "#f78166", // orange ~6.3:1
+        };
+    }
+
+    return {
+        // Verified ≥4.5:1 on white dropdown
+        component: "#1f6feb", // blue
+        enumAttr: "#1a7f37", // green
+        value: "#0e7c86", // teal
+        reference: "#8250df", // purple
+        snippet: "#bc4c00", // orange
+    };
+}
+
+/**
+ * Left-column glyphs for the autocomplete dropdown, one per DoenetML category.
+ * CodeMirror renders these from each completion's `type` via the built-in class
+ * `.cm-completionIcon-<type>` (types assigned by `deriveCompletionType` in
+ * `@doenet/lsp-tools`). Its base theme only defines glyphs for a fixed set of
+ * types (and dims them to 0.6 opacity), so we override the one we reuse
+ * (`enum`) and add glyphs for our custom types. Uses EditorView.theme (not
+ * baseTheme) so these win over CodeMirror's built-in rules by later injection
+ * at equal CSS specificity. Glyph-only (CSS `::after` content) — no image
+ * assets.
+ *
+ * Colors are chosen for WCAG AA contrast on the dropdown background surface:
+ *  - light mode: white dropdown → light-tuned palette
+ *  - dark mode:  #2a2a2a dropdown (set by tooltip.css in dark mode) → brighter palette
+ */
+export function completionIconTheme(darkMode: ThemeMode) {
+    const colors = getCompletionIconColors(darkMode);
+
+    return EditorView.theme({
+        ".cm-completionIcon-component::after": { content: '"\\25C8"' }, // ◈
+        ".cm-completionIcon-refproperty::after": { content: '"."' },
+        ".cm-completionIcon-closetag::after": { content: '"/"' },
+        ".cm-completionIcon-enum::after": { content: '"@"' }, // attribute name
+        ".cm-completionIcon-value::after": { content: '"\\25AA"' }, // ▪ (enum value)
+        ".cm-completionIcon-reference::after": { content: '"$"' },
+        ".cm-completionIcon-snippet::after": { content: '"\\274F"' }, // ❏
+
+        ".cm-completionIcon-component": {
+            color: colors.component,
+            opacity: "1",
+        },
+        ".cm-completionIcon-enum": { color: colors.enumAttr, opacity: "1" },
+        ".cm-completionIcon-value": { color: colors.value, opacity: "1" },
+        ".cm-completionIcon-reference": {
+            color: colors.reference,
+            opacity: "1",
+        },
+        ".cm-completionIcon-refproperty": {
+            color: colors.reference,
+            opacity: "1",
+        },
+        ".cm-completionIcon-snippet": { color: colors.snippet, opacity: "1" },
+        ".cm-completionIcon-closetag": {
+            color: colors.component,
+            opacity: "1",
+        },
+
+        // The highlighted option has a solid blue background (CodeMirror's
+        // baseTheme: #17c light / #347 dark, with white label text), against
+        // which the category colors above are nearly invisible. Render the
+        // glyph white on the selected row so it stays legible, matching the
+        // label. The descendant selector outranks the single-class color rules
+        // above, so it wins regardless of order.
+        ".cm-tooltip-autocomplete ul li[aria-selected] .cm-completionIcon": {
+            color: "#fff",
+            opacity: "1",
+        },
+    });
+}
+
+/**
+ * WCAG 2.1 AA compliant read-only color theme.
+ *
+ * Read-only code gets a tinted content background and muted line text to
+ * distinguish it from the editable area. The muted color differs per mode:
+ *  - light: #595959 (4.54:1 on white)
+ *  - dark:  #c8c8c8 (muted but ~11:1 on the dark canvas #121212)
+ */
+export function readOnlyColorTheme(darkMode: ThemeMode) {
+    const gutterColors = getGutterColors(darkMode);
+    const lineTextColor = darkMode === "dark" ? "#c8c8c8" : "#595959";
+    const activeLineBackgroundColor =
+        darkMode === "dark" ? "#50505020" : "var(--mainGray)";
+    return EditorView.theme(
+        {
+            "&": {
+                color: "var(--canvasText)",
+                height: "100%",
+                backgroundColor: canvasBackground(darkMode),
+            },
+            ".cm-content": {
+                caretColor: "#0e9",
+                backgroundColor: "#77777720",
+            },
+            "&.cm-focused .cm-cursor": {
+                borderLeftColor: "var(--canvasText)",
+            },
+            ...highlightThemeRules(darkMode),
+            "&.cm-focused": {
+                color: "var(--canvasText)",
+            },
+            ".cm-gutters": {
+                backgroundColor: gutterColors.backgroundColor,
+                color: gutterColors.textColor,
+                border: "none",
+                borderRight: gutterColors.borderRight,
+            },
+            ".cm-activeLine": {
+                backgroundColor: activeLineBackgroundColor,
+                color: "var(--canvasText)",
+            },
+            ".cm-activeLineGutter": {
+                backgroundColor: gutterColors.activeLineBackgroundColor,
+            },
+            ".cm-line": {
+                color: lineTextColor,
+            },
+        },
+        { dark: darkMode === "dark" },
+    );
+}

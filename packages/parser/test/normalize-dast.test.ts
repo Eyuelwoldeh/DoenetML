@@ -4,6 +4,7 @@ import { lezerToDast } from "../src/lezer-to-dast";
 import { toXml } from "../src/dast-to-xml/dast-util-to-xml";
 import { normalizeDocumentDast } from "../src/dast-normalize/normalize-dast";
 import { extractDastErrors } from "../src";
+import type { DastElement, DastMacro } from "../src/types";
 
 const origLog = console.log;
 console.log = (...args) => {
@@ -11,6 +12,118 @@ console.log = (...args) => {
 };
 
 describe("Normalize dast", async () => {
+    it("wraps a field's bare expression in a <function> child", () => {
+        const dast = normalizeDocumentDast(
+            lezerToDast(`<slopeField>y - x</slopeField>`),
+        );
+        expect(toXml(dast)).toEqual(
+            `<document><slopeField><function variables="x y">y - x</function></slopeField></document>`,
+        );
+    });
+    it("moves a field's variables onto the <function> it wraps", () => {
+        const dast = normalizeDocumentDast(
+            lezerToDast(
+                `<vectorField variables="$v1 $v2">($v2,-$v1)</vectorField>`,
+            ),
+        );
+        // The references are carried over untouched, so they resolve against
+        // whatever names them rather than being read here.
+        expect(toXml(dast)).toEqual(
+            `<document><vectorField><function variables="$v1 $v2">($v2,-$v1)</function></vectorField></document>`,
+        );
+    });
+    it("moves a field's variables however it was capitalized", () => {
+        // Attribute names are matched case-insensitively when the components
+        // are built, so one left behind here would name nothing while the
+        // wrapper defaulted to `x y` and `s - t` came out NaN everywhere.
+        const dast = normalizeDocumentDast(
+            lezerToDast(`<slopeField VARIABLES="s t">s - t</slopeField>`),
+        );
+        expect(toXml(dast)).toEqual(
+            `<document><slopeField><function variables="s t">s - t</function></slopeField></document>`,
+        );
+    });
+    it("warns that a field's variables are ignored beside an explicit <function> child", () => {
+        const dast = normalizeDocumentDast(
+            lezerToDast(
+                `<slopeField variables="s t"><function variables="u v">u-v</function></slopeField>`,
+            ),
+        );
+        // The child is used as it stands, and the attribute stays where it was
+        // written rather than being quietly deleted along with its meaning.
+        expect(toXml(dast)).toContain(`<slopeField variables="s t">`);
+        expect(toXml(dast)).toContain(
+            `<function variables="u v">u-v</function>`,
+        );
+
+        const warnings = extractDastErrors(dast).filter(
+            (error) => error.error_type === "warning",
+        );
+        expect(warnings).toMatchObject([
+            {
+                error_type: "warning",
+                code: "doenet-w0124",
+                args: { component: "slopeField", reason: "function-child" },
+            },
+        ]);
+        expect(warnings[0].message).toContain(
+            "which names its own variables, so `variables` is ignored",
+        );
+    });
+    it("warns that a field's variables are ignored when it has no expression", () => {
+        const dast = normalizeDocumentDast(
+            lezerToDast(`<vectorField variables="u v" />`),
+        );
+        const warnings = extractDastErrors(dast).filter(
+            (error) => error.error_type === "warning",
+        );
+        expect(warnings).toMatchObject([
+            {
+                error_type: "warning",
+                code: "doenet-w0124",
+                args: { component: "vectorField", reason: "no-expression" },
+            },
+        ]);
+    });
+    it("does not warn about a field's variables when it uses them", () => {
+        const dast = normalizeDocumentDast(
+            lezerToDast(`<slopeField variables="s t">s - t</slopeField>`),
+        );
+        expect(
+            extractDastErrors(dast).filter(
+                (error) => error.error_type === "warning",
+            ),
+        ).toEqual([]);
+    });
+    it("leaves a field's label child outside the <function> it wraps", () => {
+        const dast = normalizeDocumentDast(
+            lezerToDast(`<slopeField>y - x<label>hi</label></slopeField>`),
+        );
+        expect(toXml(dast)).toEqual(
+            `<document><slopeField><function variables="x y">y - x</function><label>hi</label></slopeField></document>`,
+        );
+    });
+    it("keeps a field's set-aside child on the side it was written", () => {
+        // The line breaks matter: the whitespace around the expression is
+        // swallowed into the wrapper, so the wrapper has to land where the
+        // expression is rather than where the first swallowed child was.
+        const dast = normalizeDocumentDast(
+            lezerToDast(
+                `<slopeField>\n<label>hi</label>\ny - x\n</slopeField>`,
+            ),
+        );
+        expect(toXml(dast)).toEqual(
+            `<document><slopeField><label>hi</label><function variables="x y">\n\ny - x\n</function></slopeField></document>`,
+        );
+    });
+    it("does not give a field a <function> when it has no expression", () => {
+        const dast = normalizeDocumentDast(
+            lezerToDast(`<slopeField>   </slopeField>`),
+        );
+        expect(toXml(dast)).toEqual(
+            `<document><slopeField>   </slopeField></document>`,
+        );
+    });
     it("wraps in a <document> tag", () => {
         let source: string;
         let dast: ReturnType<typeof lezerToDast>;
@@ -83,8 +196,39 @@ describe("Normalize dast", async () => {
         source = `<section><![CDATA[foo]]><p>hi</p></section>`;
         dast = lezerToDast(source);
         expect(toXml(normalizeDocumentDast(dast))).toEqual(
-            '<document><division type="section">foo<p>hi</p></division></document>',
+            '<document><division type="section">foo<p>hi</p><_dynamicChildren /></division></document>',
         );
+    });
+    it("marks dynamic children that are postponed with their parent", () => {
+        function getDynamicChildrenAttributes(source: string) {
+            const dast = lezerToDast(source);
+            const normalized = normalizeDocumentDast(dast);
+            const document = normalized.children[0] as DastElement;
+            const section = document.children[0] as DastElement;
+            const dynamicChildren = section.children.find(
+                (child): child is DastElement =>
+                    child.type === "element" &&
+                    child.name === "_dynamicChildren",
+            );
+            expect(dynamicChildren).toBeDefined();
+            return dynamicChildren!.attributes;
+        }
+
+        expect(
+            getDynamicChildrenAttributes(
+                `<aside postponeRendering><title>Hint</title><p>Secret.</p></aside>`,
+            ).deferUntilParentRendered,
+        ).toMatchObject({
+            type: "attribute",
+            name: "deferUntilParentRendered",
+            children: [{ type: "text", value: "true" }],
+        });
+
+        expect(
+            getDynamicChildrenAttributes(
+                `<aside><title>Hint</title><p>Already created.</p></aside>`,
+            ),
+        ).not.toHaveProperty("deferUntilParentRendered");
     });
     it("preserves existing document tag", () => {
         let source: string;
@@ -296,6 +440,43 @@ describe("Normalize dast", async () => {
         ]);
     });
 
+    it("drops the deprecated odeSystem renderMode attribute", () => {
+        const source = `<odeSystem renderMode="display">x</odeSystem>`;
+        const dast = lezerToDast(source);
+        const normalized = normalizeDocumentDast(dast);
+
+        expect(toXml(normalized)).toEqual(
+            "<document><odeSystem>x</odeSystem></document>",
+        );
+
+        const warnings = extractDastErrors(normalized).filter(
+            (error) => error.error_type === "warning",
+        );
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0].message).toContain(
+            "[deprecation] Attribute `renderMode` on `<odeSystem>` is deprecated and ignored.",
+        );
+    });
+
+    it("drops the section attributes a cascade no longer has", () => {
+        const source = `<cascade name="c" boxed weight="2" forceIndividualAnswerColoring hideFutureSections><p>x</p></cascade>`;
+        const dast = lezerToDast(source);
+        const normalized = normalizeDocumentDast(dast);
+
+        expect(toXml(normalized)).toEqual(
+            '<document><cascade name="c" hideFutureSections="true"><p>x</p></cascade></document>',
+        );
+
+        const warnings = extractDastErrors(normalized).filter(
+            (error) => error.error_type === "warning",
+        );
+        expect(warnings.map((x) => x.message).sort()).toEqual([
+            "[deprecation] Attribute `boxed` on `<cascade>` is deprecated and ignored.",
+            "[deprecation] Attribute `forceIndividualAnswerColoring` on `<cascade>` is deprecated and ignored.",
+            "[deprecation] Attribute `weight` on `<cascade>` is deprecated and ignored.",
+        ]);
+    });
+
     it("keeps non-deprecated attributes when dropping deprecated ones", () => {
         const source = `<description name="d" aggregateScores>hello</description>`;
         const dast = lezerToDast(source);
@@ -340,6 +521,23 @@ describe("Normalize dast", async () => {
                 message:
                     "[deprecation] Attribute `weight` on `<description>` is deprecated and ignored.",
             },
+        ]);
+    });
+
+    it("drops renamed scored-section coloring attributes on description", () => {
+        const source = `<description forceIndividualAnswerColoring>hello</description>`;
+        const dast = lezerToDast(source);
+        const normalized = normalizeDocumentDast(dast);
+
+        expect(toXml(normalized)).toEqual(
+            "<document><description>hello</description></document>",
+        );
+
+        const warnings = extractDastErrors(normalized).filter(
+            (error) => error.error_type === "warning",
+        );
+        expect(warnings.map((x) => x.message).sort()).toEqual([
+            "[deprecation] Attribute `forceIndividualAnswerColoring` on `<description>` is deprecated and ignored.",
         ]);
     });
 
@@ -577,6 +775,144 @@ describe("Normalize dast", async () => {
         });
     });
 
+    // See `postponeRenderSugar` in component-sugar/postponeRender.ts. For
+    // `<solution>`/`<givenAnswer>` it always runs (unlike `<aside>`/`<proof>`
+    // below, where it's conditional on `postponeRendering`).
+    it("Sugars solution/givenAnswer into a _postponeRenderContainer", () => {
+        let source: string;
+        let dast: ReturnType<typeof lezerToDast>;
+
+        // content with no title gets wrapped
+        source = "<solution><p>hi</p></solution>";
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            "<document><solution><_postponeRenderContainer><p>hi</p></_postponeRenderContainer></solution></document>",
+        );
+
+        // a leading title is hoisted out of the container
+        source = "<solution><title>T</title><p>hi</p></solution>";
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            "<document><solution><title>T</title><_postponeRenderContainer><p>hi</p></_postponeRenderContainer></solution></document>",
+        );
+
+        // givenAnswer follows the same unconditional wrapping
+        source = "<givenAnswer><p>hi</p></givenAnswer>";
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            "<document><givenAnswer><_postponeRenderContainer><p>hi</p></_postponeRenderContainer></givenAnswer></document>",
+        );
+    });
+
+    // `<aside>`/`<proof>` both support dynamic children (see
+    // COMPONENTS_WITH_DYNAMIC_CHILDREN in component-sugar/dynamicChildren.ts),
+    // so a `<_dynamicChildren>` sibling is always appended regardless of
+    // `postponeRendering`. What's conditional is only the postpone-render
+    // wrapping, and whether `<_dynamicChildren>` gets a
+    // `deferUntilParentRendered="true"` attribute (it does exactly when the
+    // sibling `<_postponeRenderContainer>` is present, so the runtime knows
+    // to defer creating these children until the parent renders).
+    it("Sugars aside/proof into a _postponeRenderContainer only when postponeRendering is truthy", () => {
+        let source: string;
+        let dast: ReturnType<typeof lezerToDast>;
+
+        // no postponeRendering attribute: left untouched, no deferral flag
+        source = "<aside><title>Hint</title><p>Secret.</p></aside>";
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            "<document><aside><title>Hint</title><p>Secret.</p><_dynamicChildren /></aside></document>",
+        );
+
+        // bare postponeRendering (no value) counts as truthy: wrapped, and
+        // the attribute itself is normalized to postponeRendering="true"
+        source =
+            "<aside postponeRendering><title>Hint</title><p>Secret.</p></aside>";
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            '<document><aside postponeRendering="true"><title>Hint</title><_postponeRenderContainer><p>Secret.</p></_postponeRenderContainer><_dynamicChildren deferUntilParentRendered="true" /></aside></document>',
+        );
+
+        // postponeRendering="TRUE": still wrapped (case-insensitive)
+        source = '<aside postponeRendering="TRUE"><p>x</p></aside>';
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            '<document><aside postponeRendering="TRUE"><_postponeRenderContainer><p>x</p></_postponeRenderContainer><_dynamicChildren deferUntilParentRendered="true" /></aside></document>',
+        );
+
+        // postponeRendering="false": explicitly opted out, left untouched
+        source =
+            '<aside postponeRendering="false"><title>Hint</title><p>Secret.</p></aside>';
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            '<document><aside postponeRendering="false"><title>Hint</title><p>Secret.</p><_dynamicChildren /></aside></document>',
+        );
+
+        // proof follows the same conditional branch as aside
+        source = "<proof postponeRendering><p>Secret.</p></proof>";
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            '<document><proof postponeRendering="true"><_postponeRenderContainer><p>Secret.</p></_postponeRenderContainer><_dynamicChildren deferUntilParentRendered="true" /></proof></document>',
+        );
+    });
+
+    // See `pretzelSugar` in component-sugar/pretzel.ts. All of a <pretzel>'s
+    // children get wrapped in a single <_pretzelArranger>, and any <answer>
+    // that is a direct child of a direct <problem> child is renamed to
+    // <givenAnswer>.
+    it("Sugars pretzel into a _pretzelArranger and renames nested answers to givenAnswer", () => {
+        let source: string;
+        let dast: ReturnType<typeof lezerToDast>;
+
+        // an <answer> inside a direct <problem> child is renamed to <givenAnswer>.
+        // The tree walk in normalize-dast.ts is pre-order and re-reads a node's
+        // children after mutating them, so this renamed node is immediately
+        // revisited and picks up givenAnswer's own postpone-render sugar too -
+        // hence the (empty, since <answer/> had no children of its own) nested
+        // <_postponeRenderContainer />, and <problem>'s own <_dynamicChildren />
+        // (problem supports dynamic children independent of pretzel).
+        source = "<pretzel><problem><answer/></problem></pretzel>";
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            "<document><pretzel><_pretzelArranger><problem><givenAnswer><_postponeRenderContainer /></givenAnswer><_dynamicChildren /></problem></_pretzelArranger></pretzel></document>",
+        );
+
+        // an <answer> not nested in a <problem> is left alone - the rename is
+        // scoped to direct problem > answer pairs only, not all descendants
+        source = "<pretzel><answer/></pretzel>";
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            "<document><pretzel><_pretzelArranger><answer /></_pretzelArranger></pretzel></document>",
+        );
+
+        // a mode attribute is forwarded onto the arranger
+        source = '<pretzel mode="foo"><problem><answer/></problem></pretzel>';
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            '<document><pretzel mode="foo"><_pretzelArranger mode="foo"><problem><givenAnswer><_postponeRenderContainer /></givenAnswer><_dynamicChildren /></problem></_pretzelArranger></pretzel></document>',
+        );
+
+        // with no mode attribute, the arranger has none either
+        source = "<pretzel><p>hi</p></pretzel>";
+        dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            "<document><pretzel><_pretzelArranger><p>hi</p></_pretzelArranger></pretzel></document>",
+        );
+    });
+
+    // Regression guard: addDynamicChildrenSugar only checks a node's *direct*
+    // children for a <_postponeRenderContainer> before adding
+    // deferUntilParentRendered (see component-sugar/dynamicChildren.ts). A
+    // <solution> nested inside a <problem> produces its own container, but
+    // it's not a direct child of <problem>, so <problem>'s <_dynamicChildren>
+    // must stay unaffected (no deferUntilParentRendered attribute).
+    it("Does not let an inner solution's postpone-render sugar affect an outer problem's dynamicChildren sugar", () => {
+        const source = "<problem><solution><p>hi</p></solution></problem>";
+        const dast = lezerToDast(source);
+        expect(toXml(normalizeDocumentDast(dast))).toEqual(
+            "<document><problem><solution><_postponeRenderContainer><p>hi</p></_postponeRenderContainer></solution><_dynamicChildren /></problem></document>",
+        );
+    });
+
     it("Adds error when answer type=videoWatched has non-reference video attribute", () => {
         const source = `<answer type="videoWatched" video="myVideo" />`;
         const dast = lezerToDast(source);
@@ -588,5 +924,165 @@ describe("Normalize dast", async () => {
                 type: "error",
             },
         ]);
+    });
+
+    describe("reaches inside a reference's index brackets", () => {
+        // An index could only hold text and references until `gobblePropIndices`
+        // began moving elements into one, so `visit` did not descend there. These
+        // cover the `includePathIndices` option that lets normalization in.
+
+        it("strips comments from an element written in an index", () => {
+            const dast = normalizeDocumentDast(
+                lezerToDast(`<p>$a[<number>1<!-- drop me --></number>]</p>`),
+            );
+            expect(toXml(dast)).toEqual(
+                `<document><p>$a[<number>1</number>]</p></document>`,
+            );
+        });
+
+        it("strips a comment written beside the element, and its whitespace", () => {
+            // The parser leaves this one in so the pretty-printer can round-trip
+            // it; removing it is this pass's job. Left in, the index would hold
+            // two nodes instead of one and would not resolve — a comment, which
+            // an author expects to be able to write anywhere, would silently
+            // stop the index working.
+            for (const source of [
+                `<p>$a[<!-- which one --><n/>]</p>`,
+                `<p>$a[ <!-- which one --> <n/> ]</p>`,
+            ]) {
+                const dast = normalizeDocumentDast(lezerToDast(source));
+                expect(toXml(dast)).toEqual(
+                    `<document><p>$a[<n />]</p></document>`,
+                );
+            }
+        });
+
+        it("expands an aliased element written in an index", () => {
+            const dast = normalizeDocumentDast(
+                lezerToDast(`<p>$a[<section>1</section>]</p>`),
+            );
+            // `<section>` is an alias for `<division type="section">`, so what
+            // lands in the index is the expansion, not the name as written.
+            // Asserted by what it contains rather than whole: the expansion
+            // also picks up the component sugar a `<division>` gets anywhere
+            // else, which is the point, but not what this test is pinning.
+            const xml = toXml(dast);
+            expect(xml).toContain(`<division type="section">`);
+            expect(xml).not.toContain(`<section`);
+        });
+
+        it("strips a doctype written in an index", () => {
+            // A doctype really can be written between the brackets at root
+            // level, so the raw parse carries one and this pass takes it out.
+            const raw: any = lezerToDast(`$a[<!DOCTYPE html><n/>]`);
+            expect(
+                raw.children[0].path[0].index[0].value.map((n: any) => n.type),
+            ).toEqual(["doctype", "element"]);
+            expect(
+                toXml(
+                    normalizeDocumentDast(
+                        lezerToDast(`$a[<!DOCTYPE html><n/>]`),
+                    ),
+                ),
+            ).toEqual(`<document>$a[<n />]</document>`);
+        });
+
+        it("strips a comment written as a function reference's argument", () => {
+            // A function reference's arguments are nobody's children either, so
+            // the filter has to reach them too. Left in, the comment does not
+            // fail to deserialize — the core's text node carries its tag but
+            // does not check it — so the comment's own words arrive as content
+            // and render.
+            const dast = normalizeDocumentDast(
+                lezerToDast(`<p>$$f(<!-- c --><math>3</math>)</p>`),
+            );
+            expect(toXml(dast)).toEqual(
+                `<document><p>$$f(<math>3</math>)</p></document>`,
+            );
+            // The parse keeps it, so the pretty-printer still round-trips.
+            expect(
+                toXml(lezerToDast(`<p>$$f(<!-- c --><math>3</math>)</p>`)),
+            ).toContain(`<!-- c -->`);
+        });
+
+        it("collects an error from a function reference's element argument", () => {
+            // A function reference's arguments are no more anybody's children
+            // than an index's contents are, so the error there needs collecting
+            // too or the language server never shows it.
+            const errors = extractDastErrors(
+                normalizeDocumentDast(
+                    lezerToDast(
+                        `<p>$$f(<b><number name="1st">1</number></b>)</p>`,
+                    ),
+                ),
+            );
+            expect(errors).toMatchObject([{ code: "doenet-e0025" }]);
+        });
+
+        it("validates every invalid element in an index, not just the first", () => {
+            // Reporting one removes it from the index's `value`, so the next
+            // shifts into that slot. The walk has to be told to resume there
+            // rather than stepping over it.
+            const dast = normalizeDocumentDast(
+                lezerToDast(`<p>$a[<_bad/><_alsoBad/>]</p>`),
+            );
+            const errors = extractDastErrors(dast);
+            expect(errors).toMatchObject([
+                { code: "doenet-e0024" },
+                { code: "doenet-e0024" },
+            ]);
+        });
+
+        it("validates a name written on an element in an index", () => {
+            // The `_error` is reported from the nearest element rather than
+            // from the index's own `value`, which holds only text, references
+            // and elements — an `_error` carried into one is a deserialization
+            // failure in the core rather than a diagnostic.
+            const dast = normalizeDocumentDast(
+                lezerToDast(`<p>$a[<number name="1st">1</number>]</p>`),
+            );
+            expect(extractDastErrors(dast)).toMatchObject([
+                { type: "error", code: "doenet-e0025" },
+            ]);
+            const p = (dast.children[0] as DastElement).children[0];
+            expect(p).toMatchObject({
+                name: "p",
+                children: [{ type: "macro" }, { type: "error" }],
+            });
+            // The element itself stays in the index — only its name was
+            // invalid, and that has been removed — so the index still resolves.
+            const reference = (p as DastElement).children[0] as DastMacro;
+            expect(reference.path[0].index[0].value).toMatchObject([
+                { type: "element", name: "number", attributes: {} },
+            ]);
+        });
+
+        it("collects an error from inside an element written in an index", () => {
+            // Here the error does belong where it was put — a `children` array
+            // inside the index element — so what the index's own `value` needs
+            // is a collector that descends into it.
+            const dast = normalizeDocumentDast(
+                lezerToDast(
+                    `<p>$a[<indexOf><number name="1st">1</number></indexOf>]</p>`,
+                ),
+            );
+            expect(extractDastErrors(dast)).toMatchObject([
+                { type: "error", code: "doenet-e0025" },
+            ]);
+        });
+
+        it("does not leave an element with an invalid component name in an index", () => {
+            // The element cannot be replaced by the `_error` where it sits, so
+            // it is lifted out and the error is reported from the nearest
+            // element. An empty index reads as any other index that resolves to
+            // nothing.
+            const dast = normalizeDocumentDast(
+                lezerToDast(`<p>$a[<_weird>1</_weird>]</p>`),
+            );
+            expect(extractDastErrors(dast)).toMatchObject([
+                { type: "error", code: "doenet-e0024" },
+            ]);
+            expect(toXml(dast)).toEqual(`<document><p>$a[]</p></document>`);
+        });
     });
 });

@@ -144,8 +144,12 @@ describe("Graph prefigure renderer core @group4", () => {
         );
 
         expect(prefigureXML).toContain(`<axes axes="all">`);
-        expect(prefigureXML).toContain(`<xlabel alignment="nw">time</xlabel>`);
-        expect(prefigureXML).toContain(`<ylabel alignment="se">value</ylabel>`);
+        expect(prefigureXML).toContain(
+            `<xlabel alignment="nw" color="currentColor">time</xlabel>`,
+        );
+        expect(prefigureXML).toContain(
+            `<ylabel alignment="se" color="currentColor">value</ylabel>`,
+        );
 
         const diagnosticsByType = await getWarnings(
             prefigureGraph(
@@ -214,6 +218,17 @@ describe("Graph prefigure renderer core @group4", () => {
         expect(triangleWarning?.position).toBeDefined();
         expect(triangleWarning?.position?.start?.line).eq(7);
         expect(triangleWarning?.position?.start?.column).eq(1);
+
+        // `pushWarning` builds every PreFigure conversion warning on its
+        // callers' behalf, so the code and arguments are the only evidence
+        // that the sentence came from the catalog — and the half the main
+        // thread re-renders from. `subject` is precomposed because it holds
+        // only a tag name and punctuation, nothing a translation would touch.
+        expect(triangleWarning?.code).eq("doenet-w0093");
+        expect(triangleWarning?.args?.subject).eq("<point>");
+        // Lower-cased upstream of the warning, which is why the message quotes
+        // it rather than echoing what the author typed.
+        expect(triangleWarning?.args?.markerStyle).eq("triangleright");
     });
 
     it("renderer=prefigure maps graph axis labels with latex to m tags", async () => {
@@ -224,8 +239,12 @@ describe("Graph prefigure renderer core @group4", () => {
         );
 
         expect(prefigureXML).toContain(`<axes axes="all">`);
-        expect(prefigureXML).toContain(`<xlabel alignment="nw"><m>`);
-        expect(prefigureXML).toContain(`<ylabel alignment="se"><m>`);
+        expect(prefigureXML).toContain(
+            `<xlabel alignment="nw" color="currentColor"><m>`,
+        );
+        expect(prefigureXML).toContain(
+            `<ylabel alignment="se" color="currentColor"><m>`,
+        );
         expect(prefigureXML).toContain(`x^2`);
         expect(prefigureXML).toContain(`y_1`);
     });
@@ -238,7 +257,7 @@ describe("Graph prefigure renderer core @group4", () => {
         );
 
         expect(prefigureXML).toMatchInlineSnapshot(
-            `"<diagram dimensions="(425,425)"><coordinates bbox="(-10,-10,10,10)"><axes axes="all"><xlabel alignment="nw"><m>x^2</m></xlabel><ylabel alignment="se"><m>y_1</m></ylabel></axes></coordinates><annotations></annotations></diagram>"`,
+            `"<diagram dimensions="(425,425)"><coordinates bbox="(-10,-10,10,10)"><axes axes="all"><xlabel alignment="nw" color="currentColor"><m>x^2</m></xlabel><ylabel alignment="se" color="currentColor"><m>y_1</m></ylabel></axes></coordinates><annotations></annotations></diagram>"`,
         );
     });
 
@@ -253,6 +272,26 @@ describe("Graph prefigure renderer core @group4", () => {
         expect(prefigureXML).toContain(
             `p="(1,2)" style="box" size="6" fill="green" stroke="green" fill-opacity="0.4" stroke-opacity="0.4" thickness="3"`,
         );
+    });
+
+    it("renderer=prefigure uses fill-pattern for patterned polygon fills", async () => {
+        const doenetML = withStyleDefinitions(
+            '    <styleDefinition styleNumber="7" fillColor="green" fillStyle="dots" fillOpacity="0.3" fillPatternOpacity="0.8" />',
+            prefigureGraph(
+                '<polygon styleNumber="7" filled vertices="(0,0) (2,0) (1,1)" />',
+            ),
+        );
+        const prefigureXML = await getPrefigureXML(doenetML);
+
+        expect(prefigureXML).toContain(`fill-pattern="dot"`);
+        expect(prefigureXML).toContain(`fill="green"`);
+        expect(prefigureXML).toContain(`stroke-opacity="0.7"`);
+        expect(prefigureXML).toContain(`fill-opacity="0.8"`);
+        expect(prefigureXML).not.toContain(`fill-opacity="0.3"`);
+        expect(prefigureXML).not.toContain(`url(#`);
+
+        const diagnosticsByType = await getWarnings(doenetML);
+        expect(diagnosticsByType.warnings).toHaveLength(0);
     });
 
     it("renderer=prefigure maps endpoint and equilibriumPoint as points", async () => {

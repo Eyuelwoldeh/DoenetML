@@ -11,6 +11,7 @@ import {
     createCheckWorkComponent,
 } from "./utils/checkWork";
 import { useSubmitActionWithDelay } from "./utils/useSubmitActionWithDelay";
+import { useChromeLangDir, useContentT, useT } from "../../utils/i18n";
 
 interface PretzelSVs {
     [key: string]: any;
@@ -32,6 +33,18 @@ export default React.memo(function Pretzel(props: UseDoenetRendererProps) {
         callAction,
         flags,
     } = useDoenetRenderer<PretzelSVs>(props);
+
+    const t = useT();
+
+    // The check-work button follows the document's language, not the
+    // reader's — see `useContentT`.
+    const tContent = useContentT();
+
+    // Each answer row is mixed: the "Answer" label and its colon are the
+    // reader's, while the answer beside them is the author's. Only the chrome
+    // half re-declares itself, and only where the two directions disagree —
+    // otherwise the colon lands on the wrong end of the label.
+    const chromeLangDir = useChromeLangDir();
 
     const ref = useRef(null);
 
@@ -96,7 +109,10 @@ export default React.memo(function Pretzel(props: UseDoenetRendererProps) {
                         className="pretzelAnswer"
                         data-test="pretzel-row-answer"
                     >
-                        <b>Answer</b>: {answer}
+                        <span {...chromeLangDir}>
+                            <b>{t("pretzel-answer", undefined, "Answer")}</b>:
+                        </span>{" "}
+                        {answer}
                     </div>
                     <div
                         className="pretzelInputStatement"
@@ -136,6 +152,7 @@ export default React.memo(function Pretzel(props: UseDoenetRendererProps) {
         submitActionWithPending,
         true,
         isPending,
+        tContent,
     );
 
     return (

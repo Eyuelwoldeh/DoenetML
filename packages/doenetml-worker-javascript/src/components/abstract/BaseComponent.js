@@ -1,4 +1,5 @@
 import createStateProxyHandler from "../../StateProxyHandler";
+import { SHARED_STATE_VARIABLE_DEFINITIONS } from "../../core/StateVariableDefinitionFactory";
 import { flattenDeep, mapDeep } from "@doenet/utils";
 import { deepClone, enumerateCombinations } from "@doenet/utils";
 import { gatherVariantComponents } from "../../utils/variants";
@@ -6,6 +7,8 @@ import {
     returnDefaultArrayVarNameFromPropIndex,
     returnDefaultGetArrayKeysFromVarName,
 } from "../../utils/stateVariables";
+
+export const SERIALIZE_ENCOUNTERED_COMPONENT_PREFIX = "Encountered ";
 
 export default class BaseComponent {
     constructor({
@@ -59,14 +62,39 @@ export default class BaseComponent {
         }
 
         this.state = {};
-        for (let stateVariable in stateVariableDefinitions) {
-            // need to separately create a shallow copy of each state variable
-            // as state variable definitions of multiple variables could be same object
-            this.state[stateVariable] = Object.assign(
-                {},
-                stateVariableDefinitions[stateVariable],
-            );
+        if (stateVariableDefinitions[SHARED_STATE_VARIABLE_DEFINITIONS]) {
+            // The definitions are class-shared (see the cache in
+            // StateVariableDefinitionFactory). Each state variable object is
+            // a per-instance wrapper whose prototype is the definition:
+            // reads of definition fields fall through to the shared
+            // definition, while runtime writes create own properties on the
+            // wrapper. This also isolates state variables whose definitions
+            // are the same object. The runtime deletes
+            // (`delete stateVarObj.value` etc.) only ever target runtime
+            // fields, which live on the wrapper.
+            // Per-instance copies of nested mutable fields and workspaces
+            // are made when a state variable materializes
+            // (`ensureStateVariableMaterialized`), not here.
+            for (let stateVariable in stateVariableDefinitions) {
+                this.state[stateVariable] = Object.create(
+                    stateVariableDefinitions[stateVariable],
+                );
+            }
+        } else {
+            // Adapter / reference-shadow definitions: the factory already
+            // produced per-instance prototype wrappers over the class
+            // definitions and recorded (but did not yet apply) their
+            // adapter/shadow modifications as own `isShadow` / `svShadow*`
+            // markers. The nested mutable-field copies and the shadow
+            // overrides are applied when each variable materializes
+            // (`ensureStateVariableMaterialized`), so the wrappers can be
+            // used directly as the state variable objects here.
+            for (let stateVariable in stateVariableDefinitions) {
+                this.state[stateVariable] =
+                    stateVariableDefinitions[stateVariable];
+            }
         }
+
         this.stateValues = new Proxy(this.state, createStateProxyHandler());
 
         this.essentialState = {};
@@ -109,6 +137,20 @@ export default class BaseComponent {
 
     static componentType = "_base";
 
+    /**
+     * Whether the essential values this component's *definitions* compute are
+     * reproduced by a fresh build of the same document under the same variant.
+     *
+     * Saved state keeps only the reader's work and drops what a definition
+     * computed, on the premise that a fresh load recomputes it identically
+     * (Doenet/DoenetML#1940). A component whose definition draws from a seed
+     * the variant does not determine breaks that premise: its values exist
+     * nowhere but in the saved state, and dropping them changes the numbers
+     * under a reader who reloads. Such a component sets this to `false` and its
+     * definition-set essential values are persisted like the reader's own.
+     */
+    static definitionEssentialValuesAreReproducible = true;
+
     static get rendererType() {
         return this.componentType;
     }
@@ -129,10 +171,58 @@ export default class BaseComponent {
         return this.constructor.rendererType;
     }
 
+    /**
+     * The renderer types that this component and everything reachable from it
+     * could create, so the viewer knows which renderers to load.
+     */
     get allPotentialRendererTypes() {
-        let allPotentialRendererTypes = ["_error"];
+        // `_error` is seeded here rather than contributed by a component: the
+        // viewer needs the error renderer available for any document at all.
+        const rendererTypes = new Set(["_error"]);
+        this.addPotentialRendererTypes(rendererTypes, new Set());
+        return [...rendererTypes];
+    }
+
+    /**
+     * Add to `rendererTypes` every renderer type that this component or its
+     * descendants could create.
+     *
+     * Components form a directed acyclic graph rather than a tree: a
+     * composite's replacements are spliced in as children of the composite's
+     * parent while the composite keeps pointing at them as replacements, so
+     * the same component is reachable along several paths. `visited` holds the
+     * components already accounted for, so each is walked once; since every
+     * path contributes to the same `rendererTypes` set, skipping a repeat
+     * visit loses nothing. Without it, a chain of `k` nested composites — what
+     * a repeat whose iterations reference the previous iteration builds — is
+     * traversed exponentially many times.
+     *
+     * This is the guarded entry point that every step of the recursion goes
+     * through. Subclasses must not override it; they override
+     * `addOwnPotentialRendererTypes` instead.
+     */
+    addPotentialRendererTypes(rendererTypes, visited) {
+        if (visited.has(this.componentIdx)) {
+            return;
+        }
+        visited.add(this.componentIdx);
+
+        this.addOwnPotentialRendererTypes(rendererTypes, visited);
+    }
+
+    /**
+     * The body of `addPotentialRendererTypes`, called once per component.
+     *
+     * Subclasses override this to reach what the walk here does not: further
+     * links out of the component (a composite's replacements) or renderer
+     * types that no component reveals (a repeat's serialized template). An
+     * override must call `super`, and must step to another component through
+     * `addPotentialRendererTypes` (passing `visited` along) rather than
+     * calling this method directly, so the guard is not bypassed.
+     */
+    addOwnPotentialRendererTypes(rendererTypes, visited) {
         if (this.rendererType) {
-            allPotentialRendererTypes.push(this.rendererType);
+            rendererTypes.add(this.rendererType);
         }
 
         // include any potential renderer type that could be
@@ -159,11 +249,8 @@ export default class BaseComponent {
                         ];
                     if (componentClass) {
                         let rendererType = componentClass.rendererType;
-                        if (
-                            rendererType &&
-                            !allPotentialRendererTypes.includes(rendererType)
-                        ) {
-                            allPotentialRendererTypes.push(rendererType);
+                        if (rendererType) {
+                            rendererTypes.add(rendererType);
                         }
                     }
                 }
@@ -185,35 +272,59 @@ export default class BaseComponent {
                     ];
                 if (componentClass) {
                     let rendererType = componentClass.rendererType;
-                    if (
-                        rendererType &&
-                        !allPotentialRendererTypes.includes(rendererType)
-                    ) {
-                        allPotentialRendererTypes.push(rendererType);
+                    if (rendererType) {
+                        rendererTypes.add(rendererType);
                     }
                 }
             }
         }
 
         if (!this.rendererType) {
-            return allPotentialRendererTypes;
+            return;
         }
 
-        // recurse to all children
+        this.addPotentialRendererTypesFromChildren(rendererTypes, visited);
+    }
+
+    /**
+     * Recurse into every child of this component.
+     *
+     * Split out because `CompositeComponent` has to run this walk itself: a
+     * composite has no `rendererType`, so `addOwnPotentialRendererTypes`
+     * returns above without reaching the children.
+     */
+    addPotentialRendererTypesFromChildren(rendererTypes, visited) {
         for (const childIdxStr in this.allChildren) {
-            let child = this.allChildren[childIdxStr].component;
-            if (typeof child !== "object") {
-                continue;
-            } else {
-                for (let rendererType of child.allPotentialRendererTypes) {
-                    if (!allPotentialRendererTypes.includes(rendererType)) {
-                        allPotentialRendererTypes.push(rendererType);
-                    }
-                }
+            const child = this.allChildren[childIdxStr].component;
+            if (typeof child === "object") {
+                child.addPotentialRendererTypes(rendererTypes, visited);
             }
         }
+    }
 
-        return allPotentialRendererTypes;
+    /**
+     * Add to `rendererTypes` the renderer types that `this.serializedChildren`
+     * could create.
+     *
+     * Components that hold on to serialized children which are not (or not
+     * yet) part of the component graph — a repeat's template, a `<case>` of a
+     * conditional — call this from `addOwnPotentialRendererTypes`, since
+     * walking the graph would not reach them. Only classes with a static
+     * `keepChildrenSerialized` have anything here: `ComponentBuilder` gives
+     * every other component an empty array. The guard below therefore does
+     * not fire for a component Core built; it is there because
+     * `ComponentInstance` declares the field optional.
+     */
+    addPotentialRendererTypesFromSerializedChildren(rendererTypes) {
+        if (!this.serializedChildren) {
+            return;
+        }
+
+        for (let rendererType of this.potentialRendererTypesFromSerializedComponents(
+            this.serializedChildren,
+        )) {
+            rendererTypes.add(rendererType);
+        }
     }
 
     potentialRendererTypesFromSerializedComponents(serializedComponents) {
@@ -560,6 +671,21 @@ export default class BaseComponent {
             },
         };
 
+        // `hiddenIgnoreParent` is whether the component is hidden by its own
+        // `hide` attribute (or by an explicitly hidden source composite/adapter
+        // source), ignoring the visibility it inherits from its parent.
+        //
+        // It deliberately recurses through `hiddenIgnoreParent` (rather than
+        // `hidden`) of the source composite and adapter source so that it never
+        // depends on the visibility of ancestor sections. If it depended on the
+        // source composite's `hidden`, then for a component created by a
+        // composite (e.g. inside a `<repeat>`), the dependency would still climb
+        // up to ancestor sections through the composite's parent. That matters
+        // because `<choice>`'s `text` uses `hiddenIgnoreParent`, and a choice's
+        // text can be a credit-achieved dependency of an answer: if the choice
+        // is inside a `<cascade>`, ancestor `hidden` changes after submission,
+        // which would otherwise make the answer's `justSubmitted` immediately
+        // become false.
         stateVariableDefinitions.hiddenIgnoreParent = {
             returnDependencies: () => ({
                 hide: {
@@ -569,11 +695,11 @@ export default class BaseComponent {
                 },
                 sourceCompositeHidden: {
                     dependencyType: "sourceCompositeStateVariable",
-                    variableName: "hidden",
+                    variableName: "hiddenIgnoreParent",
                 },
                 adapterSourceHidden: {
                     dependencyType: "adapterSourceStateVariable",
-                    variableName: "hidden",
+                    variableName: "hiddenIgnoreParent",
                 },
             }),
             definition: ({ dependencyValues }) => {
@@ -1397,7 +1523,9 @@ export default class BaseComponent {
 
     async serialize(parameters = {}) {
         if (parameters.errorIfEncounterComponent?.includes(this.componentIdx)) {
-            throw Error("Encountered " + this.componentIdx);
+            throw Error(
+                `${SERIALIZE_ENCOUNTERED_COMPONENT_PREFIX}${this.componentIdx}`,
+            );
         }
 
         let includeDefiningChildren = true;

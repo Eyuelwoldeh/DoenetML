@@ -1,16 +1,14 @@
 import React from "react";
 import { UiButton } from "@doenet/ui-components";
+import { isMacPlatform } from "@doenet/utils";
 import { RxUpdate } from "react-icons/rx";
 import { BsExclamationTriangleFill } from "react-icons/bs";
 import { AccessibilityStatusButton } from "./AccessibilityStatusButton";
-// @ts-ignore
 import VariantSelect from "./VariantSelect";
-
-type VariantsState = {
-    index: number;
-    numVariants: number;
-    allPossibleVariants: string[];
-};
+import type { ResolvedTheme } from "../utils/theme";
+import { setVariantIndex } from "../utils/variants";
+import type { VariantsState } from "../utils/variants";
+import { useT } from "../utils/i18n";
 
 /**
  * Header controls above the viewer: update/reset, variant selection, and accessibility status.
@@ -20,8 +18,7 @@ export function ViewerControlsBar({
     readOnly,
     codeChanged,
     documentInteracted,
-    platform,
-    updateWord,
+    updateAction,
     onUpdateViewer,
     variants,
     setVariants,
@@ -30,13 +27,14 @@ export function ViewerControlsBar({
     accessibilityLevel2Count,
     isAccessibilityReportOpen,
     onToggleAccessibilityReport,
+    darkMode,
 }: {
     id: string;
     readOnly: boolean;
     codeChanged: boolean;
     documentInteracted: boolean;
-    platform: "Mac" | "Win" | "Linux";
-    updateWord: string;
+    /** Which of the two things the button does, not the word it shows. */
+    updateAction: "reset" | "update";
     onUpdateViewer: () => void;
     variants: VariantsState;
     setVariants: React.Dispatch<React.SetStateAction<VariantsState>>;
@@ -45,18 +43,39 @@ export function ViewerControlsBar({
     accessibilityLevel2Count: number;
     isAccessibilityReportOpen: boolean;
     onToggleAccessibilityReport: () => void;
+    darkMode: ResolvedTheme;
 }) {
+    const t = useT();
+    // Translated at render rather than carried in state, so that a language
+    // change mid-session cannot leave the previous language's word on the
+    // button (#1580).
+    const updateWord = t(
+        "editor-update-viewer",
+        { action: updateAction },
+        updateAction === "reset" ? "Reset" : "Update",
+    );
+    // The shortcut is a branch of the tooltip rather than text appended to it:
+    // where a key combination sits in a sentence is not the same in every
+    // language.
+    const shortcut = !codeChanged
+        ? "none"
+        : isMacPlatform()
+          ? "cmd+s"
+          : "ctrl+s";
+
     return (
         <div className="viewer-controls" id={`${id}-viewer-controls`}>
             {!readOnly && (
                 <UiButton
                     data-test="Viewer Update Button"
                     disabled={!codeChanged && !documentInteracted}
-                    title={
-                        platform === "Mac"
-                            ? `${updateWord} Viewer cmd+s`
-                            : `${updateWord} Viewer ctrl+s`
-                    }
+                    title={t(
+                        "editor-update-viewer-title",
+                        { word: updateWord, shortcut },
+                        shortcut === "none"
+                            ? `${updateWord} Viewer`
+                            : `${updateWord} Viewer ${shortcut}`,
+                    )}
                     onClick={onUpdateViewer}
                 >
                     <RxUpdate /> {updateWord}{" "}
@@ -70,16 +89,11 @@ export function ViewerControlsBar({
             )}
             {variants.numVariants > 1 && (
                 <VariantSelect
-                    size="sm"
-                    menuWidth="140px"
+                    darkMode={darkMode}
                     array={variants.allPossibleVariants}
                     syncIndex={variants.index}
                     onChange={(index: number) =>
-                        setVariants((prev) => {
-                            let next = { ...prev };
-                            next.index = index + 1;
-                            return next;
-                        })
+                        setVariantIndex(setVariants, index)
                     }
                 />
             )}

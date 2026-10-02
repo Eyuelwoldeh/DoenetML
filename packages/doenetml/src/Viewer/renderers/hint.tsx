@@ -8,7 +8,10 @@ import { faLightbulb as lightOn } from "@fortawesome/free-regular-svg-icons";
 import { useRecordVisibilityChanges } from "../../utils/visibility";
 
 import { addCommasForCompositeRanges } from "./utils/composites";
+import { useChromeLangDir, useT } from "../../utils/i18n";
+import { clickToToggleLabel } from "./utils/disclosure";
 import "./hint.css";
+import { NoClickTargetContext } from "./utils/ClickTarget";
 
 interface HintSVs {
     [key: string]: any;
@@ -22,6 +25,8 @@ interface HintSVs {
 export default React.memo(function Hint(props: UseDoenetRendererProps) {
     let { id, SVs, children, actions, callAction } =
         useDoenetRenderer<HintSVs>(props);
+
+    const t = useT();
 
     const ref = useRef(null);
 
@@ -72,7 +77,11 @@ export default React.memo(function Hint(props: UseDoenetRendererProps) {
         }
     };
 
-    let openCloseText = "open";
+    const openCloseText = clickToToggleLabel(t, SVs.open);
+    // The heading is mixed: `title` is the author's and follows the document,
+    // while "(click to open)" is the reader's. Only the chrome half
+    // re-declares itself, and only where the two directions disagree.
+    const chromeLangDir = useChromeLangDir();
 
     if (SVs.open) {
         if (SVs._compositeReplacementActiveRange) {
@@ -87,7 +96,6 @@ export default React.memo(function Hint(props: UseDoenetRendererProps) {
         }
 
         // twirlIcon = <FontAwesomeIcon icon={twirlIsOpen} />;
-        openCloseText = "close";
         icon = <FontAwesomeIcon icon={lightOn} />;
         info = children;
         infoBlockStyle = {
@@ -130,7 +138,11 @@ export default React.memo(function Hint(props: UseDoenetRendererProps) {
                 onKeyDown={onKeyPressFunction}
             >
                 {" "}
-                {icon} {title} (click to {openCloseText})
+                {icon}{" "}
+                <NoClickTargetContext.Provider value={true}>
+                    {title}
+                </NoClickTargetContext.Provider>{" "}
+                <span {...chromeLangDir}>{openCloseText}</span>
             </span>
             <span style={infoBlockStyle}>{info}</span>
         </aside>

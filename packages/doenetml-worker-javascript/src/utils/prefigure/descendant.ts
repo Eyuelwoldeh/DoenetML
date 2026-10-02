@@ -1,9 +1,9 @@
 import {
     createStableHandle,
     pushWarning,
-    warningMessageForDescendant,
+    warningSubjectForDescendant,
 } from "./common";
-import { styleAttributes } from "./style";
+import { styleAttributes, resolveSelectedStyleForTheme } from "./style";
 import { convertPointToPrefigure } from "./components/point";
 import {
     convertLineToPrefigure,
@@ -73,6 +73,7 @@ interface ConvertGraphicalDescendantArgs {
     diagnostics: DiagnosticRecord[];
     graphBounds: GraphBounds;
     graphDimensions: GraphDimensions;
+    darkMode: boolean;
 }
 
 /**
@@ -91,6 +92,7 @@ export function convertGraphicalDescendantToPrefigure({
     diagnostics,
     graphBounds,
     graphDimensions,
+    darkMode,
 }: ConvertGraphicalDescendantArgs): { xml: string; handle: string } | null {
     const sv: PrefigureStateValues = {
         ...(descendant?.stateValues ?? {}),
@@ -98,11 +100,15 @@ export function convertGraphicalDescendantToPrefigure({
         graphDimensions,
     };
 
+    // Swap in dark-mode colors once, here, so every downstream converter and the
+    // shared styleAttributes call below emit theme-appropriate colors.
+    sv.selectedStyle = resolveSelectedStyleForTheme(sv.selectedStyle, darkMode);
+
     if (sv.hidden) {
         return null;
     }
 
-    const warningPrefix = warningMessageForDescendant(descendant);
+    const warningPrefix = warningSubjectForDescendant(descendant);
     const warningPosition = descendant?.position;
     const handle = createStableHandle(descendant, index, usedHandles);
     const styleAttrs = styleAttributes({
@@ -117,7 +123,8 @@ export function convertGraphicalDescendantToPrefigure({
     if (!converter) {
         pushWarning({
             diagnostics,
-            message: `${warningPrefix}: unsupported in graph prefigure renderer; descendant skipped.`,
+            code: "doenet-w0084",
+            args: { subject: warningPrefix },
             position: warningPosition,
         });
         return null;
@@ -139,7 +146,8 @@ export function convertGraphicalDescendantToPrefigure({
         if (diagnostics.length === diagnosticsCountBeforeConvert) {
             pushWarning({
                 diagnostics,
-                message: `${warningPrefix}: non-finite or incomplete geometry; descendant skipped.`,
+                code: "doenet-w0085",
+                args: { subject: warningPrefix },
                 position: warningPosition,
             });
         }

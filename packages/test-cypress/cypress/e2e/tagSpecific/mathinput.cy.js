@@ -115,6 +115,50 @@ describe("MathInput Tag Tests", { tags: ["@group2"] }, function () {
         //     });
     });
 
+    it("prefillLatex renders angle brackets written without \\left and \\right", () => {
+        // MathQuill used to require `\left\langle ... \right\rangle`; given the
+        // bare `\langle ... \rangle` that authors write, its parser failed and
+        // the field rendered empty (#1336).
+        postDoenetML(`
+    <p>vector: <mathInput name="v" prefillLatex="\\langle 2, 3 \\rangle" /></p>
+    <p>empty: <mathInput name="e" prefillLatex="\\langle  \\rangle" /></p>
+    `);
+
+        // The delimiters themselves are drawn as SVG, so the field's mathspeak
+        // (what a screen reader announces) is where they show up as text.
+        cy.get("#v .mq-mathspeak").should(
+            "contain.text",
+            "left angle-bracket, 2 , 3 , right angle-bracket",
+        );
+        cy.get("#v .mq-root-block").should("have.text", "2,3");
+        cy.get("#e .mq-mathspeak").should(
+            "contain.text",
+            "left angle-bracket, , right angle-bracket",
+        );
+
+        // Both delimiters are drawn, and neither is the greyed ghost half of a
+        // one-sided bracket. Assert they are present as well as ungreyed: the
+        // empty field the bug produced draws no delimiter to be a ghost either,
+        // so "no ghost" on its own would have held for it too.
+        for (const name of ["v", "e"]) {
+            cy.get(`#${name} .mq-bracket-l`)
+                .should("exist")
+                .and("not.have.class", "mq-ghost");
+            cy.get(`#${name} .mq-bracket-r`)
+                .should("exist")
+                .and("not.have.class", "mq-ghost");
+        }
+
+        // The value was never the broken part -- only the rendered field was
+        // blank -- so this checks that the field and the value now agree.
+        cy.window().then(async (win) => {
+            let stateVariables = await win.returnAllStateVariables1();
+            expect(
+                stateVariables[await win.resolvePath1("v")].stateValues.value,
+            ).eqls(["altvector", 2, 3]);
+        });
+    });
+
     it("check ignoreUpdate bug 1", () => {
         // if set core to delay 1 second on updates
         // then the refresh on blur (from the focus field recoil atoms changing)
@@ -735,28 +779,28 @@ describe("MathInput Tag Tests", { tags: ["@group2"] }, function () {
         cy.get("#mi textarea").should("not.have.attr", "aria-details");
     });
 
-    it("labelPosition left and right", () => {
+    it("labelPosition start and end", () => {
         postDoenetMLWithMathJaxPrimed(`
-    <p>Left label:
-    <mathInput name="ml" labelPosition="left">
-      <label>left</label>
+    <p>Start label:
+    <mathInput name="ml" labelPosition="start">
+      <label>start</label>
     </mathInput>
     </p>
     
-    <p>Right label:
-    <mathInput name="mr" labelPosition="right">
-      <label>right</label>
+    <p>End label:
+    <mathInput name="mr" labelPosition="end">
+      <label>end</label>
     </mathInput>
     </p>
         `);
 
-        cy.log("Test left: label before input");
+        cy.log("Test start: label before input");
         cy.get("#ml")
             .children()
             .eq(0)
             .should("have.attr", "id", "ml-input-label");
 
-        cy.log("Test right: label after input");
+        cy.log("Test end: label after input");
         cy.get("#mr")
             .children()
             .last()
@@ -909,4 +953,299 @@ describe("MathInput Tag Tests", { tags: ["@group2"] }, function () {
         cy.get("#mi textarea").blur();
         cy.get("#fv").should("have.text", "focused: false");
     });
+
+    it("virtual keyboard types into the focused math input without taking focus from it", () => {
+        // The tray used to blur the input on every press and the input used to
+        // refocus itself afterwards; it now declines focus instead (#1692).
+        // Two things had been riding on that blur-and-refocus: which input the
+        // keys go to, and — because the bookkeeping events the tray sent
+        // alongside every press are gone with it — the fresh array identity by
+        // which a math input notices a new batch of keys. Pressing the same
+        // key twice is what catches a regression in the second.
+        postDoenetML(`
+    <p>a: <mathInput name="a" /></p>
+    <p>a2: <math extend="$a" name="a2" /></p>
+    `);
+
+        cy.get("#a textarea").focus();
+
+        cy.get(".open-keyboard-button").click();
+        cy.get("#virtual-keyboard-tray.open").should("exist");
+        cy.log("Reaching for the tray leaves the input focused");
+        cy.focused().should("match", "#a textarea");
+
+        cy.get("#virtual-keyboard-tray .key-1").click({ force: true });
+        cy.get("#virtual-keyboard-tray .key-1").click({ force: true });
+        cy.get("#a .mq-editable-field").should("contain.text", "11");
+        cy.focused().should("match", "#a textarea");
+
+        // Enter on the virtual keyboard commits, as it does on a physical one.
+        cy.get("#virtual-keyboard-tray .key-enter").click({ force: true });
+        cy.get("#a2").should("contain.text", "11");
+
+        cy.window().then(async (win) => {
+            const stateVariables = await win.returnAllStateVariables1();
+            expect(
+                stateVariables[await win.resolvePath1("a")].stateValues.value,
+            ).eq(11);
+        });
+    });
+
+    it("commits the value when focus goes on from the tray to somewhere else", () => {
+        // Focus moving into the tray is not the reader leaving the input, so
+        // the input holds on to it. But the tray is not part of the input's
+        // DOM, so focus leaving the tray again raises no further event on the
+        // input: something has to watch the tray, or the value the reader
+        // typed would never be committed.
+        //
+        // Only deliberate keyboard navigation puts focus in the tray — a key
+        // press is declined — so that is what this drives.
+        postDoenetML(`
+    <p>a: <mathInput name="a" /></p>
+    <p>a2: <math extend="$a" name="a2" /></p>
+    <p>b: <mathInput name="b" /></p>
+    `);
+
+        cy.get("#a2").should("contain.text", "＿");
+        cy.get("#a textarea").type("1", { force: true });
+        cy.get("#a .mq-editable-field").should("contain.text", "1");
+        cy.log("Not committed while the input is being edited");
+        cy.get("#a2").should("contain.text", "＿");
+
+        cy.get(".open-keyboard-button").click();
+        cy.get("#virtual-keyboard-tray.open").should("exist");
+
+        cy.log("Move focus into the tray, as a keyboard-only reader does");
+        cy.get("#virtual-keyboard-tray .key-1").focus();
+        cy.focused().should("match", "#virtual-keyboard-tray .key-1");
+        cy.log("Still uncommitted: the reader is operating the keyboard");
+        cy.get("#a2").should("contain.text", "＿");
+
+        // `a` is still the input the keys go to, even though it no longer holds
+        // `document.activeElement` — which is the whole point of recording the
+        // focused input explicitly.
+        cy.get("#virtual-keyboard-tray .key-2").click({ force: true });
+        cy.get("#a .mq-editable-field").should("contain.text", "12");
+        cy.focused().should("match", "#virtual-keyboard-tray .key-1");
+        cy.get("#a2").should("contain.text", "＿");
+
+        // Focus leaves the tray for a different input and never returns to `a`,
+        // so nothing else will ever commit what was typed into it.
+        cy.get("#b textarea").focus();
+        cy.get("#a2").should("contain.text", "12");
+
+        cy.window().then(async (win) => {
+            const stateVariables = await win.returnAllStateVariables1();
+            expect(
+                stateVariables[await win.resolvePath1("a")].stateValues.value,
+            ).eq(12);
+        });
+    });
+
+    it("mathInput in a graph renders at its anchor, is editable, and binds its value", () => {
+        postDoenetMLWithMathJaxPrimed(`
+    <graph name="g">
+        <mathInput name="mi" anchor="(3,4)" positionFromAnchor="upperright" prefill="x" />
+    </graph>
+    <p>value: <math extend="$mi.value" name="miv" /></p>
+    <coords extend="$mi.anchor" name="mia" />
+    `);
+
+        // The MathQuill field is portaled into the graph (not rendered inline).
+        cy.get("#g").find(".mq-editable-field").should("exist");
+        cy.get("#g").find(".mq-editable-field").should("contain.text", "x");
+
+        // Anchored at (3,4).
+        cy.get("#mia").should("have.text", "(3,4)");
+        shouldHaveMathText("#miv", "x");
+
+        // Typing into the in-graph field updates the bound <math>.
+        cy.get("#g")
+            .find("textarea")
+            .first()
+            .focus()
+            .type("{end}+1{enter}", { force: true });
+
+        cy.get("#g").find(".mq-editable-field").should("contain.text", "x+1");
+        shouldHaveMathText("#miv", "x+1");
+    });
+
+    it("mathInput in a graph moves via moveInput and respects draggable=false", () => {
+        postDoenetMLWithMathJaxPrimed(`
+    <graph name="g">
+        <mathInput name="mi" anchor="(3,4)" />
+        <mathInput name="miFixed" anchor="(1,2)" draggable="false" />
+    </graph>
+    <coords extend="$mi.anchor" name="mia" />
+    <coords extend="$miFixed.anchor" name="miFixedA" />
+    `);
+
+        cy.get("#mia").should("have.text", "(3,4)");
+        cy.get("#miFixedA").should("have.text", "(1,2)");
+
+        // A draggable (unlabeled) input shows a drag grip; a non-draggable one
+        // shows none. Only `mi` qualifies, so exactly one grip is in the graph.
+        cy.get("#g").find(".mathInputGraphGrip").should("have.length", 1);
+
+        // A draggable input's anchor round-trips through the moveInput action.
+        cy.window().then(async (win) => {
+            win.callAction1({
+                actionName: "moveInput",
+                componentIdx: await win.resolvePath1("mi"),
+                args: { x: -5, y: 2 },
+            });
+        });
+        cy.get("#mia").should("have.text", "(−5,2)");
+
+        // A draggable="false" input ignores the move; a second move on the
+        // draggable input serves as a barrier so we know both actions ran.
+        cy.window().then(async (win) => {
+            win.callAction1({
+                actionName: "moveInput",
+                componentIdx: await win.resolvePath1("miFixed"),
+                args: { x: 7, y: 8 },
+            });
+            win.callAction1({
+                actionName: "moveInput",
+                componentIdx: await win.resolvePath1("mi"),
+                args: { x: 6, y: -3 },
+            });
+        });
+        cy.get("#mia").should("have.text", "(6,−3)");
+        cy.get("#miFixedA").should("have.text", "(1,2)");
+    });
+
+    it("mathInput in a graph focuses on click and edits, without starting a drag", () => {
+        postDoenetMLWithMathJaxPrimed(`
+    <graph name="g">
+        <mathInput name="mi" anchor="(3,4)" />
+    </graph>
+    <p>value: <math extend="$mi.value" name="miv" /></p>
+    <coords extend="$mi.anchor" name="mia" />
+    `);
+
+        cy.get("#mia").should("have.text", "(3,4)");
+
+        // A real click on the field must reach MathQuill and focus its textarea
+        // (id `<name>_input`). This is the regression guard for the bug where a
+        // capture-phase stopPropagation swallowed the click before it reached the
+        // field, so clicking appeared to focus but typing did nothing.
+        cy.get("#g").find(".mq-editable-field").first().click();
+        cy.focused().should("have.attr", "id", "mi_input");
+
+        // Typing then flows through to the bound value, and the click did not
+        // drag the field (its anchor is unchanged).
+        cy.focused().type("2x{enter}", { force: true });
+        shouldHaveMathText("#miv", "2x");
+        cy.get("#mia").should("have.text", "(3,4)");
+    });
+
+    it("mathInput in a graph shows its label beside the field (no grip)", () => {
+        postDoenetMLWithMathJaxPrimed(`
+    <graph name="g">
+        <mathInput name="mi" anchor="(3,4)"><label>height</label></mathInput>
+    </graph>
+    `);
+
+        // The label renders inside the graph as the handle beside the field, and
+        // no separate grip is shown when a label is present.
+        cy.get("#g").find(".mq-editable-field").should("exist");
+        cy.get("#g").find("label").should("contain.text", "height");
+        cy.get("#g").find(".mathInputGraphGrip").should("not.exist");
+    });
+
+    it("mathInput in a graph renders visible (theme-aware) text in dark mode", () => {
+        cy.window().then((win) => {
+            win.postMessage(
+                {
+                    doenetML: `
+    <graph name="g">
+        <mathInput name="mi" anchor="(3,4)" prefill="x" />
+    </graph>
+    `,
+                    darkMode: "dark",
+                },
+                "*",
+            );
+        });
+        cy.get('[data-theme="dark"]').should("exist");
+
+        // The field text must be a light color in dark mode, not the dark
+        // default color JSXGraph gives its text-element rendNode (which the
+        // portaled MathQuill would otherwise inherit).
+        cy.get("#g")
+            .find(".mq-root-block")
+            .first()
+            .then(($el) => {
+                const color = getComputedStyle($el[0]).color;
+                const sum = (color.match(/\d+(\.\d+)?/g) || [])
+                    .slice(0, 3)
+                    .reduce((acc, ch) => acc + parseFloat(ch), 0);
+                expect(sum, `field text color ${color}`).to.be.greaterThan(450);
+            });
+    });
+
+    for (const [theme, canvas] of [
+        ["light", [255, 255, 255]],
+        ["dark", [18, 18, 18]],
+    ]) {
+        it(`empty prefill slots are visible against the canvas in ${theme} mode`, () => {
+            cy.window().then((win) => {
+                win.postMessage(
+                    {
+                        doenetML: `
+    <mathInput name="mi" prefillLatex="\\frac{}{} \\cdot a^{}" />
+    `,
+                        darkMode: theme,
+                    },
+                    "*",
+                );
+            });
+            cy.get(`[data-theme="${theme}"]`).should("exist");
+
+            // The numerator, denominator and exponent are each an empty slot,
+            // shaded at least as visibly as the light-mode slots have always
+            // been.
+            cy.get("#mi .mq-empty:not(.mq-root-block)")
+                .should("have.length", 3)
+                .each(($el) => {
+                    const background = getComputedStyle($el[0]).backgroundColor;
+                    const slot = compositeOver(parseColor(background), canvas);
+                    const ratio = contrastRatio(slot, canvas);
+                    expect(
+                        ratio,
+                        `contrast of slot ${background} with canvas`,
+                    ).to.be.at.least(1.5);
+                });
+        });
+    }
 });
+
+// Parse a computed color, which is `rgb()`/`rgba()` with 0-255 channels or,
+// for a `color-mix()`, `color(srgb ...)` with 0-1 channels.
+function parseColor(color) {
+    const numbers = (color.match(/\d*\.?\d+/g) || []).map(Number);
+    if (color.startsWith("color(")) {
+        const [r, g, b, a = 1] = numbers;
+        return [r * 255, g * 255, b * 255, a];
+    }
+    const [r, g, b, a = 1] = numbers;
+    return [r, g, b, a];
+}
+
+function compositeOver([r, g, b, a], background) {
+    return [r, g, b].map((c, i) => c * a + background[i] * (1 - a));
+}
+
+function contrastRatio(color1, color2) {
+    const luminance = (rgb) => {
+        const [r, g, b] = rgb.map((c) => {
+            const s = c / 255;
+            return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+        });
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    const l1 = luminance(color1);
+    const l2 = luminance(color2);
+    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
+}

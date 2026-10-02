@@ -1,4 +1,7 @@
-import { convertValueToMathExpression } from "@doenet/utils";
+import {
+    convertValueToMathExpression,
+    returnGraphicalStyleDescriptionDefinitions,
+} from "@doenet/utils";
 import {
     returnNumberDisplayAttributeComponentShadowing,
     returnNumberDisplayAttributes,
@@ -7,6 +10,7 @@ import {
 import GraphicalComponent from "./abstract/GraphicalComponent";
 import me from "math-expressions";
 import { returnStickyGroupDefinitions } from "../utils/constraints";
+import { evaluateToNumber } from "../utils/math";
 
 export default class Polyline extends GraphicalComponent {
     constructor(args) {
@@ -191,72 +195,13 @@ export default class Polyline extends GraphicalComponent {
 
         Object.assign(stateVariableDefinitions, returnStickyGroupDefinitions());
 
-        stateVariableDefinitions.styleDescription = {
-            description: "A textual description of the polyline's style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
+        Object.assign(
+            stateVariableDefinitions,
+            returnGraphicalStyleDescriptionDefinitions({
+                kind: "stroke",
+                noun: "polyline",
             }),
-            definition: function ({ dependencyValues }) {
-                let lineColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWordDarkMode;
-                } else {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWord;
-                }
-
-                let styleDescription =
-                    dependencyValues.selectedStyle.lineWidthWord;
-                if (dependencyValues.selectedStyle.lineStyleWord) {
-                    if (styleDescription) {
-                        styleDescription += " ";
-                    }
-                    styleDescription +=
-                        dependencyValues.selectedStyle.lineStyleWord;
-                }
-
-                if (styleDescription) {
-                    styleDescription += " ";
-                }
-
-                styleDescription += lineColorWord;
-
-                return { setValue: { styleDescription } };
-            },
-        };
-
-        stateVariableDefinitions.styleDescriptionWithNoun = {
-            description: 'Style description including the word "polyline".',
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                styleDescription: {
-                    dependencyType: "stateVariable",
-                    variableName: "styleDescription",
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let styleDescriptionWithNoun =
-                    dependencyValues.styleDescription + " polyline";
-
-                return { setValue: { styleDescriptionWithNoun } };
-            },
-        };
+        );
 
         stateVariableDefinitions.preserveSimilarity = {
             description:
@@ -1343,8 +1288,12 @@ export default class Polyline extends GraphicalComponent {
                             referenceCentroid = numericalCentroidUnconstrained;
                             referenceVertices =
                                 globalDependencyValues.unconstrainedVertices.map(
-                                    (v) =>
-                                        v.map((c) => c.evaluate_to_constant()),
+                                    // `evaluateToNumber`: these are rotated and
+                                    // dilated about a finite point below, so a
+                                    // vertex with no numeric value must stay
+                                    // undefined rather than be swung about the
+                                    // origin and written back as a number.
+                                    (v) => v.map(evaluateToNumber),
                                 );
                         }
 
@@ -1892,14 +1841,12 @@ export default class Polyline extends GraphicalComponent {
                     nxPty = numericalVertices[i]?.[1];
 
                     // only implement for constants
-                    if (
-                        !(
-                            Number.isFinite(prPtx) &&
-                            Number.isFinite(prPty) &&
-                            Number.isFinite(nxPtx) &&
-                            Number.isFinite(nxPty)
-                        )
-                    ) {
+                    if (!(
+                        Number.isFinite(prPtx) &&
+                        Number.isFinite(prPty) &&
+                        Number.isFinite(nxPtx) &&
+                        Number.isFinite(nxPty)
+                    )) {
                         vals.push(null);
                     } else {
                         let BA1sub = nxPtx - prPtx;
@@ -1929,6 +1876,15 @@ export default class Polyline extends GraphicalComponent {
 
                             let x1 = variables.x1?.evaluate_to_constant();
                             let x2 = variables.x2?.evaluate_to_constant();
+
+                            // A point with a non-numeric coordinate has no
+                            // nearest point; leave it where it is. See the
+                            // note on `<polygon>`'s `nearestPoint` for why the
+                            // guard was added and why it stays now that the
+                            // engine answers `NaN` rather than `null`.
+                            if (!(Number.isFinite(x1) && Number.isFinite(x2))) {
+                                return {};
+                            }
 
                             let prevPtx, prevPty;
                             let nextPtx = numericalVertices[0][0];
@@ -2640,14 +2596,27 @@ export default class Polyline extends GraphicalComponent {
     }
 }
 
+/**
+ * The mean of `vertices`, as a `[x, y]` pair of plain numbers.
+ *
+ * `NaN` in either coordinate if any vertex is not numeric. That has to be
+ * spelled out: while `evaluate_to_constant()` reported a still-symbolic
+ * coordinate as `null`, `null` was `0` to `+=`, so a polygon with one symbolic
+ * vertex came out with a centroid pulled towards the origin — a
+ * plausible-looking number where the legacy engine gave `NaN`. The engine
+ * answers `NaN` again, so `evaluateToNumber` here is the convention rather
+ * than the only thing holding the sum together: a `Complex` coordinate reaches
+ * `+=` as a string and divides back to `NaN` either way. It is the centroid
+ * the rotation, dilation and reflection actions all measure from.
+ */
 function calculateNumericalCentroid(vertices) {
     let x = 0,
         y = 0;
     let numVertices = vertices.length;
 
     for (let i = 0; i < numVertices; i++) {
-        x += vertices[i][0].evaluate_to_constant();
-        y += vertices[i][1].evaluate_to_constant();
+        x += evaluateToNumber(vertices[i][0]);
+        y += evaluateToNumber(vertices[i][1]);
     }
 
     x /= numVertices;

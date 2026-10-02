@@ -130,11 +130,9 @@ function newComponentIndicesForExtending(
         num: number;
     },
 ) {
-    let newExtending: Source<SerializedRefResolution> = extending;
-
     const refResolution = unwrapSource(extending);
 
-    let originalPath: SerializedRefResolutionPathPart[] = [];
+    const originalPath: SerializedRefResolutionPathPart[] = [];
     for (const pathPath of refResolution.originalPath) {
         const newPathPart = { ...pathPath };
         const index: SerializedPathIndex[] = [];
@@ -154,13 +152,19 @@ function newComponentIndicesForExtending(
         }
         newPathPart.index = index;
         originalPath.push(newPathPart);
-
-        const newRefResolution = { ...refResolution };
-        newRefResolution.originalPath = originalPath;
-
-        newExtending = addSource(newRefResolution, extending);
     }
-    return { extending: newExtending, nComponents };
+
+    // Clone once, after the path has been rebuilt, so that a duplicate never
+    // shares its `extending` with the component it was copied from. A path
+    // with no parts at all reaches here from an unresolvable reference
+    // (`convertNormalizedDast` gives those an empty `originalPath`), and that
+    // is the case that would otherwise hand back the source's own object.
+    const newRefResolution = { ...refResolution, originalPath };
+
+    return {
+        extending: addSource(newRefResolution, extending),
+        nComponents,
+    };
 }
 
 function newComponentIndicesForAttributes(
@@ -478,6 +482,59 @@ function remapUnflattenedRefResolutions(
             const attrResult = remapUnflattenedRefResolutions(
                 attribute.children,
                 idxMap,
+            );
+        }
+    }
+}
+
+/**
+ * Recurse through the unflattened components and make `originIdx` the origin
+ * (`nodesInResolvedPath[0]`) of every reference in them, including references
+ * in their attributes, their descendants, and the indices of their paths.
+ *
+ * A reference's path is re-resolved from its origin, so this makes the references
+ * resolve as though written at `originIdx`, whatever position they are later placed in.
+ *
+ * References whose path starts with an empty name are left alone:
+ * those resolve from the origin itself rather than searching from its parent,
+ * so they are only meaningful from where they were created.
+ */
+export function setUnflattenedReferenceOrigins(
+    unflattenedComponents: (UnflattenedComponent | string)[],
+    originIdx: number,
+) {
+    for (const component of unflattenedComponents) {
+        if (typeof component === "string") {
+            continue;
+        }
+
+        if (component.extending) {
+            const refResolution = unwrapSource(component.extending);
+
+            const pathParts = [
+                ...refResolution.originalPath,
+                ...(refResolution.unresolvedPath ?? []),
+            ];
+            for (const pathPart of pathParts) {
+                for (const indexPart of pathPart.index) {
+                    setUnflattenedReferenceOrigins(indexPart.value, originIdx);
+                }
+            }
+
+            if (
+                refResolution.originalPath[0]?.name &&
+                refResolution.nodesInResolvedPath.length > 0
+            ) {
+                refResolution.nodesInResolvedPath[0] = originIdx;
+            }
+        }
+
+        setUnflattenedReferenceOrigins(component.children, originIdx);
+
+        for (const attrName in component.attributes) {
+            setUnflattenedReferenceOrigins(
+                component.attributes[attrName].children,
+                originIdx,
             );
         }
     }

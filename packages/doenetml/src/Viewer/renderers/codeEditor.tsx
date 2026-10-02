@@ -1,11 +1,16 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useContext } from "react";
 import useDoenetRenderer, {
     UseDoenetRendererProps,
 } from "../useDoenetRenderer";
 // @ts-ignore
 import { sizeToCSS } from "./utils/css";
 import { useInView } from "framer-motion";
-import { EditorViewer } from "../../EditorViewer/EditorViewer";
+// The lazy wrapper, not `EditorViewer` itself: a static import here would
+// hoist the whole editor stack into every bundle that can render a document,
+// defeating the code-splitting boundary. See `EditorViewerLazy.tsx`.
+import { EditorViewerLazy } from "../../EditorViewer/EditorViewerLazy";
+import type { DiagnosticsTabId } from "../../EditorViewer/DiagnosticsResponseTabs";
+import { DocContext } from "../DocViewer";
 
 interface CodeEditorSVs {
     [key: string]: any;
@@ -17,6 +22,7 @@ interface CodeEditorSVs {
     immediateValue: string;
     width: any;
     height: any;
+    initialOpenTab: string;
 }
 
 export default React.memo(function CodeEditor(props: UseDoenetRendererProps) {
@@ -25,6 +31,10 @@ export default React.memo(function CodeEditor(props: UseDoenetRendererProps) {
 
     // @ts-ignore
     CodeEditor.baseStateVariable = "immediateValue";
+
+    // Inherit the document's resolved theme so the embedded editor doesn't
+    // fall back to its light-mode default inside a dark-mode document.
+    const { darkMode } = useContext(DocContext) || {};
 
     const [currentValue, setCurrentValue] = useState(SVs.immediateValue);
     const currentValueRef = useRef(currentValue);
@@ -88,9 +98,20 @@ export default React.memo(function CodeEditor(props: UseDoenetRendererProps) {
         setCurrentValue(SVs.immediateValue);
     }
 
+    // Map initialOpenTab string values to EditorViewer prop type
+    let initialOpenTab: DiagnosticsTabId | null | undefined;
+    if (SVs.initialOpenTab === "none") {
+        initialOpenTab = null;
+    } else if (SVs.initialOpenTab === "first") {
+        initialOpenTab = undefined;
+    } else {
+        // Pass through diagnostic tab IDs: errors, warnings, info, accessibility, responses, help
+        initialOpenTab = SVs.initialOpenTab as DiagnosticsTabId;
+    }
+
     return (
         <div ref={ref}>
-            <EditorViewer
+            <EditorViewerLazy
                 id={id}
                 activityId={id}
                 prefixForIds={id + "::"}
@@ -99,9 +120,11 @@ export default React.memo(function CodeEditor(props: UseDoenetRendererProps) {
                 height={sizeToCSS(SVs.height)}
                 showViewer={SVs.showResults}
                 viewerLocation={SVs.resultsLocation}
-                showResponses={false}
+                showResponses={SVs.showResults}
                 showFormatter={SVs.showFormatter}
                 readOnly={SVs.readOnly}
+                darkMode={darkMode}
+                initialOpenTab={initialOpenTab}
                 immediateDoenetmlChangeCallback={
                     immediateDoenetmlChangeCallback
                 }

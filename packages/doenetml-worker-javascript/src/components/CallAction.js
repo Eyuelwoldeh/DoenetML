@@ -7,6 +7,7 @@ import {
 import {
     returnLabelAttributes,
     returnLabelStateVariableDefinitions,
+    returnRenderOnlyLabelChildDefinitions,
 } from "../utils/label";
 import {
     addStandardTriggeringStateVariableDefinitions,
@@ -14,6 +15,7 @@ import {
 } from "../utils/triggering";
 import InlineComponent from "./abstract/InlineComponent";
 import { returnSelectedStyleStateVariableDefinition } from "@doenet/utils";
+import { codedDiagnostic } from "../utils/diagnostics";
 
 export default class CallAction extends InlineComponent {
     constructor(args) {
@@ -33,6 +35,14 @@ export default class CallAction extends InlineComponent {
             "Triggers an action when clicked or in response to a specified user interaction",
     };
     static rendererType = "button";
+    static renderChildren = true;
+
+    // The children of a `<callAction>` are kept serialized (see
+    // `keepChildrenSerialized`) and passed to the invoked action — e.g. as the
+    // components to insert for an `addChildren` action — rather than being matched
+    // to child groups. Since those children can be any component, declare `_base`
+    // as an additional schema child so the schema accepts arbitrary children.
+    static additionalSchemaChildren = ["_base"];
 
     static keepChildrenSerialized({
         serializedComponent,
@@ -133,6 +143,10 @@ export default class CallAction extends InlineComponent {
 
         let labelDefinitions = returnLabelStateVariableDefinitions();
         Object.assign(stateVariableDefinitions, labelDefinitions);
+        Object.assign(
+            stateVariableDefinitions,
+            returnRenderOnlyLabelChildDefinitions(),
+        );
 
         let anchorDefinition = returnAnchorStateVariableDefinition();
         Object.assign(stateVariableDefinitions, anchorDefinition);
@@ -144,7 +158,14 @@ export default class CallAction extends InlineComponent {
         };
 
         stateVariableDefinitions.targetComponentIdx = {
-            additionalStateVariablesDefined: ["unresolvedPath"],
+            // `targetOriginalPath` is the resolved path of the `target`
+            // reference, kept so that a failure can quote back the `$…` the
+            // author typed. The component index alone is no use for that:
+            // it never appeared in the document.
+            additionalStateVariablesDefined: [
+                "unresolvedPath",
+                "targetOriginalPath",
+            ],
             returnDependencies: () => ({
                 target: {
                     dependencyType: "attributeRefResolutions",
@@ -160,6 +181,7 @@ export default class CallAction extends InlineComponent {
                             setValue: {
                                 targetComponentIdx: target.componentIdx,
                                 unresolvedPath: target.unresolvedPath,
+                                targetOriginalPath: target.originalPath,
                             },
                         };
                     }
@@ -168,6 +190,7 @@ export default class CallAction extends InlineComponent {
                     setValue: {
                         targetComponentIdx: null,
                         unresolvedPath: null,
+                        targetOriginalPath: null,
                     },
                 };
             },
@@ -201,7 +224,7 @@ export default class CallAction extends InlineComponent {
                 args.actionId = actionId;
             }
 
-            await this.coreFunctions.performAction({
+            const result = await this.coreFunctions.performAction({
                 componentIdx: targetIdx,
                 actionName,
                 args,
@@ -215,6 +238,16 @@ export default class CallAction extends InlineComponent {
                 caseInsensitiveMatch: true,
             });
 
+            if (result?.actionUnavailable) {
+                // The target resolved but has no action by this name — a
+                // misspelled `actionName`, or one that belongs to a different
+                // component type. Raised here rather than where the lookup
+                // failed because this is the only place that still knows what
+                // the author wrote: `performAction` has a component index, and
+                // an author has never seen one of those.
+                await this.warnActionUnavailable(actionName);
+            }
+
             await this.coreFunctions.triggerChainedActions({
                 componentIdx: this.componentIdx,
                 actionId,
@@ -222,6 +255,33 @@ export default class CallAction extends InlineComponent {
                 skipRendererUpdate,
             });
         }
+    }
+
+    /**
+     * Warn that `actionName` is not an action of the component `target`
+     * names, quoting the reference as the author wrote it.
+     *
+     * Says nothing when the reference has no source behind it — a `target`
+     * a composite built rather than a document supplied. There is no text to
+     * quote then, and a warning that names an empty reference tells an author
+     * less than the console line `performAction` has already written.
+     */
+    async warnActionUnavailable(actionName) {
+        const referenceText = this.coreFunctions.doenetMLStringForReference(
+            await this.stateValues.targetOriginalPath,
+        );
+        if (!referenceText) {
+            return;
+        }
+        this.coreFunctions.addDiagnostic(
+            codedDiagnostic({
+                type: "warning",
+                code: "doenet-w0102",
+                args: { action: actionName, reference: `$${referenceText}` },
+                position: this.position,
+                sourceDoc: this.sourceDoc,
+            }),
+        );
     }
 
     async callActionIfTriggerNewlyTrue({

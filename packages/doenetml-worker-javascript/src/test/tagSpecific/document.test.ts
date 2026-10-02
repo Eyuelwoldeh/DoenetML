@@ -314,4 +314,192 @@ describe("Document tag tests @group4", async () => {
         const documentIdx = await resolvePathToNodeIdx("_document1");
         expect(stateVariables[documentIdx].componentType).eq("document");
     });
+
+    // i18n Phase 0 (#1515): `<document lang>` declares the content's language.
+    // Precedence is authored `lang` > the locale the hosting page supplied via
+    // `setLocaleData` > "en" — the author knows what language they wrote in,
+    // the host only knows what it would prefer to receive.
+    describe("document lang / locale", () => {
+        /** The state values of the document at `path`, from a fresh core. */
+        async function documentStateValues(
+            doenetML: string,
+            documentLocale?: string,
+            path = "_document1",
+        ) {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML,
+                documentLocale,
+            });
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            return stateVariables[await resolvePathToNodeIdx(path)].stateValues;
+        }
+
+        async function localeOf(
+            doenetML: string,
+            documentLocale?: string,
+            path = "_document1",
+        ): Promise<string> {
+            return (await documentStateValues(doenetML, documentLocale, path))
+                .locale;
+        }
+
+        it("defaults to en", async () => {
+            expect(await localeOf(`<p>hello</p>`)).eq("en");
+        });
+
+        it("uses the host locale when the document declares none", async () => {
+            expect(await localeOf(`<p>hola</p>`, "es-MX")).eq("es-MX");
+        });
+
+        it("lets an authored lang override the host locale", async () => {
+            expect(
+                await localeOf(
+                    `<document lang="fr"><p>bonjour</p></document>`,
+                    "es-MX",
+                ),
+            ).eq("fr");
+        });
+
+        it("normalizes a hand-typed tag to canonical casing", async () => {
+            // Authors type `lang` by hand; `es-mx` has to negotiate against
+            // the `es-MX` catalog the same as the canonical form.
+            expect(
+                await localeOf(`<document lang="ES-mx"><p>hola</p></document>`),
+            ).eq("es-MX");
+        });
+
+        it("matches the attribute name case-insensitively", async () => {
+            // The viewer reads `lang` straight off the DAST to label the
+            // rendered wrapper, and the DAST preserves the author's casing
+            // while the core lowercases before matching. Both sides therefore
+            // have to accept `Lang`, or the wrapper's `lang` attribute and
+            // `document.locale` would disagree — see the matching test in
+            // `@doenet/doenetml`'s `documentLang.test.ts`.
+            expect(
+                await localeOf(
+                    `<document Lang="fr"><p>bonjour</p></document>`,
+                    "es-MX",
+                ),
+            ).eq("fr");
+        });
+
+        it("ignores a blank lang and falls back", async () => {
+            expect(
+                await localeOf(`<document lang=" "><p>hi</p></document>`, "de"),
+            ).eq("de");
+        });
+
+        it("lets a nested document inherit from its ancestor", async () => {
+            // An inner document that declares nothing follows the language it
+            // is embedded in rather than jumping back to the host's locale.
+            const doenetML = `<document lang="fr"><document name="inner"><p>bonjour</p></document></document>`;
+            expect(await localeOf(doenetML, "es-MX", "inner")).eq("fr");
+        });
+
+        it("treats a blank lang on a nested document as absent", async () => {
+            const doenetML = `<document lang="fr"><document name="inner" lang=" "><p>bonjour</p></document></document>`;
+            expect(await localeOf(doenetML, "es-MX", "inner")).eq("fr");
+        });
+
+        it("lets a nested document declare its own lang", async () => {
+            const doenetML = `<document lang="fr"><document name="inner" lang="de"><p>guten Tag</p></document></document>`;
+            expect(await localeOf(doenetML, "es-MX", "inner")).eq("de");
+        });
+
+        // i18n (#1546): the tag the section renderer turns into a `lang`
+        // attribute. Unlike `locale`, which always has a tag, this one is null
+        // wherever the DOM should say nothing — on the outermost document,
+        // whose language the viewer puts on the wrapper around the whole
+        // activity, and on any nested document that would only re-assert the
+        // language already in effect around it.
+        describe("renderedLang", () => {
+            async function renderedLangOf(
+                doenetML: string,
+                documentLocale?: string,
+                path = "_document1",
+            ): Promise<string | null> {
+                return (
+                    await documentStateValues(doenetML, documentLocale, path)
+                ).renderedLang;
+            }
+
+            it("is null on the outermost document", async () => {
+                // Its language is the wrapper's job; emitting it here as well
+                // would say nothing new.
+                expect(
+                    await renderedLangOf(
+                        `<document lang="fr"><p>bonjour</p></document>`,
+                        "es-MX",
+                    ),
+                ).eq(null);
+            });
+
+            it("is null on a nested document that inherits", async () => {
+                const doenetML = `<document lang="fr"><document name="inner"><p>bonjour</p></document></document>`;
+                expect(await renderedLangOf(doenetML, "es-MX", "inner")).eq(
+                    null,
+                );
+            });
+
+            it("labels a nested document in another language", async () => {
+                const doenetML = `<document lang="fr"><document name="inner" lang="de"><p>guten Tag</p></document></document>`;
+                expect(await renderedLangOf(doenetML, "es-MX", "inner")).eq(
+                    "de",
+                );
+            });
+
+            it("is null when a nested document restates the same language", async () => {
+                // Normalized before the comparison, so the author's casing
+                // cannot turn a restatement into a difference.
+                const doenetML = `<document lang="fr"><document name="inner" lang="FR"><p>bonjour</p></document></document>`;
+                expect(await renderedLangOf(doenetML, "es-MX", "inner")).eq(
+                    null,
+                );
+            });
+
+            it("is null when a nested document restates the host's locale", async () => {
+                // The host's locale reaches the DOM on the wrapper, so an inner
+                // document that names it again changes nothing.
+                const doenetML = `<document><document name="inner" lang="es-MX"><p>hola</p></document></document>`;
+                expect(await renderedLangOf(doenetML, "es-MX", "inner")).eq(
+                    null,
+                );
+            });
+
+            it("is null when a nested document restates the default English", async () => {
+                // An undeclared activity is rendered in English and its
+                // wrapper says so, so an inner `lang="en"` adds nothing.
+                const doenetML = `<document><document name="inner" lang="en"><p>hello</p></document></document>`;
+                expect(await renderedLangOf(doenetML, undefined, "inner")).eq(
+                    null,
+                );
+            });
+
+            it("labels a nested document in a language other than the host's", async () => {
+                const doenetML = `<document><document name="inner" lang="es"><p>hola</p></document></document>`;
+                expect(await renderedLangOf(doenetML, "fr", "inner")).eq("es");
+            });
+
+            it("follows the language in effect through intervening documents", async () => {
+                const doenetML = `<document lang="fr"><document name="mid"><document name="inner" lang="de"><p>guten Tag</p></document></document></document>`;
+                expect(await renderedLangOf(doenetML, "es-MX", "mid")).eq(null);
+                expect(await renderedLangOf(doenetML, "es-MX", "inner")).eq(
+                    "de",
+                );
+            });
+
+            it("labels a nested document that returns to an outer language", async () => {
+                // The middle document changed the language, so the innermost
+                // has to say it is back to French even though the outermost
+                // document declared it.
+                const doenetML = `<document lang="fr"><document name="mid" lang="de"><document name="inner" lang="fr"><p>bonjour</p></document></document></document>`;
+                expect(await renderedLangOf(doenetML, "es-MX", "inner")).eq(
+                    "fr",
+                );
+            });
+        });
+    });
 });

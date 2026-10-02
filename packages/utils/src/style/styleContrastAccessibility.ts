@@ -1,273 +1,92 @@
 /**
- * Utilities for evaluating style-definition contrast in light mode and
+ * Utilities for evaluating style-definition contrast in light and dark mode and
  * producing accessibility diagnostics when WCAG AA thresholds are not met.
  *
- * This module:
- * - Parses CSS colors to RGBA where possible,
- * - Composites translucent colors over the light canvas,
- * - Computes contrast ratios for text and graphical style channels,
- * - Returns accessibility diagnostics annotated with source positions.
+ * Color parsing, alpha compositing, and contrast computation are delegated to
+ * `colorAccessibility.ts` (built on `colord`) so this module and the dark-mode
+ * color derivation in `style.ts` share one definition of "accessible".
+ *
+ * Two passes run for every style definition:
+ *  - **Light mode**: foreground color channels composited over the white canvas.
+ *  - **Dark mode**: the corresponding `*ColorDarkMode` channels composited over
+ *    the dark canvas. Derived dark-mode foreground colors are adjusted toward
+ *    the threshold where possible; these diagnostics fire when any
+ *    author-supplied contributor to the rendered contrast (color, background, or
+ *    opacity) makes the result fail WCAG AA.
  */
-import contrast from "get-contrast";
-import rgb from "rgb";
 import type { Position } from "@doenet/parser";
+import { codedDiagnostic } from "../diagnostics/coded";
 import type { AccessibilityRecord } from "../diagnostics/types";
 import {
     getStyleValueNumber,
     getStyleValueString,
     latestPosition,
+    DEFAULT_STYLE_VALUES,
     type StyleDefinition,
     type StyleDefinitions,
+    type StyleDefinitionKey,
 } from "./styleDefinitionHelpers";
+import {
+    CANVAS_DARK_MODE_COLOR,
+    CANVAS_LIGHT_MODE_COLOR,
+    GRAPHIC_CONTRAST_THRESHOLD,
+    TEXT_CONTRAST_THRESHOLD,
+    compositedContrastRatio,
+    deriveAccessibleDarkModeColor,
+    invertLightness,
+    suggestAccessibleDarkModeColorAgainst,
+} from "./colorAccessibility";
 
-const CANVAS_LIGHT_MODE_COLOR = "#ffffff";
+type Mode = "light" | "dark";
 
-const OPAQUE_CANVAS: Rgba = {
-    r: 255,
-    g: 255,
-    b: 255,
-    a: 1,
+const CANVAS_FOR_MODE: Record<Mode, string> = {
+    light: CANVAS_LIGHT_MODE_COLOR,
+    dark: CANVAS_DARK_MODE_COLOR,
 };
 
-type Rgba = {
-    r: number;
-    g: number;
-    b: number;
-    a: number;
-};
-
 /**
- * Clamps a numeric value to the inclusive range [0, 1].
+ * Which pair of colors a contrast check compared.
  *
- * @param value - Number to clamp, typically an alpha/opacity value.
- * @returns The clamped value in [0, 1], or 1 if the input is non-finite.
+ * Symbolic rather than the phrase itself. The message names the pair in
+ * prose, and prose is the translator's to write — handing one over as an
+ * argument would nail the English into the record and leave nothing for the
+ * catalog to say. The catalog selects on these; `text-on-canvas` is the
+ * default variant there, so a value the catalog does not know still renders a
+ * sentence.
  */
-function clamp01(value: number): number {
-    if (!Number.isFinite(value)) {
-        return 1;
-    }
-
-    if (value <= 0) {
-        return 0;
-    }
-
-    if (value >= 1) {
-        return 1;
-    }
-
-    return value;
-}
+type ContrastContext =
+    | "text-on-background"
+    | "text-on-canvas"
+    | "high-contrast"
+    | "line"
+    | "marker";
 
 /**
- * Converts a CSS color string into RGBA channel values.
+ * Conditionally appends a contrast accessibility diagnostic when the ratio is
+ * insufficient.
  *
- * @param color - CSS color input (e.g. hex/rgb/rgba/named color).
- * @returns Parsed RGBA channels, or null if parsing fails.
- */
-function parseToRgba(color: string): Rgba | null {
-    let normalized: string;
-    try {
-        normalized = rgb(color).replace(/\s+/g, "");
-    } catch {
-        return null;
-    }
-
-    const match = normalized.match(/^rgba?\(([^)]+)\)$/i);
-    if (!match) {
-        return null;
-    }
-
-    const parts = match[1].split(",").map((x) => Number(x));
-    if (parts.length !== 3 && parts.length !== 4) {
-        return null;
-    }
-
-    if (!parts.every((x) => Number.isFinite(x))) {
-        return null;
-    }
-
-    return {
-        r: parts[0],
-        g: parts[1],
-        b: parts[2],
-        a: clamp01(parts[3] ?? 1),
-    };
-}
-
-/**
- * Alpha-composites a foreground color over a background color.
+ * `position` is the latest authored contributor to the rendered contrast, such
+ * as a foreground color, background color, or opacity attribute. Preset and
+ * derived values carry no position, so default styles remain silent.
  *
- * @param foreground - Foreground RGBA color.
- * @param background - Background RGBA color.
- * @returns The composited RGBA color.
- */
-function compositeForegroundOverBackground(
-    foreground: Rgba,
-    background: Rgba,
-): Rgba {
-    const alphaOut = foreground.a + background.a * (1 - foreground.a);
-
-    if (alphaOut === 0) {
-        return { r: 0, g: 0, b: 0, a: 0 };
-    }
-
-    return {
-        r:
-            (foreground.r * foreground.a +
-                background.r * background.a * (1 - foreground.a)) /
-            alphaOut,
-        g:
-            (foreground.g * foreground.a +
-                background.g * background.a * (1 - foreground.a)) /
-            alphaOut,
-        b:
-            (foreground.b * foreground.a +
-                background.b * background.a * (1 - foreground.a)) /
-            alphaOut,
-        a: alphaOut,
-    };
-}
-
-/**
- * Formats an RGBA color as an opaque CSS rgb(...) string.
- *
- * @param color - RGBA color whose RGB channels will be rounded.
- * @returns CSS rgb(...) string.
- */
-function rgbaToRgbString(color: Rgba): string {
-    return `rgb(${Math.round(color.r)},${Math.round(color.g)},${Math.round(color.b)})`;
-}
-
-/**
- * Blends a foreground color onto a background color over the light-mode canvas.
- *
- * Both `foregroundColor` and `backgroundColor` may begin as translucent.
- * The foreground alpha is additionally scaled by `opacityMultiplier` before
- * compositing.
- *
- * @param foregroundColor - Foreground CSS color.
- * @param backgroundColor - Background CSS color.
- * @param opacityMultiplier - Multiplier applied to foreground alpha (then clamped to [0,1]).
- * @returns Effective composited foreground as rgb(...), or null on parse failure.
- */
-function blendColorOntoBackground(
-    foregroundColor: string,
-    backgroundColor: string,
-    opacityMultiplier = 1,
-): string | null {
-    const foregroundRgba = parseToRgba(foregroundColor);
-    const backgroundRgba = parseToRgba(backgroundColor);
-
-    if (!foregroundRgba || !backgroundRgba) {
-        return null;
-    }
-
-    foregroundRgba.a = clamp01(foregroundRgba.a * opacityMultiplier);
-
-    const effectiveBackground = compositeForegroundOverBackground(
-        backgroundRgba,
-        OPAQUE_CANVAS,
-    );
-    const effectiveForeground = compositeForegroundOverBackground(
-        foregroundRgba,
-        effectiveBackground,
-    );
-
-    return rgbaToRgbString(effectiveForeground);
-}
-
-/**
- * Resolves a background color into its effective opaque color over the canvas.
- *
- * @param backgroundColor - Background CSS color that may include alpha.
- * @returns Opaque rgb(...) background string, or null on parse failure.
- */
-function resolveBackgroundToOpaqueColor(
-    backgroundColor: string,
-): string | null {
-    const backgroundRgba = parseToRgba(backgroundColor);
-    if (!backgroundRgba) {
-        return null;
-    }
-
-    const blendedBackground = compositeForegroundOverBackground(
-        backgroundRgba,
-        OPAQUE_CANVAS,
-    );
-    return rgbaToRgbString(blendedBackground);
-}
-
-/**
- * Computes contrast ratio for two CSS colors.
- *
- * @param color1 - First CSS color string.
- * @param color2 - Second CSS color string.
- * @returns WCAG contrast ratio, or null if the contrast library throws.
- */
-function ratioOrNull(color1: string, color2: string): number | null {
-    try {
-        return contrast.ratio(color1, color2);
-    } catch {
-        return null;
-    }
-}
-
-/**
- * Formats a contrast ratio for diagnostic text.
- *
- * @param value - Numeric ratio.
- * @returns Ratio string with two decimal places.
- */
-function formatRatio(value: number): string {
-    return value.toFixed(2);
-}
-
-/**
- * Creates a standardized style-contrast accessibility diagnostic.
- *
- * @param args - Diagnostic details (style number, context, measured ratio,
- * required threshold, and source position).
- * @returns An accessibility diagnostic suitable for sendDiagnostics.
- */
-function createContrastAccessibilityDiagnostic({
-    styleNumber,
-    context,
-    ratio,
-    threshold,
-    position,
-}: {
-    styleNumber: string;
-    context: string;
-    ratio: number;
-    threshold: number;
-    position?: Position;
-}): AccessibilityRecord {
-    return {
-        type: "accessibility",
-        level: 1,
-        message: `Style definition ${styleNumber} has insufficient contrast for ${context} (${formatRatio(ratio)}:1; requires at least ${threshold}:1).`,
-        position,
-    };
-}
-
-/**
- * Conditionally appends a contrast accessibility diagnostic when ratio and
- * position are valid and the threshold is not met.
- *
- * @param args - Diagnostic target array and contrast-evaluation inputs.
- * @returns Nothing. Mutates the diagnostics array in place when needed.
+ * The mode travels as an argument for the same reason the context does: dark
+ * mode used to be a " (dark mode)" suffix concatenated onto the context, which
+ * is a phrase in the middle of a sentence and cannot be positioned by a
+ * translator once it has been glued on.
  */
 function appendContrastAccessibilityDiagnosticIfNeeded({
     diagnostics,
     styleNumber,
     context,
+    mode,
     ratio,
     threshold,
     position,
 }: {
     diagnostics: AccessibilityRecord[];
     styleNumber: string;
-    context: string;
+    context: ContrastContext;
+    mode: Mode;
     ratio: number | null;
     threshold: number;
     position?: Position;
@@ -277,176 +96,142 @@ function appendContrastAccessibilityDiagnosticIfNeeded({
     }
 
     diagnostics.push(
-        createContrastAccessibilityDiagnostic({
-            styleNumber,
-            context,
-            ratio,
-            threshold,
+        codedDiagnostic({
+            type: "accessibility",
+            level: 1,
+            code: "doenet-a0007",
+            args: { styleNumber, context, mode, ratio, threshold },
             position,
-        }),
+        }) as AccessibilityRecord,
     );
 }
 
 /**
- * Computes a contrast ratio for a foreground/background pair, using compositing
- * when both colors can be parsed into RGBA channels.
- *
- * Here, "parsed" means `parseToRgba(color)` succeeds: the CSS color string is
- * converted to numeric `{ r, g, b, a }` channel values.
- *
- * Compositing path:
- * - Triggered when both `foreground` and `background` parse successfully via
- *   `parseToRgba`.
- * - Applies `opacityMultiplier` to the foreground alpha.
- * - Composites background over the light canvas, then foreground over that
- *   effective background, and computes ratio from those effective opaque colors.
- *
- * Non-compositing fallback:
- * - Used only when parsing fails and `opacityMultiplier === 1`.
- * - Computes ratio directly from the original color strings via `get-contrast`.
- *
- * No-ratio case:
- * - Returns `null` when parsing fails and `opacityMultiplier !== 1`, since we
- *   cannot reliably apply opacity without RGBA channels.
- *
- * @param args - Foreground color, background color, and foreground opacity multiplier.
- * @returns Contrast ratio, or null when it cannot be computed reliably.
+ * Resolves the color key for a color item in a given mode (light vs dark).
  */
-function ratioWithOptionalCompositing({
-    foreground,
-    background,
-    opacityMultiplier,
-}: {
-    foreground: string;
-    background: string;
-    opacityMultiplier: number;
-}): number | null {
-    const blendedForeground = blendColorOntoBackground(
-        foreground,
-        background,
-        opacityMultiplier,
-    );
-    const opaqueBackground = resolveBackgroundToOpaqueColor(background);
-
-    if (blendedForeground && opaqueBackground) {
-        return ratioOrNull(blendedForeground, opaqueBackground);
-    }
-
-    if (opacityMultiplier !== 1) {
-        return null;
-    }
-
-    return ratioOrNull(foreground, background);
+function colorKey(item: string, mode: Mode): StyleDefinitionKey {
+    return (
+        mode === "dark" ? `${item}ColorDarkMode` : `${item}Color`
+    ) as StyleDefinitionKey;
 }
 
 /**
- * Generates all applicable light-mode contrast accessibility diagnostics for
- * one style definition.
- *
- * @param styleNumber - Style number being validated.
- * @param styleDef - Resolved style definition values.
- * @returns Array of accessibility diagnostics for that style number.
+ * Evaluates all contrast checks for one style definition in one mode.
  */
-function contrastAccessibilityDiagnosticsForStyleDefinition(
+function contrastDiagnosticsForMode(
     styleNumber: string,
     styleDef: StyleDefinition,
+    mode: Mode,
 ): AccessibilityRecord[] {
     const diagnostics: AccessibilityRecord[] = [];
+    const canvas = CANVAS_FOR_MODE[mode];
 
-    const textColor = getStyleValueString(styleDef, "textColor");
-    const backgroundColor =
-        getStyleValueString(styleDef, "backgroundColor") ??
-        CANVAS_LIGHT_MODE_COLOR;
-
+    // --- Text color against background (or canvas). ---
+    const textColor = getStyleValueString(styleDef, colorKey("text", mode));
+    const backgroundColor = getStyleValueString(
+        styleDef,
+        colorKey("background", mode),
+    );
     if (textColor) {
+        const textPosition = styleDef[colorKey("text", mode)]?.position;
         const diagnosticPosition = latestPosition(
-            styleDef.textColor?.position,
-            styleDef.backgroundColor?.position,
+            textPosition,
+            styleDef[colorKey("background", mode)]?.position,
         );
-        const ratio = ratioWithOptionalCompositing({
+        const ratio = compositedContrastRatio({
             foreground: textColor,
+            canvas,
             background: backgroundColor,
-            opacityMultiplier: 1,
         });
-
         appendContrastAccessibilityDiagnosticIfNeeded({
             diagnostics,
             styleNumber,
-            context:
-                backgroundColor === CANVAS_LIGHT_MODE_COLOR
-                    ? "text color against the canvas"
-                    : "text color against background color",
+            context: backgroundColor ? "text-on-background" : "text-on-canvas",
+            mode,
             ratio,
-            threshold: 4.5,
+            threshold: TEXT_CONTRAST_THRESHOLD,
             position: diagnosticPosition,
         });
     }
 
+    // --- High-contrast color standing out from the canvas. ---
     const highContrastColor = getStyleValueString(
         styleDef,
-        "highContrastColor",
+        colorKey("highContrast", mode),
     );
     if (highContrastColor) {
-        const diagnosticPosition = styleDef.highContrastColor?.position;
-        const ratio = ratioWithOptionalCompositing({
-            foreground: CANVAS_LIGHT_MODE_COLOR,
-            background: highContrastColor,
-            opacityMultiplier: 1,
+        const highContrastPosition =
+            styleDef[colorKey("highContrast", mode)]?.position;
+        const ratio = compositedContrastRatio({
+            foreground: highContrastColor,
+            canvas,
         });
-
         appendContrastAccessibilityDiagnosticIfNeeded({
             diagnostics,
             styleNumber,
-            context: "high-contrast color against canvas text",
+            context: "high-contrast",
+            mode,
             ratio,
-            threshold: 4.5,
-            position: diagnosticPosition,
+            threshold: TEXT_CONTRAST_THRESHOLD,
+            position: highContrastPosition,
         });
     }
 
-    const lineColor = getStyleValueString(styleDef, "lineColor");
+    // --- Line color against the canvas (composited with line opacity). ---
+    const lineColor = getStyleValueString(styleDef, colorKey("line", mode));
     if (lineColor) {
+        const linePosition = styleDef[colorKey("line", mode)]?.position;
         const diagnosticPosition = latestPosition(
-            styleDef.lineColor?.position,
+            linePosition,
             styleDef.lineOpacity?.position,
         );
-        const lineOpacity = getStyleValueNumber(styleDef, "lineOpacity") ?? 1;
-        const ratio = ratioWithOptionalCompositing({
+        // Match the renderer: an unspecified opacity paints at the style
+        // default (0.7), not fully opaque, so check contrast at that opacity or
+        // a real low-opacity failure would be missed.
+        const lineOpacity =
+            getStyleValueNumber(styleDef, "lineOpacity") ??
+            DEFAULT_STYLE_VALUES.lineOpacity;
+        const ratio = compositedContrastRatio({
             foreground: lineColor,
-            background: CANVAS_LIGHT_MODE_COLOR,
+            canvas,
             opacityMultiplier: lineOpacity,
         });
-
         appendContrastAccessibilityDiagnosticIfNeeded({
             diagnostics,
             styleNumber,
-            context: "line color against the canvas",
+            context: "line",
+            mode,
             ratio,
-            threshold: 3,
+            threshold: GRAPHIC_CONTRAST_THRESHOLD,
             position: diagnosticPosition,
         });
     }
 
-    const markerColor = getStyleValueString(styleDef, "markerColor");
+    // --- Marker color against the canvas (composited with marker opacity). ---
+    const markerColor = getStyleValueString(styleDef, colorKey("marker", mode));
     if (markerColor) {
+        const markerPosition = styleDef[colorKey("marker", mode)]?.position;
         const diagnosticPosition = latestPosition(
-            styleDef.markerColor?.position,
+            markerPosition,
             styleDef.markerOpacity?.position,
         );
+        // Match the renderer: an unspecified opacity paints at the style
+        // default (0.7), not fully opaque (see line-opacity note above).
         const markerOpacity =
-            getStyleValueNumber(styleDef, "markerOpacity") ?? 1;
-        const ratio = ratioWithOptionalCompositing({
+            getStyleValueNumber(styleDef, "markerOpacity") ??
+            DEFAULT_STYLE_VALUES.markerOpacity;
+        const ratio = compositedContrastRatio({
             foreground: markerColor,
-            background: CANVAS_LIGHT_MODE_COLOR,
+            canvas,
             opacityMultiplier: markerOpacity,
         });
-
         appendContrastAccessibilityDiagnosticIfNeeded({
             diagnostics,
             styleNumber,
-            context: "marker color against the canvas",
+            context: "marker",
+            mode,
             ratio,
-            threshold: 3,
+            threshold: GRAPHIC_CONTRAST_THRESHOLD,
             position: diagnosticPosition,
         });
     }
@@ -455,8 +240,248 @@ function contrastAccessibilityDiagnosticsForStyleDefinition(
 }
 
 /**
- * Generates all light-mode contrast accessibility diagnostics across all style
- * definitions.
+ * Flags a *derived* dark-mode text/background combination that ends up
+ * inaccessible.
+ *
+ * The dark-mode text and background colors are inverted independently, so the
+ * derivation is order-independent — but that means an accessible light-mode
+ * pair can occasionally invert to a sub-AA dark-mode pair (most often for
+ * strongly-colored pairs). When that happens, we surface a diagnostic anchored
+ * to the authored light-mode colors so the author can pin explicit
+ * `textColorDarkMode` / `backgroundColorDarkMode` values.
+ *
+ * Only *derived* dark colors (no source position) are checked here; an
+ * author-supplied `*ColorDarkMode` is handled by the per-channel dark-mode pass.
+ */
+function derivedDarkModeCombinationDiagnostics(
+    styleNumber: string,
+    styleDef: StyleDefinition,
+): AccessibilityRecord[] {
+    const textLight = getStyleValueString(styleDef, "textColor");
+    const backgroundLight = getStyleValueString(styleDef, "backgroundColor");
+    const textDark = getStyleValueString(styleDef, "textColorDarkMode");
+    const backgroundDark = getStyleValueString(
+        styleDef,
+        "backgroundColorDarkMode",
+    );
+
+    if (!textLight || !backgroundLight || !textDark || !backgroundDark) {
+        return [];
+    }
+
+    // Author-supplied dark colors are covered by the per-channel dark-mode pass.
+    if (
+        styleDef.textColorDarkMode?.position ||
+        styleDef.backgroundColorDarkMode?.position
+    ) {
+        return [];
+    }
+
+    const lightRatio = compositedContrastRatio({
+        foreground: textLight,
+        canvas: CANVAS_LIGHT_MODE_COLOR,
+        background: backgroundLight,
+    });
+    const darkRatio = compositedContrastRatio({
+        foreground: textDark,
+        canvas: CANVAS_DARK_MODE_COLOR,
+        background: backgroundDark,
+    });
+
+    // Only a problem when an accessible light pair derives to an inaccessible
+    // dark pair; an intentionally low-contrast light pair (already flagged in
+    // light mode) is allowed to stay low-contrast in dark mode.
+    if (
+        lightRatio === null ||
+        darkRatio === null ||
+        lightRatio < TEXT_CONTRAST_THRESHOLD ||
+        darkRatio >= TEXT_CONTRAST_THRESHOLD
+    ) {
+        return [];
+    }
+
+    const textPosition = styleDef.textColor?.position;
+    const backgroundPosition = styleDef.backgroundColor?.position;
+    const position = latestPosition(textPosition, backgroundPosition);
+    if (!position) {
+        return [];
+    }
+
+    // The diagnostic squiggle sits under whichever color the anchor position
+    // belongs to (the later-authored one; ties resolve to backgroundColor,
+    // matching `latestPosition`'s argument order). Recommend a fix for *that*
+    // attribute's dark-mode override first, falling back to the other channel
+    // when adjusting the squiggled one alone can't reach the threshold.
+    const squiggledChannel: "text" | "background" =
+        backgroundPosition && position === backgroundPosition
+            ? "background"
+            : "text";
+    const channelsToTry: ("text" | "background")[] =
+        squiggledChannel === "background"
+            ? ["background", "text"]
+            : ["text", "background"];
+
+    let suggestion:
+        | { lightAttribute: string; darkAttribute: string; darkColor: string }
+        | undefined;
+    for (const channel of channelsToTry) {
+        const color = suggestAccessibleDarkModeColorAgainst({
+            startColor: channel === "text" ? textDark : backgroundDark,
+            partnerColor: channel === "text" ? backgroundDark : textDark,
+            channelRole: channel,
+            threshold: TEXT_CONTRAST_THRESHOLD,
+        });
+        if (color) {
+            suggestion = {
+                lightAttribute:
+                    channel === "text" ? "textColor" : "backgroundColor",
+                darkAttribute:
+                    channel === "text"
+                        ? "textColorDarkMode"
+                        : "backgroundColorDarkMode",
+                darkColor: color,
+            };
+            break;
+        }
+    }
+
+    // The advice is a variant of the message rather than a second sentence
+    // appended to it: which advice applies is data (did a replacement color
+    // come out of the derivation?), and a sentence built by `base + fix` puts
+    // the join in the code, where a translator cannot move it.
+    return [
+        codedDiagnostic({
+            type: "accessibility",
+            level: 1,
+            code: "doenet-a0008",
+            args: {
+                styleNumber,
+                ratio: darkRatio,
+                threshold: TEXT_CONTRAST_THRESHOLD,
+                ...(suggestion
+                    ? {
+                          suggestion: "available",
+                          lightAttribute: suggestion.lightAttribute,
+                          // The dark color is derived from the light color by
+                          // inverting its lightness, and that inversion is its
+                          // own inverse — so a light value that derives to the
+                          // accessible dark color is just the inverted dark
+                          // color. Offering both lets the author keep their
+                          // dark color and fix the light contrast, or keep
+                          // their light color and override the dark one.
+                          lightColor: invertLightness(suggestion.darkColor),
+                          darkAttribute: suggestion.darkAttribute,
+                          darkColor: suggestion.darkColor,
+                      }
+                    : { suggestion: "none" }),
+            },
+            position,
+        }) as AccessibilityRecord,
+    ];
+}
+
+/**
+ * Flags a derived dark-mode text color that is readable on the light canvas but
+ * becomes unreadable on the dark canvas when no authored background participates.
+ *
+ * Text/background pairs are checked by
+ * {@link derivedDarkModeCombinationDiagnostics}; this covers the text-only case
+ * where the canvas itself is the contrast partner. Author-supplied
+ * `textColorDarkMode` values are handled by the per-channel dark-mode pass.
+ */
+function derivedDarkModeTextCanvasDiagnostics(
+    styleNumber: string,
+    styleDef: StyleDefinition,
+): AccessibilityRecord[] {
+    const textLight = getStyleValueString(styleDef, "textColor");
+    const textDark = getStyleValueString(styleDef, "textColorDarkMode");
+
+    if (
+        !textLight ||
+        !textDark ||
+        getStyleValueString(styleDef, "backgroundColor") ||
+        getStyleValueString(styleDef, "backgroundColorDarkMode") ||
+        styleDef.textColorDarkMode?.position
+    ) {
+        return [];
+    }
+
+    const position = styleDef.textColor?.position;
+    if (!position) {
+        return [];
+    }
+
+    const lightRatio = compositedContrastRatio({
+        foreground: textLight,
+        canvas: CANVAS_LIGHT_MODE_COLOR,
+    });
+    const darkRatio = compositedContrastRatio({
+        foreground: textDark,
+        canvas: CANVAS_DARK_MODE_COLOR,
+    });
+
+    if (
+        lightRatio === null ||
+        darkRatio === null ||
+        lightRatio < TEXT_CONTRAST_THRESHOLD ||
+        darkRatio >= TEXT_CONTRAST_THRESHOLD
+    ) {
+        return [];
+    }
+
+    const suggestedDark = deriveAccessibleDarkModeColor({
+        lightColor: textDark,
+        threshold: TEXT_CONTRAST_THRESHOLD,
+    });
+    const suggestedDarkRatio = compositedContrastRatio({
+        foreground: suggestedDark,
+        canvas: CANVAS_DARK_MODE_COLOR,
+    });
+    const haveSuggestion =
+        suggestedDarkRatio !== null &&
+        suggestedDarkRatio >= TEXT_CONTRAST_THRESHOLD;
+
+    return [
+        codedDiagnostic({
+            type: "accessibility",
+            level: 1,
+            code: "doenet-a0009",
+            args: {
+                styleNumber,
+                ratio: darkRatio,
+                threshold: TEXT_CONTRAST_THRESHOLD,
+                ...(haveSuggestion
+                    ? {
+                          suggestion: "available",
+                          lightColor: invertLightness(suggestedDark),
+                          darkColor: suggestedDark,
+                      }
+                    : { suggestion: "none" }),
+            },
+            position,
+        }) as AccessibilityRecord,
+    ];
+}
+
+/**
+ * Generates all light- and dark-mode contrast accessibility diagnostics for one
+ * style definition.
+ */
+function contrastAccessibilityDiagnosticsForStyleDefinition(
+    styleNumber: string,
+    styleDef: StyleDefinition,
+): AccessibilityRecord[] {
+    return [
+        ...contrastDiagnosticsForMode(styleNumber, styleDef, "light"),
+        ...contrastDiagnosticsForMode(styleNumber, styleDef, "dark"),
+        ...derivedDarkModeCombinationDiagnostics(styleNumber, styleDef),
+        ...derivedDarkModeTextCanvasDiagnostics(styleNumber, styleDef),
+    ];
+}
+
+/**
+ * Generates all contrast accessibility diagnostics across all style
+ * definitions, for both light and dark mode.
  *
  * @param styleDefinitions - Map of style numbers to resolved style definitions.
  * @returns Flattened list of accessibility diagnostics for all styles.

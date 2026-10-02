@@ -133,7 +133,17 @@ export default class Substitute extends CompositeComponent {
             nComponents,
             stateIdInfo,
         }) {
+            // The raw authored string: sugar runs before any state variable
+            // exists. Normalize it the way `validateAttributeValue` will when
+            // it builds `stateValues.type` -- `toLowerCase`, and `trim`
+            // because `validValues` implies it. Without that, `type="TEXT"`
+            // wrapped the content in a `<math>` while `stateValues.type` was
+            // `text`, and the text branch then called `.replace` on a math
+            // expression and the document did not render (#1870).
             let type = componentAttributes.type?.value;
+            if (typeof type === "string") {
+                type = type.trim().toLowerCase();
+            }
             if (!["math", "text"].includes(type)) {
                 type = "math";
             }
@@ -433,12 +443,10 @@ export default class Substitute extends CompositeComponent {
                         dependencyValues.replacement.subscripts_to_strings();
 
                     // allow only if match and replacement are single variables
-                    if (
-                        !(
-                            typeof match.tree === "string" &&
-                            typeof replacement.tree === "string"
-                        )
-                    ) {
+                    if (!(
+                        typeof match.tree === "string" &&
+                        typeof replacement.tree === "string"
+                    )) {
                         return { success: false };
                     }
 

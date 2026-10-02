@@ -1,4 +1,5 @@
 import type Core from "../Core";
+import { reportInternalError } from "../utils/internalErrors";
 import type { ComponentIdx } from "@doenet/utils";
 import { deriveChildResultsFromDefiningChildren } from "./ChildMatcher";
 import {
@@ -12,10 +13,20 @@ import {
 import { addComponentsToResolver } from "./ResolverAdapter";
 import { createStateVariableDefinitions } from "./StateVariableDefinitionFactory";
 import { initializeComponentStateVariables } from "./StateVariableInitializer";
-import { convertToErrorComponent } from "../utils/dast/errors";
+import {
+    convertToErrorComponent,
+    errorComponentState,
+} from "../utils/dast/errors";
+import { diagnosticCodeFrom } from "../utils/diagnostics";
 import { gatherVariantComponents } from "../utils/variants";
 import { unwrapSource } from "../utils/dast/convertNormalizedDast";
 import { extractCreateComponentIdxMapping } from "../utils/componentIndices";
+
+// Most components keep no children serialized (only classes with a static
+// `keepChildrenSerialized` do), so they all share one frozen empty array
+// instead of allocating one apiece. Frozen so an accidental in-place
+// mutation throws instead of corrupting every other component.
+const EMPTY_SERIALIZED_CHILDREN: any[] = Object.freeze([]) as any;
 
 /**
  * Builds component instances from serialized DAST. Handles the recursive
@@ -84,10 +95,9 @@ export async function addComponents({
     if (!initialAdd) {
         parent = core._components[parentIdx!];
         if (!parent) {
-            core.addDiagnostic({
-                type: "warning",
-                message: `Cannot add children to parent ${parentIdx} as ${parentIdx} does not exist`,
-            });
+            reportInternalError(
+                `Cannot add children to parent ${parentIdx} as ${parentIdx} does not exist`,
+            );
             return [];
         }
 
@@ -584,9 +594,16 @@ export async function createChildrenThenComponent({
     if (serializedComponent.componentType === "_error") {
         lastErrorMessage = serializedComponent.state.message;
 
+        // This is where an `_error` component becomes an error *diagnostic* —
+        // the one place the two representations meet. Anything the component
+        // isn't carrying is lost to the main thread, which is why the code and
+        // its arguments are read back off `state` here: an `_error` built from
+        // a coded error (`convertToErrorComponent`) stays coded, and one built
+        // from a bare string stays a bare string.
         core.addDiagnostic({
             type: "error",
             message: serializedComponent.state.message,
+            ...diagnosticCodeFrom(serializedComponent.state),
             position: serializedComponent.position,
             sourceDoc: serializedComponent.sourceDoc,
         });
@@ -662,7 +679,10 @@ export async function createChildrenThenComponent({
         ancestors,
         definingChildren,
         stateVariableDefinitions,
-        serializedChildren: childrenToRemainSerialized,
+        serializedChildren:
+            childrenToRemainSerialized.length > 0
+                ? childrenToRemainSerialized
+                : EMPTY_SERIALIZED_CHILDREN,
         serializedComponent,
         attributes,
         componentInfoObjects: core.componentInfoObjects,
@@ -753,7 +773,9 @@ export async function createChildrenThenComponent({
 
     await initializeComponentStateVariables({ core, component: newComponent });
 
-    await core.dependencies.setUpComponentDependencies(newComponent);
+    // Per-state-variable dependencies are built on demand at first
+    // resolution attempt; only the per-component map slots are created here.
+    core.dependencies.createComponentDependencySlots(newComponent);
 
     const variablesChanged =
         await core.dependencies.checkForDependenciesOnNewComponent(
@@ -772,8 +794,13 @@ export async function createChildrenThenComponent({
         componentIdx,
     });
 
-    await core.dependencies.resolveStateVariablesIfReady({
-        component: newComponent,
+    // Other components' dependencies may be blocked on this component's
+    // identity, so that resolution stays eager. The former per-state-variable
+    // resolve pass is gone: state variables now resolve on first demand.
+    await core.dependencies.resolveIfReady({
+        componentIdx,
+        type: "componentIdentity",
+        expandComposites: false,
     });
 
     core.recordStateVariablesMustEvaluate(componentIdx);
@@ -931,7 +958,14 @@ export async function addQueuedErrorComponentsFromStateVariables({
                 type: "serialized",
                 componentType: "_error",
                 componentIdx: core._components.length,
-                state: { message: errorInfo.message },
+                // `errorInfo` is the diagnostic record itself, spread by
+                // `StateVariableEvaluator`, so a coded one arrives here with
+                // its code. This record has already reached `addDiagnostic`,
+                // so nothing downstream depends on the copy — it is kept so
+                // that an `_error` built here holds the same thing one built
+                // by `convertToErrorComponent` does, and so that making these
+                // keys `forRenderer` later needs no second pass.
+                state: errorComponentState(errorInfo.message, errorInfo),
                 position: errorInfo.position,
                 sourceDoc: errorInfo.sourceDoc,
                 children: [],

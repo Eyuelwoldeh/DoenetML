@@ -1,7 +1,9 @@
+import { returnGraphicalStyleDescriptionDefinitions } from "@doenet/utils";
 import GraphicalComponent from "./abstract/GraphicalComponent";
 
 export default class RegionBetweenCurves extends GraphicalComponent {
     static componentType = "regionBetweenCurves";
+    static styleOverrideCategories = ["fill"];
 
     static componentDocs = {
         summary: "A region bounded between two curves",
@@ -44,56 +46,13 @@ export default class RegionBetweenCurves extends GraphicalComponent {
     static returnStateVariableDefinitions() {
         let stateVariableDefinitions = super.returnStateVariableDefinitions();
 
-        stateVariableDefinitions.styleDescription = {
-            description: "A textual description of the region's style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
+        Object.assign(
+            stateVariableDefinitions,
+            returnGraphicalStyleDescriptionDefinitions({
+                kind: "region",
+                noun: "region",
             }),
-            definition: function ({ dependencyValues }) {
-                let fillColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    fillColorWord =
-                        dependencyValues.selectedStyle.fillColorWordDarkMode;
-                } else {
-                    fillColorWord =
-                        dependencyValues.selectedStyle.fillColorWord;
-                }
-
-                return { setValue: { styleDescription: fillColorWord } };
-            },
-        };
-
-        stateVariableDefinitions.styleDescriptionWithNoun = {
-            description: 'Style description including the word "region".',
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                styleDescription: {
-                    dependencyType: "stateVariable",
-                    variableName: "styleDescription",
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let styleDescriptionWithNoun =
-                    dependencyValues.styleDescription + " region";
-
-                return { setValue: { styleDescriptionWithNoun } };
-            },
-        };
+        );
 
         stateVariableDefinitions.functions = {
             additionalStateVariablesDefined: [
@@ -193,8 +152,19 @@ export default class RegionBetweenCurves extends GraphicalComponent {
                 const f2 = dependencyValues.functions[1];
 
                 let nearestPoint = function ({ variables }) {
-                    let x1 = variables.x1.evaluate_to_constant();
-                    let x2 = variables.x2.evaluate_to_constant();
+                    let x1 = variables.x1?.evaluate_to_constant();
+                    let x2 = variables.x2?.evaluate_to_constant();
+
+                    // A point with a non-numeric coordinate has no nearest
+                    // point; leave it where it is. See the note on
+                    // `<polygon>`'s `nearestPoint`: the clamping below read
+                    // the engine's old `null` as `0` and silently snapped the
+                    // point into the region instead of leaving it alone. The
+                    // engine answers `NaN` now; the guard stays for the
+                    // `Complex` arm.
+                    if (!(Number.isFinite(x1) && Number.isFinite(x2))) {
+                        return {};
+                    }
 
                     if (dependencyValues.flipFunctions) {
                         [x1, x2] = [x2, x1];

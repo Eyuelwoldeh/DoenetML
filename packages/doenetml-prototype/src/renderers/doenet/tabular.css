@@ -1,0 +1,111 @@
+.doenet-document {
+    table {
+        @apply my-3;
+        border-collapse: collapse;
+
+        th,
+        td {
+            @apply px-2 py-1 text-left align-top;
+        }
+
+        th {
+            @apply font-bold;
+        }
+
+        &.border-top-minor,
+        &.border-top-medium,
+        &.border-top-major {
+            border-top-style: solid;
+            border-top-color: currentColor;
+            &.border-top-minor {
+                border-top-width: thin;
+            }
+            &.border-top-medium {
+                border-top-width: medium;
+            }
+            &.border-top-major {
+                border-top-width: thick;
+            }
+        }
+
+        .border-bottom-none {
+            border-bottom: none;
+        }
+        .border-bottom-minor,
+        .border-bottom-medium,
+        .border-bottom-major {
+            border-bottom-style: solid;
+            border-bottom-color: currentColor;
+            &.border-bottom-minor {
+                border-bottom-width: thin;
+            }
+            &.border-bottom-medium {
+                border-bottom-width: medium;
+            }
+            &.border-bottom-major {
+                border-bottom-width: thick;
+            }
+        }
+
+        .border-inline-end-none {
+            border-inline-end: none;
+        }
+        .border-inline-end-minor,
+        .border-inline-end-medium,
+        .border-inline-end-major {
+            border-inline-end-style: solid;
+            border-inline-end-color: currentColor;
+            &.border-inline-end-minor {
+                border-inline-end-width: thin;
+            }
+            &.border-inline-end-medium {
+                border-inline-end-width: medium;
+            }
+            &.border-inline-end-major {
+                border-inline-end-width: thick;
+            }
+        }
+
+        .border-inline-start-none {
+            border-inline-start: none;
+        }
+        .border-inline-start-minor,
+        .border-inline-start-medium,
+        .border-inline-start-major {
+            border-inline-start-style: solid;
+            border-inline-start-color: currentColor;
+            &.border-inline-start-minor {
+                border-inline-start-width: thin;
+            }
+            &.border-inline-start-medium {
+                border-inline-start-width: medium;
+            }
+            &.border-inline-start-major {
+                border-inline-start-width: thick;
+            }
+        }
+
+        .text-align-start {
+            text-align: start;
+        }
+        .text-align-center {
+            text-align: center;
+        }
+        .text-align-end {
+            text-align: end;
+        }
+        .text-align-justify {
+            text-align: justify;
+        }
+
+        .vertical-align-top {
+            vertical-align: top;
+        }
+        .vertical-align-center {
+            vertical-align: middle;
+        }
+        .vertical-align-bottom {
+            vertical-align: bottom;
+        }
+    }
+}

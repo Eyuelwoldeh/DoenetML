@@ -4,6 +4,7 @@ import init, {
     ActionResponse,
     ActionsEnum,
     PublicDoenetMLCore,
+    take_last_panic_message,
     DastRoot as DastRootInCore,
 } from "@doenet/doenetml-worker-rust";
 // TODO: for some reason `export type * from "@doenet/doenetml-worker-rust";` doesn't work. The generated .d.ts file
@@ -23,6 +24,7 @@ import type {
     NodeList,
 } from "@doenet/doenetml-worker-rust";
 import type { DastRoot } from "@doenet/parser";
+import type { LocaleData } from "@doenet/i18n";
 import {
     CancelAnimationFrame,
     CopyToClipboard,
@@ -34,34 +36,19 @@ import {
     UpdateRenderersCallback,
 } from "@doenet/doenetml-worker-javascript";
 
-// 2025-05-14
-// There is some weirdness with CORS/Firefox/Data URLs that makes it so that
-// the bundled WASM cannot actually be loaded. To work around this,
-// we import it as a string and create a blob URL from it.
-// @ts-ignore
-import WASM_BYTES_DATA_URL from "@doenet/doenetml-worker-rust/lib_doenetml_worker_bg.wasm?url";
 import { flatDastFromJS } from "./flatDastFromJS";
+import type { UpdateInstruction } from "./flatDastFromJS";
+import {
+    collectInstructionMaps,
+    flatDastUpdateFromJS,
+    seedInstructionMaps,
+    type FlatDastElementUpdateFromJS,
+} from "./flatDastUpdateFromJS";
 import { resolvePathImmediatelyToNodeIdx } from "@doenet/debug-hooks";
-let wasmBlobUrl: string = WASM_BYTES_DATA_URL;
-try {
-    // If the URL starts with `data:*;base64,`, then it is a data URL and we want to get
-    // the base64 part
-    if (wasmBlobUrl.match(/^data:.*;base64,/)) {
-        const base64 = wasmBlobUrl.split(",")[1];
-        // Create a blob URL from the base64 data
-        const byteCharacters = atob(base64);
-        const byteNumbers = new Uint8Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-            byteNumbers[i] = byteCharacters.charCodeAt(i);
-        }
-        const byteArray = new Uint8Array(byteNumbers);
-        wasmBlobUrl = URL.createObjectURL(
-            new Blob([byteArray], { type: "application/wasm" }),
-        );
-    }
-} catch (e) {
-    console.warn("Error while creating blob URL for wasm bundle", e);
-}
+import { translateJsCoreActionName } from "./jsCoreActionNames";
+// The WASM is not inlined into this bundle: it is located and fetched at run
+// time. See the loading ladder documented in `./wasmLoading.ts`.
+import { resolveWasmInput } from "./wasmLoading";
 
 /**
  * The correct type of `FlatDastRoot`. **This should be used instead of
@@ -94,16 +81,235 @@ if (typeof globalThis !== "undefined" && !globalThis.document) {
         baseURI: baseUrl,
     };
 }
+/**
+ * Initialize the WASM module exactly once per worker realm. wasm-bindgen's
+ * `init` only guards *completed* initializations (`if (wasm !== undefined)`),
+ * so concurrent in-flight calls — which happen when several hosted cores
+ * (#1466) boot at once on one worker — would race and instantiate the module
+ * multiple times, corrupting the module-level instance the glue points at.
+ * Gate every caller behind one shared promise.
+ */
+let wasmInitPromise: Promise<unknown> | null = null;
+function ensureWasmInitialized(): Promise<unknown> {
+    if (!wasmInitPromise) {
+        // Clear the cached promise on failure so a later core can retry the
+        // init (including a fresh fetch) rather than every future caller
+        // inheriting one rejected promise forever. Concurrent in-flight
+        // callers still share (and all observe the rejection of) the single
+        // attempt.
+        wasmInitPromise = (async () => {
+            const wasmInput = await resolveWasmInput();
+            return await init({ module_or_path: wasmInput });
+        })().catch((e) => {
+            wasmInitPromise = null;
+            throw e;
+        });
+    }
+    return wasmInitPromise;
+}
+
+/**
+ * What the calls that need the document DAST throw once an initialization has
+ * released it and no `setSource` has put it back (#1533). One string for all
+ * of them, so a caller sees the same diagnosis whichever call it reached.
+ */
+const RELEASED_INITIALIZATION_DATA_MESSAGE =
+    "Cannot initialize from the document DAST: it was released when the " +
+    "previous initialization completed. Call setSource again before " +
+    "re-initializing.";
+
+/**
+ * The `name` given to an error that came from building this document, as
+ * opposed to the worker being unwell.
+ *
+ * The distinction decides whether a retry can possibly help. A worker that died
+ * mid-handshake is worth another attempt; a document that cannot be built fails
+ * the same way every time, so retrying spends the reader's one retry -- and the
+ * handshake's attempts before it -- on something that cannot succeed, then
+ * advises a reload that cannot either (#1920).
+ *
+ * Carried in `name` rather than in a property because that is what survives the
+ * worker boundary: Comlink serializes a thrown `Error` as its `message`, `name`
+ * and `stack`, and rebuilds it with `Object.assign`, so an extra own property is
+ * dropped. (The main-thread-only flag in `coreWorkerBoot`'s `isHandshakeTimeout`
+ * does not have this problem, which is why it can use a property.)
+ */
+export const DOCUMENT_BUILD_ERROR_NAME = "DoenetDocumentBuildError";
+
+/**
+ * Read and clear the panic message the Rust hook recorded, if any.
+ *
+ * Guarded, because it is only here to improve a message. Unguarded, a throw
+ * from the read would be thrown in place of the real error, *unmarked* -- and
+ * an unmarked failure is retried, which is the behavior this whole path exists
+ * to stop. It is not hypothetical: the trapping entry points hold a
+ * `WasmRefCell` borrow that the trap never drops, so an accessor taking `&self`
+ * throws "recursive use of an object" instead of answering. (That is why
+ * `take_last_panic_message` is a free function rather than a method.)
+ */
+function readPanicMessage(): string | undefined {
+    try {
+        return take_last_panic_message() ?? undefined;
+    } catch (readErr) {
+        console.error(readErr);
+        return undefined;
+    }
+}
+
+/**
+ * Drop any panic message left over from earlier work on this worker.
+ *
+ * The slot is one per worker thread, and a `CoreWorker` can host several
+ * independent cores (`createCore`/`destroyCore`). A panic on a path that never
+ * reads the slot -- an action, a later `returnDast` -- would otherwise sit
+ * there and be reported as the cause of the *next* document's build failure.
+ * Clearing before each build makes anything read afterwards belong to that
+ * build.
+ */
+function discardStalePanicMessage(): void {
+    readPanicMessage();
+}
+
+/**
+ * Re-throw `err` marked as a document-caused failure, preserving its message --
+ * which is the one thing on the failure screen an author can act on.
+ *
+ * `panicMessage`, when the Rust core recorded one, replaces it. A panic in wasm
+ * is a trap, and a trap reaches JavaScript as `RuntimeError: unreachable`: true,
+ * and useless to everyone. The panic hook has the real message, with its file
+ * and line, at the moment it fires.
+ */
+function throwAsDocumentBuildError(
+    err: unknown,
+    panicMessage?: string | undefined,
+): never {
+    const error =
+        err instanceof Error ? err : new Error(String(err ?? "unknown error"));
+    error.name = DOCUMENT_BUILD_ERROR_NAME;
+    if (panicMessage) {
+        error.message = panicMessage;
+    }
+    throw error;
+}
+
 export class CoreWorker {
     doenetCore?: PublicDoenetMLCore;
     javascriptCore?: PublicDoenetMLCoreJavascript;
     wasm_initialized = false;
     javascript_initialized = false;
     source_set = false;
+    /**
+     * Whether the document DAST the Rust core retains has been released since
+     * the source was last set (#1533).
+     *
+     * `initializeJavascriptCore` and `returnFlatDastFromJS` end by releasing
+     * it — the JavaScript core has consumed it by then, and the Rust core
+     * keeps its copy only for the rust core-type's later
+     * `returnNormalizedDastRoot` calls — so a second initialization with no
+     * `setSource` in between has nothing to initialize from. `source_set`
+     * cannot say so: the source was set, and still is; what is gone is the
+     * DAST derived from it. Without this flag that second initialization
+     * failed inside the Rust core with a message saying the source had never
+     * been set, which is the opposite of what happened.
+     */
+    _initializationDataReleased = false;
     flags_set = false;
     core_type: "rust" | "javascript" = "rust";
 
+    /**
+     * Buffer of update batches pushed by the JS core's persistent
+     * `updateRenderersCallback` (set up during the initial render). Drained by
+     * `dispatchActionJavascriptFlat` to build the FlatDast update map.
+     */
+    _javascriptUpdateBuffer: UpdateInstruction[] = [];
+    /**
+     * Whether the persistent `updateRenderersCallback` should buffer pushes.
+     * Only set while `dispatchActionJavascriptFlat` has an action in flight, so
+     * pushes that arrive with no in-flight action (animations, deferred async
+     * resolution — which this return-based API does not deliver anyway) are
+     * dropped rather than accumulating in `_javascriptUpdateBuffer` unbounded
+     * for the core's lifetime.
+     */
+    _capturingJavascriptUpdates = false;
+    /**
+     * Map from `componentIdx` to the JS component type/name, retained from the
+     * initial render and extended by each update batch. Used to select the
+     * JS->Rust prop fixup in `flatDastUpdateFromJS`.
+     */
+    _componentIdxToName: Record<number, string> = {};
+    /**
+     * Map from JS string id to `componentIdx`, required by the `ref` fixup.
+     * Retained from the initial render and extended by each update batch.
+     */
+    _doenetIdToComponentIdx: Record<string, number> = {};
+    /**
+     * Whether `returnFlatDastFromJS` has run, installing the persistent
+     * `updateRenderersCallback` and seeding the lookup maps above. Until then,
+     * `dispatchActionJavascriptFlat` has no callback to capture pushes and no
+     * maps to convert them, so it refuses to run rather than silently
+     * returning an empty update map.
+     */
+    _javascriptInitialRenderDone = false;
+
     isProcessingPromise = Promise.resolve();
+
+    // --- Multi-core host support (#1466, stream E of #1441) ---------------
+    //
+    // One worker process can host several independent cores, collapsing the
+    // ~104 MB per-worker fixed floor (script eval + WASM) to one copy per
+    // page. The worker's default exposed instance doubles as the host: the
+    // main thread calls `createCore` with a transferred `MessagePort` and
+    // drives the new core over that port with the same Comlink API a
+    // dedicated worker would offer. All cores share this worker's WASM
+    // instance (wasm-bindgen `init` is idempotent per module scope); each
+    // core is a separate `PublicDoenetMLCore` / JS core with its own state.
+
+    /** Cores created via `createCore`, so `destroyCore` can release them. */
+    _hostedCores: Map<number, { core: CoreWorker; port: MessagePort }> =
+        new Map();
+    _nextHostedCoreId = 1;
+    /**
+     * Whether this instance is a hosted core (created via `createCore`) rather
+     * than the worker's default (host) instance. A hosted core shares the
+     * worker thread with its siblings, so its `terminate()` must free only its
+     * own Rust/JS cores and NOT `close()` the worker — that would take every
+     * sibling core down with it.
+     */
+    _isHostedCore = false;
+
+    /**
+     * Create an additional, independent core in this worker and expose it on
+     * `port` via Comlink. Returns an id for a later `destroyCore` call.
+     */
+    async createCore(port: MessagePort): Promise<number> {
+        const core = new CoreWorker();
+        core._isHostedCore = true;
+        Comlink.expose(core, port);
+        const id = this._nextHostedCoreId++;
+        this._hostedCores.set(id, { core, port });
+        return id;
+    }
+
+    /**
+     * Release a core created by `createCore`: give it a graceful
+     * `terminate()` (frees the Rust core and JS core), then close its port
+     * and drop the reference. Best-effort — a torn-down document must never
+     * take its sibling cores with it.
+     */
+    async destroyCore(id: number) {
+        const entry = this._hostedCores.get(id);
+        if (!entry) {
+            return;
+        }
+        this._hostedCores.delete(id);
+        try {
+            await entry.core.terminate();
+        } catch (err) {
+            console.error("Error terminating hosted core", err);
+        } finally {
+            entry.port.close();
+        }
+    }
 
     setCoreType(core_type: "rust" | "javascript") {
         this.core_type = core_type;
@@ -118,7 +324,7 @@ export class CoreWorker {
 
         try {
             if (!this.wasm_initialized) {
-                await init({ module_or_path: wasmBlobUrl });
+                await ensureWasmInitialized();
                 this.wasm_initialized = true;
             }
 
@@ -140,6 +346,7 @@ export class CoreWorker {
                 args.source,
             );
             this.source_set = true;
+            this._initializationDataReleased = false;
         } catch (err) {
             console.error("Error when setting source", err);
             throw err;
@@ -162,7 +369,7 @@ export class CoreWorker {
 
         try {
             if (!this.wasm_initialized) {
-                await init({ module_or_path: wasmBlobUrl });
+                await ensureWasmInitialized();
                 this.wasm_initialized = true;
             }
 
@@ -186,6 +393,38 @@ export class CoreWorker {
         }
     }
 
+    /**
+     * Supply the content locale and the message catalogs to translate with.
+     *
+     * Optional — the core defaults to English — so, unlike `setFlags`, this is
+     * not a precondition of `initializeJavascriptCore`. Catalogs cross as
+     * plain FTL strings rather than URLs: depending on the bundling variant
+     * this worker runs from a blob or an inlined script and cannot reliably
+     * resolve a relative fetch.
+     *
+     * Only the JavaScript core consumes this; the Rust core computes no prose.
+     */
+    async setLocaleData(args: { localeData: LocaleData }) {
+        const isProcessingPromise = this.isProcessingPromise;
+        let { promise, resolve } = promiseWithResolver();
+        this.isProcessingPromise = promise;
+
+        await isProcessingPromise;
+
+        try {
+            if (this.core_type === "javascript") {
+                if (!this.javascriptCore) {
+                    this.javascriptCore = new PublicDoenetMLCoreJavascript();
+                }
+                this.javascriptCore.setLocaleData(args.localeData);
+            }
+        } finally {
+            // Always release the queue, so a failure here cannot deadlock
+            // every later call (Doenet/DoenetApps#2957).
+            resolve();
+        }
+    }
+
     async initializeJavascriptCore({
         activityId,
         docId,
@@ -203,24 +442,39 @@ export class CoreWorker {
 
         await isProcessingPromise;
 
-        if (
-            !this.source_set ||
-            !this.flags_set ||
-            !this.javascriptCore ||
-            !this.doenetCore
-        ) {
-            throw Error(
-                "Cannot initialize javascript core before setting source and flags",
-            );
-        }
+        // The preconditions below share this `try` without being part of the
+        // document build, so the `catch` has to tell them apart; see there.
+        let buildingDocument = false;
 
         try {
+            // Checked inside the `try`, so that a failed precondition
+            // releases the queue in the `finally` like every other failure
+            // here. Thrown ahead of it, the queue stayed held and every later
+            // call on this worker hung (Doenet/DoenetApps#2957; #1312 tracks
+            // the methods below that still check ahead of their `try`).
+            if (
+                !this.source_set ||
+                !this.flags_set ||
+                !this.javascriptCore ||
+                !this.doenetCore
+            ) {
+                throw Error(
+                    "Cannot initialize javascript core before setting source and flags",
+                );
+            }
+            if (this._initializationDataReleased) {
+                throw Error(RELEASED_INITIALIZATION_DATA_MESSAGE);
+            }
+
+            buildingDocument = true;
+            discardStalePanicMessage();
+
             let normalizedRoot = this.doenetCore.return_normalized_dast_root();
 
             const doenetCore = this.doenetCore;
 
-            function calculateRootNames() {
-                return doenetCore.calculate_root_names();
+            function updateRootNames(reportAll: boolean) {
+                return doenetCore.update_root_names(reportAll);
             }
 
             function resolvePath(
@@ -267,13 +521,45 @@ export class CoreWorker {
                     replaceIndexResolutionsInResolver,
                     deleteNodesFromResolver,
                     resolvePath,
-                    calculateRootNames,
+                    updateRootNames,
                 });
             this.javascript_initialized = true;
+            // The JavaScript core has consumed the normalized DAST; free the
+            // Rust core's retained copy of the document DAST (the rust
+            // core-type path still needs it for later
+            // `returnNormalizedDastRoot` calls, so only release here).
+            this.doenetCore.release_initialization_data();
+            this._initializationDataReleased = true;
             return initializedResult;
         } catch (err) {
             console.error(err);
-            throw err;
+            // The two preconditions are about this worker's own call sequence,
+            // not about the document: no source set yet, or a second
+            // initialization from a DAST the first one released (#1533, which
+            // happened when two boot sequences interleaved on one worker).
+            // Both are conditions a fresh worker would not be in, so they are
+            // rethrown unmarked and stay retryable. Marking them would tell
+            // the reader their document is broken and refuse the retry that
+            // would have fixed it -- the opposite of #1920's point.
+            if (!buildingDocument) {
+                throw err;
+            }
+
+            // Past the preconditions, everything is this document being
+            // built: the Rust core flattening its DAST, the resolver, the
+            // JavaScript core's construction. A failure is deterministic, so
+            // the boot ladder is told not to retry it and to show what broke
+            // (#1920).
+            //
+            // The read also clears the slot, so a later failure in this worker
+            // cannot report a panic that belonged to an earlier one.
+            //
+            // Read off the module rather than off `this.doenetCore`: the
+            // failure this improves is the one where the wasm instance has
+            // just trapped, and a method call on the core would throw
+            // "recursive use of an object" instead of returning the message
+            // (see `take_last_panic_message` in `lib-js-wasm-binding`).
+            throwAsDocumentBuildError(err, readPanicMessage());
         } finally {
             resolve();
         }
@@ -316,7 +602,8 @@ export class CoreWorker {
         }
 
         try {
-            return (await this.javascriptCore?.createCoreGenerateDast(
+            discardStalePanicMessage();
+            const result = (await this.javascriptCore?.createCoreGenerateDast(
                 args,
                 updateRenderersCallback,
                 reportScoreAndStateCallback,
@@ -326,15 +613,55 @@ export class CoreWorker {
                 sendEvent,
                 requestSolutionView,
             )) as any;
+
+            // A trap does not arrive here as a rejection. The JavaScript core
+            // catches its own throws and reports them by returning
+            // `{ success: false, errMsg }`, and a Rust trap during evaluation
+            // -- the core calls back into the resolver throughout -- is a throw
+            // like any other, so it comes back as `errMsg: "unreachable"`.
+            // Left alone it would reach the reader as that bare word, skipping
+            // both the recorded panic message and the teardown a poisoned wasm
+            // instance needs.
+            //
+            // A message in the slot is the evidence: it was cleared above, so
+            // anything in it now was recorded during this build.
+            if (result?.success === false) {
+                const panicMessage = readPanicMessage();
+                if (panicMessage !== undefined) {
+                    throwAsDocumentBuildError(
+                        new Error(result.errMsg ?? ""),
+                        panicMessage,
+                    );
+                }
+            }
+
+            return result;
         } catch (err) {
             console.error(err);
-            throw err;
+            // `createCoreGenerateDast` reports an ordinary core failure by
+            // returning `{ success: false, errMsg }`, which the caller already
+            // shows. A *rejection* here got as far as evaluating the document
+            // and is likewise deterministic.
+            //
+            // The panic message is read here too, not only on the
+            // initialization path: `createCoreGenerateDast` builds `Core`
+            // before its own `try`, and that constructor calls back into the
+            // Rust core (`updateRootNames`). A trap there would otherwise
+            // reach the reader as the bare word `unreachable`.
+            throwAsDocumentBuildError(err, readPanicMessage());
         } finally {
             resolve();
         }
     }
 
-    async returnDast(): Promise<FlatDastRootWithErrors> {
+    /**
+     * Return the document, run through core, as flat DAST. `variantIndex` picks which
+     * variant of the document to build (1 unless given); only the JavaScript core has
+     * variants.
+     */
+    async returnDast({
+        variantIndex = 1,
+    }: { variantIndex?: number } = {}): Promise<FlatDastRootWithErrors> {
         const isProcessingPromise = this.isProcessingPromise;
         let { promise, resolve } = promiseWithResolver();
         this.isProcessingPromise = promise;
@@ -347,7 +674,7 @@ export class CoreWorker {
 
         try {
             if (this.core_type === "javascript") {
-                return await this.returnFlatDastFromJS();
+                return await this.returnFlatDastFromJS(variantIndex);
             } else {
                 return this.doenetCore.return_dast();
             }
@@ -378,6 +705,9 @@ export class CoreWorker {
             // resolver consumers — return the minimal shape consumers expect.
             return { nodes: [] };
         }
+        if (this._initializationDataReleased) {
+            throw Error(RELEASED_INITIALIZATION_DATA_MESSAGE);
+        }
         return this.doenetCore.return_normalized_dast_root();
     }
 
@@ -385,16 +715,19 @@ export class CoreWorker {
      * Transform the initial output of the JavaScript core into the flat data structure
      * produces by the rust core and expected by the `doenetml-prototype`
      */
-    private async returnFlatDastFromJS() {
+    private async returnFlatDastFromJS(variantIndex: number) {
         if (!this.javascriptCore || !this.doenetCore) {
             throw Error("Cannot return dast before setting source and flags");
+        }
+        if (this._initializationDataReleased) {
+            throw Error(RELEASED_INITIALIZATION_DATA_MESSAGE);
         }
 
         let normalizedRoot = this.doenetCore.return_normalized_dast_root();
         const doenetCore = this.doenetCore;
 
-        function calculateRootNames() {
-            return doenetCore.calculate_root_names();
+        function updateRootNames(reportAll: boolean) {
+            return doenetCore.update_root_names(reportAll);
         }
 
         function resolvePath(
@@ -426,16 +759,22 @@ export class CoreWorker {
         await this.javascriptCore.initializeWorker({
             activityId: "a",
             docId: "a",
-            requestedVariantIndex: 1,
+            requestedVariantIndex: variantIndex,
             attemptNumber: 1,
             normalizedRoot,
             addNodesToResolver,
             replaceIndexResolutionsInResolver,
             deleteNodesFromResolver,
             resolvePath,
-            calculateRootNames,
+            updateRootNames,
         });
         this.javascript_initialized = true;
+        // The JavaScript core has consumed the normalized DAST; free the
+        // Rust core's retained copy of the document DAST (the rust core-type
+        // path still needs it for later `returnNormalizedDastRoot` calls, so
+        // only release here).
+        this.doenetCore.release_initialization_data();
+        this._initializationDataReleased = true;
 
         const args = {
             coreId: "a",
@@ -445,10 +784,23 @@ export class CoreWorker {
 
         let updateInstructions = null;
 
-        // JS core sends most of the dast data with `updateRendersCallback` with `{ init: true }`
+        // The JS core pushes renderer updates through `updateRenderersCallback`.
+        // The initial render arrives once with `{ init: true }`; every later
+        // batch (e.g. triggered by `requestAction`) is appended to a buffer that
+        // `dispatchActionJavascriptFlat` drains. This callback is installed once
+        // on the persistent core, so it keeps receiving pushes for the core's
+        // lifetime; later batches are only buffered while an action is in flight
+        // (`_capturingJavascriptUpdates`) so out-of-action pushes don't grow the
+        // buffer without bound.
+        this._javascriptUpdateBuffer = [];
         const updateRenderersCallback = (args: any) => {
             if (args.init) {
                 updateInstructions = args.updateInstructions;
+            } else if (
+                this._capturingJavascriptUpdates &&
+                args.updateInstructions
+            ) {
+                this._javascriptUpdateBuffer.push(...args.updateInstructions);
             }
         };
 
@@ -486,6 +838,15 @@ export class CoreWorker {
 
         const documentToRender = coreResult.coreInfo.documentToRender;
 
+        // Retain the maps that `flatDastUpdateFromJS` needs (element-type lookup
+        // for fixups and the `ref` referent lookup), seeded with the document
+        // root and extended with every component in the initial render.
+        const { componentIdxToName, doenetIdToComponentIdx } =
+            seedInstructionMaps(documentToRender, updateInstructions);
+        this._componentIdxToName = componentIdxToName;
+        this._doenetIdToComponentIdx = doenetIdToComponentIdx;
+        this._javascriptInitialRenderDone = true;
+
         const flat_dast = flatDastFromJS(documentToRender, updateInstructions);
         return flat_dast;
     }
@@ -517,6 +878,130 @@ export class CoreWorker {
             console.error(err);
             throw err;
         } finally {
+            resolve();
+        }
+    }
+
+    /**
+     * Dispatch the action `actionName` of `componentIdx` to the JavaScript core
+     * and return the resulting FlatDast update map, matching the shape returned
+     * by the rust core's `dispatchAction` (`ActionResponse["payload"]`).
+     *
+     * The JS core uses a push model: `requestAction` resolves with only
+     * `{ actionId }`, while the actual renderer updates are pushed
+     * asynchronously through the persistent `updateRenderersCallback` installed
+     * during the initial render (see `returnFlatDastFromJS`). This method
+     * bridges that push model to the prototype's pull-based `dispatchAction`
+     * thunk: it clears the update buffer, awaits the action, then drains and
+     * converts the buffered batches via `flatDastUpdateFromJS`.
+     *
+     * Requires the initial render (`returnFlatDastFromJS`, via `returnDast`) to
+     * have run first — that is what installs the persistent callback and seeds
+     * the lookup maps; otherwise this throws rather than returning an empty map.
+     *
+     * Known gaps (acceptable for this milestone):
+     * - Updates that arrive with no in-flight action (animations, deferred async
+     *   resolution) are not delivered by this return-based API. The persistent
+     *   callback only buffers while an action is in flight, so such pushes are
+     *   dropped rather than buffered.
+     * - `requestAction` resolving does not guarantee every async renderer push
+     *   has flushed; only synchronously-available batches are drained.
+     */
+    async dispatchActionJavascriptFlat(actionArgs: {
+        actionName: string;
+        componentIdx: number | undefined;
+        args: Record<string, any>;
+    }): Promise<Record<number, FlatDastElementUpdateFromJS>> {
+        const isProcessingPromise = this.isProcessingPromise;
+        let { promise, resolve } = promiseWithResolver();
+        this.isProcessingPromise = promise;
+
+        await isProcessingPromise;
+
+        try {
+            if (!this.source_set || !this.flags_set || !this.javascriptCore) {
+                throw Error(
+                    "Cannot handle action before setting source and flags",
+                );
+            }
+            if (!this._javascriptInitialRenderDone) {
+                // The persistent update callback and the lookup maps are
+                // installed by `returnFlatDastFromJS`; without them this method
+                // would capture nothing and return an empty update map.
+                throw Error(
+                    "Cannot dispatch a flat action before the initial render (returnDast) has run",
+                );
+            }
+
+            this._javascriptUpdateBuffer = [];
+            this._capturingJavascriptUpdates = true;
+
+            // Translate the prototype's rust action name to the JS core's name
+            // when they differ (e.g. point `move` -> `movePoint`).
+            const componentType =
+                actionArgs.componentIdx != null
+                    ? this._componentIdxToName[actionArgs.componentIdx]
+                    : undefined;
+            const translatedActionName = translateJsCoreActionName(
+                componentType,
+                actionArgs.actionName,
+            );
+
+            const actionResult = await this.javascriptCore.requestAction({
+                ...actionArgs,
+                actionName: translatedActionName,
+            });
+
+            // `requestAction` reports failures by returning `{ success: false,
+            // errMsg }` rather than throwing, so surface them instead of
+            // silently returning an empty update map.
+            if (
+                actionResult &&
+                typeof actionResult === "object" &&
+                "success" in actionResult &&
+                actionResult.success === false
+            ) {
+                const actionLabel =
+                    translatedActionName === actionArgs.actionName
+                        ? `"${actionArgs.actionName}"`
+                        : `"${actionArgs.actionName}" (translated to "${translatedActionName}")`;
+                throw Error(
+                    `Action ${actionLabel} failed: ${
+                        actionResult.errMsg ?? "unknown error"
+                    }`,
+                );
+            }
+
+            // Disable capture and snapshot+clear the buffer as one synchronous
+            // unit. There is no `await` between these statements, so no
+            // `updateRenderersCallback` push can interleave: turning capture off
+            // first guarantees a push can never land in the fresh buffer before
+            // we stop accepting, while the snapshot still holds everything that
+            // accumulated during `requestAction`. (Pushes that arrive on later
+            // ticks, after capture is off, are the documented animation/async
+            // gap and are intentionally not delivered by this return-based API.)
+            this._capturingJavascriptUpdates = false;
+            const batches = this._javascriptUpdateBuffer;
+            this._javascriptUpdateBuffer = [];
+
+            // Keep the lookup maps current in case the action introduced new
+            // components, then convert the drained batches into the update map.
+            collectInstructionMaps(
+                batches,
+                this._componentIdxToName,
+                this._doenetIdToComponentIdx,
+            );
+
+            return flatDastUpdateFromJS(
+                batches,
+                this._componentIdxToName,
+                this._doenetIdToComponentIdx,
+            );
+        } catch (err) {
+            console.error(err);
+            throw err;
+        } finally {
+            this._capturingJavascriptUpdates = false;
             resolve();
         }
     }
@@ -665,8 +1150,15 @@ export class CoreWorker {
             resolve();
         }
 
-        // Terminate the worker itself
-        close();
+        // Terminate the worker itself — but only for the worker's default
+        // (host) instance. A hosted core (#1466) shares the thread with its
+        // sibling cores, so closing here would take them all down; its
+        // teardown ends after freeing the Rust and JS cores above. The host
+        // worker is instead force-terminated natively (or destroyed
+        // per-core via `destroyCore`) from the main thread.
+        if (!this._isHostedCore) {
+            close();
+        }
     }
 
     async returnAllStateVariables(consoleLogComponents = false) {
@@ -704,6 +1196,21 @@ export class CoreWorker {
         if (this.javascriptCore) {
             this.javascriptCore.saveImmediately();
         }
+    }
+
+    /**
+     * Flush-state-on-demand (Doenet/DoenetML#1440): after letting in-flight
+     * updates settle, push any pending state through the normal
+     * `reportScoreAndState` pipeline so a persistence host saves it, letting a
+     * host tear this document down losslessly. Returns whether this core held
+     * any state (`false` when the core/document has not been created yet —
+     * nothing to lose on teardown).
+     */
+    async flushState(): Promise<boolean> {
+        if (this.javascriptCore) {
+            return await this.javascriptCore.flushState();
+        }
+        return false;
     }
 
     async _getTests() {

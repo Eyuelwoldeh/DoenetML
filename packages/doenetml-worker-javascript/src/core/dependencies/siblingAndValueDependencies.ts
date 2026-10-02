@@ -386,3 +386,53 @@ export class FlagDependency extends ValueDependency {
         this.value = this.dependencyHandler.core.flags[this.flagName];
     }
 }
+
+/**
+ * The `initializeCounters` the hosting page passed in: a map from a component
+ * type to the number the document's count of that type starts at. (All the
+ * types of division share one count, so an entry for any of them starts it.)
+ *
+ * Fixed for a core's lifetime, like flags.
+ */
+export class InitializeCountersDependency extends ValueDependency {
+    static dependencyType = "initializeCounters";
+
+    setUpParameters() {
+        this.value = this.dependencyHandler.core.initializeCounters;
+    }
+}
+
+/**
+ * The content locale the hosting page asked for, as a BCP-47 tag.
+ *
+ * Fixed for a core's lifetime, like flags: changing the content language
+ * changes every computed string in the document, so the viewer rebuilds the
+ * core rather than trying to update in place.
+ */
+export class LocaleDependency extends ValueDependency {
+    static dependencyType = "locale";
+
+    setUpParameters() {
+        this.value = this.dependencyHandler.core.localeData.locale;
+    }
+}
+
+/**
+ * A translator for the content the core computes, keyed by locale.
+ *
+ * The value is the *factory*, not a translator: the catalogs are fixed for the
+ * core's lifetime but the locale is not, since a nested `<document lang>` can
+ * differ from the one around it. A definition reads the locale of the document
+ * it sits in — an ordinary ancestor dependency — and asks this for the
+ * matching translator.
+ *
+ * The factory is a bound property on the core, so its identity is stable and
+ * this dependency never reports a spurious change.
+ */
+export class TranslatorDependency extends ValueDependency {
+    static dependencyType = "translator";
+
+    setUpParameters() {
+        this.value = this.dependencyHandler.core.getContentTranslator;
+    }
+}

@@ -4,11 +4,20 @@ import {
     getVariantsForDescendantsForUniqueVariants,
 } from "../utils/variants";
 import { returnStyleDefinitionStateVariables } from "@doenet/utils";
+import { SUPPORTED_LOCALES, resolveDocumentLocale } from "@doenet/i18n";
 import { returnFeedbackDefinitionStateVariables } from "../utils/feedback";
 import {
+    returnCheckWorkCreditStateVariableDefinition,
+    returnScoredSectionAttributes,
     returnScoredSectionStateVariableDefinition,
     submitAllAnswers,
 } from "../utils/scoredSection";
+import { codedDiagnostic } from "../utils/diagnostics";
+import { returnSubmitLabelStateVariableDefinitions } from "../utils/answer";
+import {
+    DIVISION_SEQUENCE,
+    returnSequenceNumbersOfChildrenDefinition,
+} from "../utils/sequenceNumbering";
 
 export default class Document extends BaseComponent {
     constructor(args) {
@@ -45,62 +54,14 @@ export default class Document extends BaseComponent {
         delete attributes.isResponse;
         delete attributes.isPotentialResponse;
 
-        attributes.documentWideCheckWork = {
-            description:
-                "Whether to show a single check-work button for the entire document.",
-            createComponentOfType: "boolean",
-            createStateVariable: "documentWideCheckWork",
-            defaultValue: false,
-            public: true,
-        };
-        attributes.showCorrectness = {
-            createComponentOfType: "boolean",
-            createStateVariable: "showCorrectnessPreliminary",
-            defaultValue: true,
-            description:
-                "Whether to display correctness indicators next to answers.",
-        };
-        attributes.colorCorrectness = {
-            createComponentOfType: "boolean",
-            createStateVariable: "colorCorrectnessPreliminary",
-            defaultValue: true,
-            description:
-                "Whether to color answer regions based on correctness.",
-        };
-        attributes.forceIndividualAnswerColoring = {
-            createComponentOfType: "boolean",
-            createStateVariable: "forceIndividualAnswerColoring",
-            defaultValue: false,
-            description:
-                "Whether to color individual answer regions even when document-wide check work is enabled.",
-        };
-        attributes.submitLabel = {
-            description:
-                "Label for the submit button when correctness is shown.",
-            createComponentOfType: "text",
-            createStateVariable: "submitLabel",
-            defaultValue: "Check Work",
-            public: true,
-            forRenderer: true,
-        };
-        attributes.submitLabelNoCorrectness = {
-            description:
-                "Label for the submit button when correctness is not shown.",
-            createComponentOfType: "text",
-            createStateVariable: "submitLabelNoCorrectness",
-            defaultValue: "Submit Response",
-            public: true,
-            forRenderer: true,
-        };
-
-        attributes.displayDigitsForCreditAchieved = {
-            description:
-                "Number of significant digits to display for credit achieved.",
-            createComponentOfType: "integer",
-            createStateVariable: "displayDigitsForCreditAchieved",
-            defaultValue: 3,
-            public: true,
-        };
+        // The document shares the scored-section attributes (score aggregation
+        // plus section-wide check work), but always aggregates the scores of
+        // its children and has no enclosing section to weight it, so it drops
+        // the `aggregateScores`/`weight` attributes.
+        let scoredAttributes = returnScoredSectionAttributes();
+        delete scoredAttributes.aggregateScores;
+        delete scoredAttributes.weight;
+        Object.assign(attributes, scoredAttributes);
 
         // at this point, we are creating these attributes
         // so that having them in the doenetML is valid
@@ -113,6 +74,24 @@ export default class Document extends BaseComponent {
         attributes.type = {
             createPrimitiveOfType: "string",
             description: "Document type identifier.",
+        };
+
+        // `suggestedValues`, not `validValues` — see the contract on
+        // `AttributeDefinition`. The roster of translated languages is not the
+        // set of tags an author may write, so these are offered and never
+        // enforced.
+        attributes.lang = {
+            createPrimitiveOfType: "string",
+            description:
+                'BCP-47 language tag for the document\'s content, e.g. "es" or "es-MX". ' +
+                "Overrides the locale supplied by the hosting page. Any language tag may " +
+                "be used; the suggested values are the languages DoenetML ships " +
+                "translations for, and content in any other language still renders with " +
+                "its computed prose in English.",
+            suggestedValues: SUPPORTED_LOCALES.map(({ locale, label }) => ({
+                value: locale,
+                description: label,
+            })),
         };
 
         return attributes;
@@ -137,6 +116,10 @@ export default class Document extends BaseComponent {
                 componentTypes: ["styleDefinition"],
             },
             {
+                group: "stylePalettes",
+                componentTypes: ["stylePalette"],
+            },
+            {
                 group: "feedbackDefinitions",
                 componentTypes: ["feedbackDefinition"],
             },
@@ -149,6 +132,14 @@ export default class Document extends BaseComponent {
 
     static returnStateVariableDefinitions() {
         let stateVariableDefinitions = super.returnStateVariableDefinitions();
+
+        // How the document numbers the top-level divisions, counting through
+        // any `<div>` or `<cascade>` among them, from the `initializeCounters`
+        // the hosting page passed in. See `utils/sequenceNumbering.js`.
+        stateVariableDefinitions.divisionNumbersOfChildren =
+            returnSequenceNumbersOfChildrenDefinition(DIVISION_SEQUENCE, {
+                isDocument: true,
+            });
 
         // Note: style definition state variables allow one to redefine the style
         // via styledefinitions inside a setup in the document
@@ -168,7 +159,30 @@ export default class Document extends BaseComponent {
             returnScoredSectionStateVariableDefinition(),
         );
 
+        // The document is the top-level scored container and always aggregates
+        // the scores of its children, so it drops the opt-in `aggregateScores`
+        // state variable.
         delete stateVariableDefinitions.aggregateScores;
+
+        // `creditAchievedForProgress` exists so a `<cascade>` can ask whether a
+        // step is complete. A document is never a step of one, and the shared
+        // definition is written against the `aggregateScores` just deleted, so
+        // it goes too rather than being overridden the way `creditAchieved` is.
+        delete stateVariableDefinitions.creditAchievedForProgress;
+
+        // The shared submit labels read the *enclosing* document's language,
+        // which is right for everything inside a document and wrong for the
+        // document itself: an ancestor dependency skips the component it runs
+        // on, so a root `<document lang="es">` would label its own
+        // section-wide check-work button against the host's locale rather than
+        // the one it declares. Re-take them, reading its own `locale`.
+        Object.assign(
+            stateVariableDefinitions,
+            returnSubmitLabelStateVariableDefinitions({
+                ownLocale: true,
+                button: "the section-wide submit button",
+            }),
+        );
 
         stateVariableDefinitions.titleChildName = {
             forRenderer: true,
@@ -268,6 +282,79 @@ export default class Document extends BaseComponent {
                         ],
                     };
                 }
+            },
+        };
+
+        // The content's language, as a BCP-47 tag. Drives translation of the
+        // prose the core computes (style descriptions and the like) and, via
+        // `renderedLang` below, the `lang` attribute the DOM carries over a
+        // nested document's subtree — which is what lets a screen reader
+        // pronounce that content correctly.
+        //
+        // Precedence: an authored `lang` attribute wins over the locale the
+        // hosting page supplied via `setLocaleData`, which falls back to "en".
+        // The author knows what language they wrote in; the host only knows
+        // what language it would prefer.
+        stateVariableDefinitions.locale = {
+            description:
+                "The BCP-47 language tag in effect for the document's content.",
+            public: true,
+            shadowingInstructions: {
+                createComponentOfType: "text",
+            },
+            // `renderedLang` is the tag the section renderer writes as a
+            // `lang` attribute, or null for no attribute at all (#1546). The
+            // same language as `locale`, narrowed to where the DOM has
+            // something to add: only a nested document, and only when its
+            // language differs from the one already in effect around it.
+            //
+            // The viewer labels the whole activity from the outermost
+            // document's language, on the wrapper it renders around it. So the
+            // outermost document needs no tag of its own, a nested one that
+            // merely restates the surrounding language would say nothing new,
+            // and "already in effect" is known here at every depth.
+            additionalStateVariablesDefined: [
+                { variableName: "renderedLang", forRenderer: true },
+            ],
+            returnDependencies: () => ({
+                lang: {
+                    dependencyType: "attributePrimitive",
+                    attributeName: "lang",
+                },
+                hostLocale: {
+                    dependencyType: "locale",
+                },
+                documentAncestor: {
+                    dependencyType: "ancestor",
+                    componentType: "document",
+                    variableNames: ["locale"],
+                },
+            }),
+            definition({ dependencyValues }) {
+                // The language already in effect around this document, if it
+                // is nested in one: every document above it either declared
+                // its own or inherited one the same way, so that chain is
+                // resolved by the time it gets here.
+                const inherited =
+                    dependencyValues.documentAncestor?.stateValues.locale;
+                // An enclosing document stands in for the host's locale, so a
+                // nested document that declares no language of its own follows
+                // the one it sits in rather than jumping back to the host's.
+                // `resolveDocumentLocale` does the rest: it trims, so a blank
+                // `lang` counts as absent, and normalizes, so the comparison
+                // below is between canonical tags.
+                const locale = resolveDocumentLocale(
+                    dependencyValues.lang,
+                    inherited ?? dependencyValues.hostLocale,
+                );
+                return {
+                    setValue: {
+                        locale,
+                        // Silent wherever the DOM already says this language.
+                        renderedLang:
+                            inherited && locale !== inherited ? locale : null,
+                    },
+                };
             },
         };
 
@@ -432,6 +519,11 @@ export default class Document extends BaseComponent {
             },
         };
 
+        // Overrides the shared `creditAchieved` for two reasons: that version
+        // returns 0 unless `aggregateScores` is enabled (the document always
+        // aggregates), and this version aggregates from the document-specific
+        // `componentCreditAchieved` array (which the core also reads to report
+        // per-item scores to the host) instead of re-resolving each descendant.
         stateVariableDefinitions.creditAchieved = {
             description:
                 "Aggregate credit achieved (0 to 1) for scored content in the document.",
@@ -509,6 +601,18 @@ export default class Document extends BaseComponent {
             },
         };
 
+        // Overrides the shared `creditAchievedForCheckWork` for the same reason
+        // as `creditAchieved` above: the document always aggregates, rather
+        // than only when `aggregateScores` is enabled. The rule is unchanged,
+        // so it still comes from the shared definition.
+        stateVariableDefinitions.creditAchievedForCheckWork =
+            returnCheckWorkCreditStateVariableDefinition({
+                alwaysAggregate: true,
+            });
+
+        // Overrides the shared `creditAchievedIfSubmit` for the same reason as
+        // `creditAchieved` above: the document always aggregates, rather than
+        // only when `aggregateScores` is enabled.
         stateVariableDefinitions.creditAchievedIfSubmit = {
             defaultValue: 0,
             stateVariablesDeterminingDependencies: ["scoredDescendants"],
@@ -628,45 +732,6 @@ export default class Document extends BaseComponent {
             },
         };
 
-        stateVariableDefinitions.createSubmitAllButton = {
-            forRenderer: true,
-            additionalStateVariablesDefined: [
-                "suppressAnswerSubmitButtons",
-                "descendantColorCorrectnessBasedOnIdx",
-            ],
-            returnDependencies: () => ({
-                documentWideCheckWork: {
-                    dependencyType: "stateVariable",
-                    variableName: "documentWideCheckWork",
-                },
-                forceIndividualAnswerColoring: {
-                    dependencyType: "stateVariable",
-                    variableName: "forceIndividualAnswerColoring",
-                },
-            }),
-            definition({ dependencyValues, componentIdx }) {
-                let createSubmitAllButton = false;
-                let suppressAnswerSubmitButtons = false;
-                let descendantColorCorrectnessBasedOnIdx = null;
-
-                if (dependencyValues.documentWideCheckWork) {
-                    createSubmitAllButton = true;
-                    suppressAnswerSubmitButtons = true;
-                    if (!dependencyValues.forceIndividualAnswerColoring) {
-                        descendantColorCorrectnessBasedOnIdx = componentIdx;
-                    }
-                }
-
-                return {
-                    setValue: {
-                        createSubmitAllButton,
-                        suppressAnswerSubmitButtons,
-                        descendantColorCorrectnessBasedOnIdx,
-                    },
-                };
-            },
-        };
-
         stateVariableDefinitions.containerTag = {
             forRenderer: true,
             returnDependencies: () => ({}),
@@ -717,27 +782,27 @@ export default class Document extends BaseComponent {
             if (desiredVariant.index !== undefined) {
                 let desiredVariantIndex = Number(desiredVariant.index);
                 if (!Number.isFinite(desiredVariantIndex)) {
-                    core.addDiagnostic({
-                        type: "info",
-                        message:
-                            "Variant index " +
-                            desiredVariant.index +
-                            " must be a number",
-                        position: serializedComponent.position,
-                        sourceDoc: serializedComponent.sourceDoc,
-                    });
+                    core.addDiagnostic(
+                        codedDiagnostic({
+                            type: "info",
+                            code: "doenet-i0010",
+                            args: { index: String(desiredVariant.index) },
+                            position: serializedComponent.position,
+                            sourceDoc: serializedComponent.sourceDoc,
+                        }),
+                    );
                     variantIndex = 1;
                 } else {
                     if (!Number.isInteger(desiredVariantIndex)) {
-                        core.addDiagnostic({
-                            type: "info",
-                            message:
-                                "Variant index " +
-                                desiredVariant.index +
-                                " must be an integer",
-                            position: serializedComponent.position,
-                            sourceDoc: serializedComponent.sourceDoc,
-                        });
+                        core.addDiagnostic(
+                            codedDiagnostic({
+                                type: "info",
+                                code: "doenet-i0011",
+                                args: { index: String(desiredVariant.index) },
+                                position: serializedComponent.position,
+                                sourceDoc: serializedComponent.sourceDoc,
+                            }),
+                        );
                         desiredVariantIndex = Math.round(desiredVariantIndex);
                     }
                     let indexFrom0 = (desiredVariantIndex - 1) % numVariants;

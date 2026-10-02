@@ -40,6 +40,14 @@ const PassThroughWithoutTagConverter: ComponentWithPassthroughChildren = {
     component: PretextComponent._PassThroughWithoutTag,
     passthroughChildren: true,
 };
+/**
+ * Special converter only used for logging.
+ */
+const _DEBUG_PassThroughWithLoggingConverter: ComponentWithPassthroughChildren =
+    {
+        component: PretextComponent._PassThroughWithLogging,
+        passthroughChildren: true,
+    };
 const OmitElementConverter = {
     component: PretextComponent._Omit,
     passthroughChildren: false,
@@ -69,10 +77,108 @@ function passThroughWithRenamedTag(
 }
 
 /**
+ * Component that renders the value of `props[attr]` and nothing else. This can be used to render the `value` or `text` prop of a component.
+ */
+function showAttrOnly<T extends string>(
+    attr: T,
+): { component: BasicComponent<{ props: { [K in T]: string } }> } {
+    return {
+        component: ({ node }) => {
+            return node.data.props[attr];
+        },
+    };
+}
+
+/**
  * A map of tag names to components. This is used for naive component rendering, where the
  * tag name uniquely determines the component to render.
  */
 export const PRETEXT_TEXT_MODE_COMPONENTS: RendererObject = {
+    image: {
+        component: PretextComponent.Image,
+        passthroughChildren: true,
+    },
+    extractMathOperator: {
+        component: PretextComponent.ExtractMathOperator,
+    },
+    evaluate: {
+        component: PretextComponent.Math,
+    },
+    function: {
+        component: PretextComponent.Math,
+    },
+    extractMath: {
+        component: PretextComponent.Math,
+    },
+    intComma: showAttrOnly("text"),
+    integer: showAttrOnly("text"),
+    interval: {
+        component: PretextComponent.Math,
+    },
+    ion: {
+        component: PretextComponent.Math,
+    },
+    ionicCompound: {
+        component: PretextComponent.Math,
+    },
+    isBetween: {
+        component: PretextComponent.Boolean,
+    },
+    isInteger: {
+        component: PretextComponent.Boolean,
+    },
+    isNumber: {
+        component: PretextComponent.Boolean,
+    },
+    // The label of an input or answer is printed by that component (see
+    // `detachLabelChildren`); a slider's or button's is not printed. A label written on
+    // its own is printed where it stands.
+    label: { component: PretextComponent.Label, passthroughChildren: true },
+    latex: showAttrOnly("text"),
+    matrix: {
+        component: PretextComponent.Math,
+    },
+    matrixInput: {
+        component: PretextComponent.MathInput,
+    },
+    orbitalDiagramInput: {
+        component: PretextComponent.MathInput,
+    },
+    paginator: PassThroughWithoutTagConverter,
+    paginatorControls: OmitElementConverter,
+    pluralize: showAttrOnly("text"),
+    hasSameFactoring: {
+        component: PretextComponent.Boolean,
+    },
+    displayDoenetML: {
+        component: PretextComponent.DisplayDoenetML,
+    },
+    spreadsheet: {
+        component: PretextComponent.Spreadsheet,
+    },
+    // `<tabular>`/`<row>`/`<cell>` keep their names in PreTeXt, but not their
+    // attribute spellings, and a `<col>` has to be written from the
+    // `<tabular>`'s `columnSpecs` — so they cannot ride the pass-through
+    // fallback.
+    tabular: {
+        component: PretextComponent.Tabular,
+        passthroughChildren: true,
+    },
+    row: {
+        component: PretextComponent.Row,
+        passthroughChildren: true,
+    },
+    cell: {
+        component: PretextComponent.Cell,
+        passthroughChildren: true,
+    },
+    booleanInput: {
+        component: PretextComponent.MathInput,
+    },
+    asList: {
+        component: PretextComponent.asList,
+        passthroughChildren: true,
+    },
     orbitalDiagram: {
         component: PretextComponent.OrbitalDiagram,
     },
@@ -104,6 +210,7 @@ export const PRETEXT_TEXT_MODE_COMPONENTS: RendererObject = {
     men: { component: PretextComponent.DisplayMathNumbered },
     mdn: { component: PretextComponent.DisplayMathNumbered },
     math: { component: PretextComponent.Math },
+    derivative: { component: PretextComponent.Math },
     graph: { component: PretextComponent.Graph },
     point: { component: PretextComponent.PointInText },
     division: {
@@ -144,11 +251,16 @@ export const PRETEXT_TEXT_MODE_COMPONENTS: RendererObject = {
     aside: TheoremLikeConverter,
     note: TheoremLikeConverter,
     problem: TheoremLikeConverter,
+    // An item of a `<problems>` or `<exercises>` printed on a worksheet; see
+    // `arrangePrintoutPages`.
+    exercise: TheoremLikeConverter,
 
     // Inline text formatting elements. These are the same in Doenet and Pretext
     alert: NoProcessingConverter,
     attr: NoProcessingConverter,
+    delete: NoProcessingConverter,
     em: NoProcessingConverter,
+    insert: NoProcessingConverter,
     c: NoProcessingConverter,
     q: NoProcessingConverter,
     pre: NoProcessingConverter,
@@ -174,20 +286,47 @@ export const PRETEXT_TEXT_MODE_COMPONENTS: RendererObject = {
         component: PretextComponent._PassThroughWithTagAndNewline,
         passthroughChildren: true,
     },
+    // Inserted around a document that needs room for a reader to write; see
+    // `addWritingSpace`.
+    handout: {
+        component: PretextComponent._PassThroughWithTagAndNewline,
+        passthroughChildren: true,
+    },
+    // Inserted around a document written in pages, which are its children; see
+    // `arrangePrintoutPages`.
+    worksheet: {
+        component: PretextComponent._PassThroughWithTagAndNewline,
+        passthroughChildren: true,
+    },
+    page: {
+        component: PretextComponent._PassThroughWithTagAndNewline,
+        passthroughChildren: true,
+    },
 
     // Tags where only the capitalization changes
     sideBySide: passThroughWithRenamedTag("sidebyside"),
     blockQuote: passThroughWithRenamedTag("blockquote"),
 
+    // Tags PreTeXt spells differently. A footnote is `<fn>` there; left unmapped it
+    // reaches the fallback renderer, which emits a literal `<footnote>` that PreTeXt has
+    // no template for, so the note's text runs on inside the sentence that cited it.
+    footnote: passThroughWithRenamedTag("fn"),
+
     // Tags with no representation in PreTeXt
     br: OmitElementConverter,
     hr: OmitElementConverter,
+    polygon: OmitElementConverter,
 
     // DoenetML documents all start with `<document>` (if the user didn't supply it, it is automatically added).
     // This should not be included in Pretext.
     document: PassThroughWithoutTagConverter,
     div: PassThroughWithoutTagConverter,
     cascade: PassThroughWithoutTagConverter,
+
+    // XXX: Currently we have no access to the children of <solution>. Update this to a passthrough when we do.
+    solution: _DEBUG_PassThroughWithLoggingConverter,
+    // XXX: <givenAnswer> should be renamed to <answer> in PreTeXt, but we currently don't have access to the children. Update this when we do.
+    givenAnswer: _DEBUG_PassThroughWithLoggingConverter,
 
     // Provide a renderer for unrecognized elements. This allows us to support
     // pretext tags we don't currently know about.

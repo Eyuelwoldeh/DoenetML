@@ -1,9 +1,15 @@
 import InlineComponent from "../abstract/InlineComponent";
 import me from "math-expressions";
 import {
+    contentTranslator,
+    returnContentLocaleDependencies,
+} from "../../utils/contentLocale";
+const { gcd } = me.math;
+import {
     returnSelectedStyleStateVariableDefinition,
     returnTextStyleDescriptionDefinitions,
 } from "@doenet/utils";
+import { codedDiagnostic } from "../../utils/diagnostics";
 
 export default class IonicCompound extends InlineComponent {
     static componentType = "ionicCompound";
@@ -73,11 +79,10 @@ export default class IonicCompound extends InlineComponent {
                 );
 
                 if (charges.length !== 2) {
-                    let warning = {
-                        message:
-                            "Have not implemented ionic compound for anything other than two ions.",
+                    let warning = codedDiagnostic({
                         type: "warning",
-                    };
+                        code: "doenet-w0053",
+                    });
                     return {
                         setValue: { ionicCompound: null },
                         sendDiagnostics: [warning],
@@ -85,11 +90,10 @@ export default class IonicCompound extends InlineComponent {
                 }
 
                 if (!(charges[0] * charges[1] < 0)) {
-                    let warning = {
-                        message:
-                            "Ionic compound implemented only for one cation and one anion.",
+                    let warning = codedDiagnostic({
                         type: "warning",
-                    };
+                        code: "doenet-w0054",
+                    });
                     return {
                         setValue: { ionicCompound: null },
                         sendDiagnostics: [warning],
@@ -99,9 +103,9 @@ export default class IonicCompound extends InlineComponent {
                 let n1 = Math.abs(charges[1]);
                 let n2 = Math.abs(charges[0]);
 
-                let gcd = me.math.gcd(n1, n2);
-                n1 /= gcd;
-                n2 /= gcd;
+                let computedGcd = gcd(n1, n2);
+                n1 /= computedGcd;
+                n2 /= computedGcd;
 
                 let ionicCompound = [
                     {
@@ -183,6 +187,7 @@ export default class IonicCompound extends InlineComponent {
                     dependencyType: "stateVariable",
                     variableName: "ionicCompound",
                 },
+                ...returnContentLocaleDependencies(),
             }),
             definition({ dependencyValues }) {
                 let latex;
@@ -198,7 +203,8 @@ export default class IonicCompound extends InlineComponent {
                     }
                     latex = parts.join(" ");
                 } else {
-                    latex = "[\\text{Invalid Ionic Compound}]";
+                    const t = contentTranslator(dependencyValues);
+                    latex = `[\\text{${t("chemistry-invalid-ionic-compound")}}]`;
                 }
                 return {
                     setValue: { latex },
@@ -218,6 +224,7 @@ export default class IonicCompound extends InlineComponent {
                     dependencyType: "stateVariable",
                     variableName: "ionicCompound",
                 },
+                ...returnContentLocaleDependencies(),
             }),
             definition({ dependencyValues }) {
                 let text;
@@ -233,7 +240,8 @@ export default class IonicCompound extends InlineComponent {
                     }
                     text = parts.join(" ");
                 } else {
-                    text = "[Invalid Ionic Compound]";
+                    const t = contentTranslator(dependencyValues);
+                    text = `[${t("chemistry-invalid-ionic-compound")}]`;
                 }
                 return {
                     setValue: { text },

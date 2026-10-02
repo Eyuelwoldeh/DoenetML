@@ -86,6 +86,63 @@ describe("toAdditionalDiagnosticsForLsp", () => {
         });
     });
 
+    // `code` is the LSP field a stable diagnostic name belongs in, and where a
+    // `codeDescription` link will attach (#1548). Only migrated records carry
+    // one (#1518), and `code` is optional in LSP, so a legacy record must come
+    // out without the key at all rather than with an explicit `undefined`.
+    it("passes a migrated record's stable code through to LSP", () => {
+        const coded: WarningRecord = {
+            type: "warning",
+            message: "numDimensions mismatch in ray.",
+            code: "doenet-w0006",
+            position: dastPos(2, 3, 2, 7),
+        };
+        const legacy: WarningRecord = {
+            type: "warning",
+            message: "not migrated yet",
+            position: dastPos(3, 1, 3, 4),
+        };
+        const out = toAdditionalDiagnosticsForLsp({
+            diagnostics: [coded, legacy],
+            showInfoAnnotations: true,
+            showAccessibilityAnnotations: true,
+        });
+        expect(out[0].code).toBe("doenet-w0006");
+        expect(out[1]).not.toHaveProperty("code");
+        // A code with no blanks to fill carries no arguments, so nothing is
+        // put in `data` for it either.
+        expect(out[0]).not.toHaveProperty("data");
+    });
+
+    // `dedupeLspDiagnostics` keys a coded record on its code *and* its
+    // arguments: one component can raise the same code twice with different
+    // arguments, and every diagnostic its state variables raise is stamped
+    // with the component's span, so the code alone would collapse two real
+    // problems into one. `data` is where the arguments ride along.
+    it("forwards a coded record's arguments in `data` so the dedupe can tell occurrences apart", () => {
+        const badMaximum: WarningRecord = {
+            type: "warning",
+            message: "Ignoring non-numerical maximum of function.",
+            code: "doenet-w0040",
+            args: { type: "maximum" },
+            position: dastPos(1, 8, 1, 66),
+        };
+        const badMinimum: WarningRecord = {
+            type: "warning",
+            message: "Ignoring non-numerical minimum of function.",
+            code: "doenet-w0040",
+            args: { type: "minimum" },
+            position: dastPos(1, 8, 1, 66),
+        };
+        const out = toAdditionalDiagnosticsForLsp({
+            diagnostics: [badMaximum, badMinimum],
+            showInfoAnnotations: true,
+            showAccessibilityAnnotations: true,
+        });
+        expect(out[0].data).toEqual({ args: { type: "maximum" } });
+        expect(out[1].data).toEqual({ args: { type: "minimum" } });
+    });
+
     it("drops diagnostics without a position", () => {
         // The filter in `toAdditionalDiagnosticsForLsp` skips
         // position-less records — `dastPositionToLspRange` would
@@ -130,5 +187,46 @@ describe("toAdditionalDiagnosticsForLsp", () => {
         });
         expect(out).toHaveLength(1);
         expect(out[0].message).toBe("W");
+    });
+    it("shows the accessibility heading in the reader's language, keeping the keys that classify it", () => {
+        // `source` is reader-facing text, so it follows `uiLocale`. Nothing
+        // may key on the English of it: `getDiagnosticHeadingClass` in
+        // `@doenet/codemirror` also matches `code` and `markClass`, and those
+        // are what still say which level this is once the words change.
+        const accessibility: DiagnosticRecord = {
+            type: "accessibility",
+            level: 1,
+            message: "A",
+            position: dastPos(1, 1, 1, 2),
+        };
+        const [lsp] = toAdditionalDiagnosticsForLsp({
+            diagnostics: [accessibility],
+            showInfoAnnotations: false,
+            showAccessibilityAnnotations: true,
+            accessibilityHeadings: {
+                level1: "Incumplimiento de accesibilidad WCAG AA",
+                level2: "Aviso de accesibilidad",
+            },
+        });
+        expect(lsp.source).toBe("Incumplimiento de accesibilidad WCAG AA");
+        expect(lsp.code).toBe("accessibility-level-1");
+        expect(lsp.markClass).toContain(
+            "cm-doenet-accessibility-diagnostic-level-1",
+        );
+    });
+
+    it("keeps the English headings for a caller that offers no translation", () => {
+        const accessibility: DiagnosticRecord = {
+            type: "accessibility",
+            level: 2,
+            message: "A",
+            position: dastPos(1, 1, 1, 2),
+        };
+        const [lsp] = toAdditionalDiagnosticsForLsp({
+            diagnostics: [accessibility],
+            showInfoAnnotations: false,
+            showAccessibilityAnnotations: true,
+        });
+        expect(lsp.source).toBe("Accessibility alert");
     });
 });

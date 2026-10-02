@@ -1,0 +1,187 @@
+import type { StylePalette } from "./types";
+
+/**
+ * A ten-style palette of maximally varied hues, adapted from the widely used
+ * Category10 sequence (D3 / matplotlib's `tab10`). It exists for documents
+ * that need many styles whose distinctions are obvious at a glance: no two
+ * styles fall below CIEDE2000 dE 12 for typical color vision in either mode,
+ * the widest spread of any built-in palette, and the ten hues carry
+ * conventional names (blue, orange, green, red, ...) that make style
+ * descriptions easy to talk about.
+ *
+ * Unlike `okabeIto`, `tolBright`, `tolMuted`, `tolHighContrast`, and `ibm`,
+ * this palette is NOT engineered for color vision deficiency: several pairs
+ * (notably green/olive and blue/purple) converge under red-green CVD. It
+ * varies marker shapes and line styles across all ten styles so the
+ * distinctions never rest on color alone, and a reader who needs different
+ * colors can override the palette entirely. Prefer a colorblind-friendly
+ * palette when the choice is yours.
+ *
+ * Light-mode anchors keep the canonical colors wherever they meet Doenet's
+ * contrast thresholds on white and are darkened chromaticity-preserving
+ * where they do not (with further-darkened text variants where a graphic
+ * anchor sits below 4.5:1); the green, brown, and olive are darkened further
+ * than contrast alone requires, to spread the lightness ladder that
+ * red-green CVD leaves as the only distinguishing channel. Dark mode
+ * lightens each hue back over the dark canvas. Color words are pinned only
+ * where the perceptual matcher's twelve-word vocabulary is too coarse (e.g.
+ * "olive") or rounds a borderline hue to a neighbouring family.
+ */
+export const categoricalPalette: StylePalette = {
+    name: "categorical",
+    description:
+        "Ten maximally varied hues adapted from the Category10 sequence, for documents needing many obviously distinct styles.",
+    styles: {
+        1: {
+            lineColor: "#1f77b4",
+            markerColor: "#1f77b4",
+            fillColor: "#1f77b4",
+            highContrastColor: "#1f77b4",
+            lineColorDarkMode: "#5ba3dd",
+            markerColorDarkMode: "#5ba3dd",
+            fillColorDarkMode: "#5ba3dd",
+            lineWidth: 4,
+            markerStyle: "circle",
+        },
+        2: {
+            lineColor: "#e7730c",
+            markerColor: "#e7730c",
+            fillColor: "#e7730c",
+            textColor: "#b95b07",
+            highContrastColor: "#b95b07",
+            lineColorDarkMode: "#ff9d3c",
+            markerColorDarkMode: "#ff9d3c",
+            fillColorDarkMode: "#ff9d3c",
+            textColorDarkMode: "#ff9d3c",
+            lineWidth: 2,
+            markerStyle: "square",
+        },
+        3: {
+            lineColor: "#217a21",
+            markerColor: "#217a21",
+            fillColor: "#217a21",
+            textColor: "#217a21",
+            highContrastColor: "#217a21",
+            lineColorDarkMode: "#2ca02c",
+            markerColorDarkMode: "#2ca02c",
+            fillColorDarkMode: "#2ca02c",
+            textColorDarkMode: "#2ca02c",
+            lineWidth: 3,
+            markerStyle: "triangle",
+        },
+        4: {
+            lineColor: "#d62728",
+            markerColor: "#d62728",
+            fillColor: "#d62728",
+            textColor: "#d62728",
+            highContrastColor: "#d62728",
+            lineColorDarkMode: "#e2494a",
+            markerColorDarkMode: "#e2494a",
+            fillColorDarkMode: "#e2494a",
+            textColorDarkMode: "#e2494a",
+            lineWidth: 2,
+            markerStyle: "diamond",
+        },
+        5: {
+            lineColor: "#9467bd",
+            markerColor: "#9467bd",
+            fillColor: "#9467bd",
+            textColor: "#8e62b5",
+            highContrastColor: "#8e62b5",
+            lineColorDarkMode: "#b48fd6",
+            markerColorDarkMode: "#b48fd6",
+            fillColorDarkMode: "#b48fd6",
+            textColorDarkMode: "#b48fd6",
+            lineWidth: 2,
+            markerStyle: "triangleDown",
+        },
+        6: {
+            lineColor: "#7a4a41",
+            markerColor: "#7a4a41",
+            fillColor: "#7a4a41",
+            textColor: "#7a4a41",
+            highContrastColor: "#7a4a41",
+            lineColorDarkMode: "#a9705f",
+            markerColorDarkMode: "#a9705f",
+            fillColorDarkMode: "#a9705f",
+            textColorDarkMode: "#a9705f",
+            lineColorWordDarkMode: "brown",
+            markerColorWordDarkMode: "brown",
+            fillColorWordDarkMode: "brown",
+            textColorWordDarkMode: "brown",
+            highContrastColorWordDarkMode: "brown",
+            lineWidth: 2,
+            markerStyle: "triangleLeft",
+        },
+        7: {
+            lineColor: "#d670b7",
+            markerColor: "#d670b7",
+            fillColor: "#d670b7",
+            textColor: "#ab5892",
+            highContrastColor: "#ab5892",
+            textColorWord: "pink",
+            highContrastColorWord: "pink",
+            lineColorDarkMode: "#e377c2",
+            markerColorDarkMode: "#e377c2",
+            fillColorDarkMode: "#e377c2",
+            textColorDarkMode: "#e377c2",
+            lineWidth: 3,
+            lineStyle: "dashed",
+            markerStyle: "triangleRight",
+        },
+        8: {
+            lineColor: "#7f7f7f",
+            markerColor: "#7f7f7f",
+            fillColor: "#7f7f7f",
+            textColor: "#757575",
+            highContrastColor: "#757575",
+            lineColorDarkMode: "#a8a8a8",
+            markerColorDarkMode: "#a8a8a8",
+            fillColorDarkMode: "#a8a8a8",
+            textColorDarkMode: "#a8a8a8",
+            lineWidth: 1,
+            lineStyle: "dotted",
+            markerStyle: "circle",
+        },
+        9: {
+            lineColor: "#6e6e12",
+            markerColor: "#6e6e12",
+            fillColor: "#6e6e12",
+            textColor: "#6e6e12",
+            highContrastColor: "#6e6e12",
+            lineColorWord: "olive",
+            markerColorWord: "olive",
+            fillColorWord: "olive",
+            textColorWord: "olive",
+            highContrastColorWord: "olive",
+            lineColorDarkMode: "#bcbd22",
+            markerColorDarkMode: "#bcbd22",
+            fillColorDarkMode: "#bcbd22",
+            textColorDarkMode: "#bcbd22",
+            lineColorWordDarkMode: "olive",
+            markerColorWordDarkMode: "olive",
+            fillColorWordDarkMode: "olive",
+            textColorWordDarkMode: "olive",
+            highContrastColorWordDarkMode: "olive",
+            lineWidth: 2,
+            lineStyle: "dashed",
+            markerStyle: "square",
+        },
+        10: {
+            lineColor: "#12a2b1",
+            markerColor: "#12a2b1",
+            fillColor: "#12a2b1",
+            textColor: "#0c818e",
+            highContrastColor: "#0c818e",
+            textColorWord: "cyan",
+            highContrastColorWord: "cyan",
+            lineColorDarkMode: "#17becf",
+            markerColorDarkMode: "#17becf",
+            fillColorDarkMode: "#17becf",
+            textColorDarkMode: "#17becf",
+            lineWidth: 2,
+            lineStyle: "dotted",
+            markerStyle: "diamond",
+        },
+    },
+};

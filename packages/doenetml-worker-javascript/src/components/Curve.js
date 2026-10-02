@@ -2,13 +2,17 @@ import GraphicalComponent from "./abstract/GraphicalComponent";
 import { returnBreakStringsSugarFunction } from "./commonsugar/breakstrings";
 
 import me from "math-expressions";
-import { returnBezierFunctions } from "@doenet/utils";
+import {
+    returnBezierFunctions,
+    returnGraphicalStyleDescriptionDefinitions,
+} from "@doenet/utils";
 import {
     returnNumberDisplayAttributeComponentShadowing,
     returnNumberDisplayAttributes,
     returnNumberDisplayStateVariableDefinitions,
 } from "../utils/numberDisplay";
 import { returnWrapNonLabelsDescriptionsSugarFunction } from "../utils/label";
+import { evaluateToNumber, toNumberOrNaN } from "../utils/math";
 
 export default class Curve extends GraphicalComponent {
     constructor(args) {
@@ -331,72 +335,13 @@ export default class Curve extends GraphicalComponent {
             returnNumberDisplayStateVariableDefinitions(),
         );
 
-        stateVariableDefinitions.styleDescription = {
-            description: "A textual description of the curve's style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
+        Object.assign(
+            stateVariableDefinitions,
+            returnGraphicalStyleDescriptionDefinitions({
+                kind: "stroke",
+                noun: "curve",
             }),
-            definition: function ({ dependencyValues }) {
-                let lineColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWordDarkMode;
-                } else {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWord;
-                }
-
-                let styleDescription =
-                    dependencyValues.selectedStyle.lineWidthWord;
-                if (dependencyValues.selectedStyle.lineStyleWord) {
-                    if (styleDescription) {
-                        styleDescription += " ";
-                    }
-                    styleDescription +=
-                        dependencyValues.selectedStyle.lineStyleWord;
-                }
-
-                if (styleDescription) {
-                    styleDescription += " ";
-                }
-
-                styleDescription += lineColorWord;
-
-                return { setValue: { styleDescription } };
-            },
-        };
-
-        stateVariableDefinitions.styleDescriptionWithNoun = {
-            description: 'Style description including the word "curve".',
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                styleDescription: {
-                    dependencyType: "stateVariable",
-                    variableName: "styleDescription",
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let styleDescriptionWithNoun =
-                    dependencyValues.styleDescription + " curve";
-
-                return { setValue: { styleDescriptionWithNoun } };
-            },
-        };
+        );
 
         // fShadow will be null unless curve was created via an adapter
         // In case of adapter,
@@ -597,8 +542,16 @@ export default class Curve extends GraphicalComponent {
                         parMax *= 2;
                     }
                 } else if (dependencyValues.parMaxAttr !== null) {
-                    parMax =
-                        dependencyValues.parMaxAttr.stateValues.value.evaluate_to_constant();
+                    // `evaluate_to_constant()` used to report a non-numeric
+                    // bound (`parMax="a"`) as `null`, and `null` coerces to
+                    // `0` in every arithmetic consumer of `parMax` — including
+                    // `getNearestPointFunctionCurve`, which anchored its search
+                    // at the origin rather than declining. `NaN` is the one
+                    // spelling of "not a number" those consumers test for, and
+                    // is what the engine answers now.
+                    parMax = evaluateToNumber(
+                        dependencyValues.parMaxAttr.stateValues.value,
+                    );
                 } else if (dependencyValues.curveType === "function") {
                     let domain = null;
                     if (dependencyValues.functionChild.length === 1) {
@@ -610,9 +563,16 @@ export default class Curve extends GraphicalComponent {
                     }
                     if (domain !== null) {
                         domain = domain[0];
-                        parMax = me
-                            .fromAst(domain.tree[1][2])
-                            .evaluate_to_constant();
+                        // Same `null` hazard as the `parMaxAttr` branch above,
+                        // and here it is not the downstream consumers that see
+                        // it first: `Math.min(null, x)` below is `Math.min(0, x)`,
+                        // so a `<function>` with a symbolic domain endpoint would
+                        // report a *finite, wrong* `parMax` rather than declining.
+                        // `undefined` is left alone — it means "no domain", which
+                        // the branches below are written around.
+                        parMax = evaluateToNumber(
+                            me.fromAst(domain.tree[1][2]),
+                        );
                     }
                     let graphMin, graphMax;
                     if (dependencyValues.flipFunction) {
@@ -710,8 +670,10 @@ export default class Curve extends GraphicalComponent {
                         parMin = -(dependencyValues.numThroughPoints - 1);
                     }
                 } else if (dependencyValues.parMinAttr !== null) {
-                    parMin =
-                        dependencyValues.parMinAttr.stateValues.value.evaluate_to_constant();
+                    // See `parMax`: `null` here would coerce to `0` downstream.
+                    parMin = evaluateToNumber(
+                        dependencyValues.parMinAttr.stateValues.value,
+                    );
                 } else if (dependencyValues.curveType === "function") {
                     let domain = null;
                     if (dependencyValues.functionChild.length === 1) {
@@ -723,9 +685,11 @@ export default class Curve extends GraphicalComponent {
                     }
                     if (domain !== null) {
                         domain = domain[0];
-                        parMin = me
-                            .fromAst(domain.tree[1][1])
-                            .evaluate_to_constant();
+                        // See `parMax`: `Math.max(null, x)` below is
+                        // `Math.max(0, x)`, not "no bound".
+                        parMin = evaluateToNumber(
+                            me.fromAst(domain.tree[1][1]),
+                        );
                     }
                     let graphMin, graphMax;
                     if (dependencyValues.flipFunction) {
@@ -767,14 +731,34 @@ export default class Curve extends GraphicalComponent {
                 },
             }),
             definition({ dependencyValues }) {
+                // `fromAst` rejects `null` outright, taking down the whole
+                // document instead of producing a curve the renderer can
+                // decline to draw. NaN is a value the tree can hold, and every
+                // consumer already tests the domain for finiteness, so this
+                // degrades to "no finite domain" and the renderer warns.
+                //
+                // Defensive rather than load-bearing: every producer of
+                // `parMin`/`parMax` now yields a number — the attribute path
+                // and the `<function>`-child domain path both go through
+                // `evaluateToNumber`, and the rest assign literals — so
+                // nothing currently reaches this with a non-number. It stays
+                // because the cost of being wrong is the whole document.
                 // closed interval [parMin, parMax]
                 let interval = me.fromAst([
                     "interval",
-                    ["tuple", dependencyValues.parMin, dependencyValues.parMax],
+                    [
+                        "tuple",
+                        toNumberOrNaN(dependencyValues.parMin),
+                        toNumberOrNaN(dependencyValues.parMax),
+                    ],
                     ["tuple", true, true],
                 ]);
+                // One interval, not a list: `fs` shadows this into the `domain`
+                // of each function it creates. That `domain` is an array state
+                // variable and this is not, so each of its entries — here the
+                // one, for the function's one input — gets this whole value.
                 return {
-                    setValue: { domainForFunctions: [interval] },
+                    setValue: { domainForFunctions: interval },
                 };
             },
         };
@@ -1444,12 +1428,10 @@ export default class Curve extends GraphicalComponent {
                     let indices = varEnding
                         .split("_")
                         .map((x) => Number(x) - 1);
-                    if (
-                        !(
-                            indices.length === 2 &&
-                            indices.every((x) => Number.isInteger(x) && x >= 0)
-                        )
-                    ) {
+                    if (!(
+                        indices.length === 2 &&
+                        indices.every((x) => Number.isInteger(x) && x >= 0)
+                    )) {
                         return [];
                     }
 
@@ -1933,12 +1915,10 @@ export default class Curve extends GraphicalComponent {
                     let indices = varEnding
                         .split("_")
                         .map((x) => Number(x) - 1);
-                    if (
-                        !(
-                            indices.length === 2 &&
-                            indices.every((x) => Number.isInteger(x) && x >= 0)
-                        )
-                    ) {
+                    if (!(
+                        indices.length === 2 &&
+                        indices.every((x) => Number.isInteger(x) && x >= 0)
+                    )) {
                         return [];
                     }
 
@@ -2050,10 +2030,9 @@ export default class Curve extends GraphicalComponent {
                             dependencyValuesByKey[arrayKey].controlVectorX;
 
                         if (vectorX) {
-                            let pointX =
-                                dependencyValuesByKey[
-                                    arrayKey
-                                ].throughPointX.evaluate_to_constant();
+                            let pointX = evaluateToNumber(
+                                dependencyValuesByKey[arrayKey].throughPointX,
+                            );
                             newControlValues[arrayKey] = me.fromAst(
                                 pointX + vectorX.tree,
                             );
@@ -4256,12 +4235,9 @@ function getNearestPointFunctionCurve({ dependencyValues, numerics }) {
             // if function isn't defined at current variable value, replace with
             // value at nearest endpoint
 
-            if (
-                !(
-                    Number.isFinite(x1AsFunction) &&
-                    Number.isFinite(x2AsFunction)
-                )
-            ) {
+            if (!(
+                Number.isFinite(x1AsFunction) && Number.isFinite(x2AsFunction)
+            )) {
                 let distLeft, distRight;
                 if (flipFunction) {
                     distLeft = Math.abs(parMin - x2);
@@ -4385,13 +4361,11 @@ function getNearestPointFunctionCurve({ dependencyValues, numerics }) {
 
         let currentD2;
 
-        if (
-            !(
-                result.success &&
-                Number.isFinite(x1AtMin) &&
-                Number.isFinite(x2AtMin)
-            )
-        ) {
+        if (!(
+            result.success &&
+            Number.isFinite(x1AtMin) &&
+            Number.isFinite(x2AtMin)
+        )) {
             currentD2 = Infinity;
         } else {
             if (flipFunction) {
@@ -4591,7 +4565,11 @@ function calculateControlVectorFromSpline({
     let p1, p2, p3;
 
     if (point2) {
-        p2 = point2.map((x) => x.evaluate_to_constant());
+        // `evaluateToNumber`, not the bare call: these feed the arithmetic
+        // below and then `numericEntries`, which asks `Number.isFinite`. A
+        // through point with no numeric value must poison that, not shift the
+        // spline toward wherever it coerces to.
+        p2 = point2.map(evaluateToNumber);
     } else {
         return {
             coordsNumeric: [me.fromAst(NaN), me.fromAst(NaN)],
@@ -4600,16 +4578,16 @@ function calculateControlVectorFromSpline({
     }
 
     if (point3) {
-        p3 = point3.map((x) => x.evaluate_to_constant());
+        p3 = point3.map(evaluateToNumber);
 
         if (point1) {
-            p1 = point1.map((x) => x.evaluate_to_constant());
+            p1 = point1.map(evaluateToNumber);
         } else {
             p1 = [2 * p2[0] - p3[0], 2 * p2[1] - p3[1]];
         }
     } else {
         if (point1) {
-            p1 = point1.map((x) => x.evaluate_to_constant());
+            p1 = point1.map(evaluateToNumber);
             p3 = [2 * p2[0] - p1[0], 2 * p2[1] - p1[1]];
         } else {
             return {

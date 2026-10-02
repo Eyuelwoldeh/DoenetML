@@ -9,7 +9,20 @@ import {
 import {
     returnLabelAttributes,
     returnLabelStateVariableDefinitions,
+    returnLabelChildIndDefinition,
 } from "../utils/label";
+import { codedDiagnostic } from "../utils/diagnostics";
+import {
+    childRendersSomething,
+    listItemChildVisibilityDependency,
+} from "../utils/listItemChild";
+
+/**
+ * How far short of 1 a sum of award credits may fall and still count as full
+ * credit. Far larger than the round-off of any realistic number of additions,
+ * and far smaller than any credit an author would write.
+ */
+const CREDIT_ROUNDOFF_TOLERANCE = 1e-12;
 
 export default class Answer extends InlineComponent {
     constructor(args) {
@@ -156,6 +169,14 @@ export default class Answer extends InlineComponent {
             public: true,
             description:
                 "Maximum number of matching awards whose credits are summed.",
+        };
+        attributes.colorInputsSeparately = {
+            createComponentOfType: "boolean",
+            createStateVariable: "colorInputsSeparately",
+            defaultValue: false,
+            public: true,
+            description:
+                "Attempt to color each input separately based on the awards that reference it, rather than all inputs sharing the same overall credit color.",
         };
         attributes.allowedErrorInNumbers = {
             createComponentOfType: "number",
@@ -757,10 +778,13 @@ export default class Answer extends InlineComponent {
                     if (type.toLowerCase() === "videowatched") {
                         return { success: false };
                     }
-                    diagnostics.push({
-                        message: `Invalid type for answer: ${type}`,
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0078",
+                            args: { type },
+                        }),
+                    );
                     type = "math";
                 }
             } else {
@@ -911,11 +935,14 @@ export default class Answer extends InlineComponent {
                 inputChildren: {
                     dependencyType: "child",
                     childGroups: ["inputs"],
-                    variableNames: ["inline"],
-                    variablesOptional: true,
+                    ...listItemChildVisibilityDependency("inline"),
                 },
             }),
-            definition({ dependencyValues, componentIdx }) {
+            definition({
+                dependencyValues,
+                componentIdx,
+                componentInfoObjects,
+            }) {
                 const isInParentList = Boolean(
                     dependencyValues.parentChildrenToRenderInlineForListItem
                         ?.map((c) => c.componentIdx)
@@ -932,13 +959,19 @@ export default class Answer extends InlineComponent {
                     };
                 }
 
-                // Propagate only to the first non-inline choiceInput input child.
-                // <answer> itself has no top margin to suppress.
+                // Propagate only to the first non-inline choiceInput input child
+                // that is on the screen. <answer> itself has no top margin to
+                // suppress, so its only job here is to name the child the list
+                // item's number lines up with — a hidden `<choiceInput>` is not
+                // that child, and claiming it is would align the number against
+                // nothing (`childRendersSomething()`, the same test the `<li>`,
+                // section, and wrapper links of this chain apply).
                 const firstBlockChoiceInput =
                     dependencyValues.inputChildren?.find(
                         (child) =>
                             child.componentType === "choiceInput" &&
-                            child.stateValues.inline === false,
+                            child.stateValues.inline === false &&
+                            childRendersSomething(child, componentInfoObjects),
                     );
 
                 return {
@@ -957,6 +990,10 @@ export default class Answer extends InlineComponent {
 
         const labelDefinitions = returnLabelStateVariableDefinitions();
         Object.assign(stateVariableDefinitions, labelDefinitions);
+        Object.assign(
+            stateVariableDefinitions,
+            returnLabelChildIndDefinition(),
+        );
 
         stateVariableDefinitions.haveAwardThatRequiresInput = {
             returnDependencies: () => ({
@@ -1158,6 +1195,10 @@ export default class Answer extends InlineComponent {
                     dependencyType: "stateVariable",
                     variableName: "descriptionChildInd",
                 },
+                labelChildInd: {
+                    dependencyType: "stateVariable",
+                    variableName: "labelChildInd",
+                },
             }),
             definition: function ({ dependencyValues }) {
                 const childIndicesToRender = [
@@ -1168,6 +1209,9 @@ export default class Answer extends InlineComponent {
                     childIndicesToRender.push(
                         dependencyValues.descriptionChildInd,
                     );
+                }
+                if (dependencyValues.labelChildInd !== -1) {
+                    childIndicesToRender.push(dependencyValues.labelChildInd);
                 }
 
                 return {
@@ -1221,6 +1265,39 @@ export default class Answer extends InlineComponent {
                         dependencyValues.inputChildrenWithValues[0];
                 }
                 return { setValue: { inputChildWithValues } };
+            },
+        };
+
+        // Lightweight structural version of the answer's input list: just
+        // component indices, no live values.  Used by Award.referencedInputStateVars
+        // so that per-input coloring doesn't become stale every time a user types.
+        stateVariableDefinitions.allInputComponentIdxs = {
+            stateVariablesDeterminingDependencies: [
+                "inputChildRelativeIndices",
+            ],
+            returnDependencies: ({ stateValues }) => ({
+                inputChildren: {
+                    dependencyType: "child",
+                    childGroups: ["inputs"],
+                    childIndices: stateValues.inputChildRelativeIndices,
+                },
+                inputsForAnswer: {
+                    dependencyType: "stateVariable",
+                    variableName: "inputsForAnswer",
+                },
+            }),
+            definition({ dependencyValues }) {
+                const allInputComponentIdxs = new Set([
+                    ...dependencyValues.inputChildren.map(
+                        (c) => c.componentIdx,
+                    ),
+                    ...dependencyValues.inputsForAnswer.map(
+                        (c) => c.componentIdx,
+                    ),
+                ]);
+                return {
+                    setValue: { allInputComponentIdxs },
+                };
             },
         };
 
@@ -2021,34 +2098,8 @@ export default class Answer extends InlineComponent {
                     dependencyType: "stateVariable",
                     variableName: "inputChildren",
                 },
-                sectionAncestor: {
+                ancestorSuppressingAnswerSubmitButtons: {
                     dependencyType: "ancestor",
-                    componentType: "_sectioningComponent",
-                    variableNames: ["suppressAnswerSubmitButtons"],
-                },
-                documentAncestor: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["suppressAnswerSubmitButtons"],
-                },
-                pAncestor: {
-                    dependencyType: "ancestor",
-                    componentType: "p",
-                    variableNames: ["suppressAnswerSubmitButtons"],
-                },
-                liAncestor: {
-                    dependencyType: "ancestor",
-                    componentType: "li",
-                    variableNames: ["suppressAnswerSubmitButtons"],
-                },
-                divAncestor: {
-                    dependencyType: "ancestor",
-                    componentType: "div",
-                    variableNames: ["suppressAnswerSubmitButtons"],
-                },
-                spanAncestor: {
-                    dependencyType: "ancestor",
-                    componentType: "span",
                     variableNames: ["suppressAnswerSubmitButtons"],
                 },
             }),
@@ -2058,18 +2109,8 @@ export default class Answer extends InlineComponent {
                 let delegateCheckWork = false;
 
                 if (
-                    dependencyValues.documentAncestor.stateValues
-                        .suppressAnswerSubmitButtons ||
-                    dependencyValues.sectionAncestor?.stateValues
-                        .suppressAnswerSubmitButtons ||
-                    dependencyValues.pAncestor?.stateValues
-                        .suppressAnswerSubmitButtons ||
-                    dependencyValues.liAncestor?.stateValues
-                        .suppressAnswerSubmitButtons ||
-                    dependencyValues.divAncestor?.stateValues
-                        .suppressAnswerSubmitButtons ||
-                    dependencyValues.spanAncestor?.stateValues
-                        .suppressAnswerSubmitButtons
+                    dependencyValues.ancestorSuppressingAnswerSubmitButtons
+                        ?.stateValues.suppressAnswerSubmitButtons
                 ) {
                     delegateCheckWorkToAncestor = delegateCheckWork = true;
                 } else if (dependencyValues.inputChildren.length === 1) {
@@ -2240,10 +2281,16 @@ export default class Answer extends InlineComponent {
                         }
                     }
 
-                    creditAchieved = Math.min(
-                        1,
-                        awardCredits.reduce((a, c) => a + c, 0),
-                    );
+                    const creditSum = awardCredits.reduce((a, c) => a + c, 0);
+
+                    // Credits that should add up to exactly 1, such as six
+                    // awards of credit="1/6", can fall short of it by
+                    // floating-point round-off. Count a total that close to 1
+                    // as full credit.
+                    creditAchieved =
+                        creditSum > 1 - CREDIT_ROUNDOFF_TOLERANCE
+                            ? 1
+                            : creditSum;
                 }
 
                 // remove any trailing null's in awardsUsed
@@ -2260,6 +2307,68 @@ export default class Answer extends InlineComponent {
                         inputUsedIfSubmit: inputUsed,
                     },
                 };
+            },
+        };
+
+        // Reactive per-input coloring state: maps "componentIdx/propVariable"
+        // keys to a correctness ratio (0–1). It depends primarily on
+        // essential award state updated in submitAnswer(), plus each
+        // award's referenced-input structure.
+        stateVariableDefinitions.creditAchievedPerInput = {
+            returnDependencies: () => ({
+                awardChildren: {
+                    dependencyType: "child",
+                    childGroups: ["awards"],
+                    variableNames: [
+                        "awarded",
+                        "creditAchieved",
+                        "credit",
+                        "referencedInputStateVars",
+                    ],
+                },
+            }),
+            definition({ dependencyValues }) {
+                const maxCreditByKey = {};
+                const actualCreditByKey = {};
+
+                for (const award of dependencyValues.awardChildren) {
+                    const referencedInputStateVars =
+                        award.stateValues.referencedInputStateVars;
+                    const credit = award.stateValues.credit;
+                    const awarded = award.stateValues.awarded;
+                    const creditAchieved = award.stateValues.creditAchieved;
+
+                    for (const {
+                        componentIdx,
+                        propVariable,
+                    } of referencedInputStateVars) {
+                        const key = `${componentIdx}/${propVariable}`;
+                        if (
+                            maxCreditByKey[key] === undefined ||
+                            credit > maxCreditByKey[key]
+                        ) {
+                            maxCreditByKey[key] = credit;
+                        }
+                        if (
+                            awarded &&
+                            (actualCreditByKey[key] === undefined ||
+                                creditAchieved > actualCreditByKey[key])
+                        ) {
+                            actualCreditByKey[key] = creditAchieved;
+                        }
+                    }
+                }
+
+                const creditAchievedPerInput = {};
+                for (const key of Object.keys(maxCreditByKey)) {
+                    const maxCredit = maxCreditByKey[key];
+                    if (maxCredit > 0) {
+                        creditAchievedPerInput[key] =
+                            (actualCreditByKey[key] ?? 0) / maxCredit;
+                    }
+                }
+
+                return { setValue: { creditAchievedPerInput } };
             },
         };
 

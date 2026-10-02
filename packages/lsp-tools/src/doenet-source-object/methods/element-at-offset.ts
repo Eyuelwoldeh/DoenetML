@@ -20,6 +20,7 @@ export function elementAtOffsetWithContext(
     }
 
     let cursorPosition: CursorPosition = "unknown";
+    let cursorIsTopLevelBody = false;
     const prevChar = this.source.charAt(offset - 1);
     const exactNodeAtOffset = this.nodeAtOffset(offset);
     const parent = exactNodeAtOffset ? this.getParent(exactNodeAtOffset) : null;
@@ -27,29 +28,70 @@ export function elementAtOffsetWithContext(
         type: "element",
     });
 
-    if (
-        (exactNodeAtOffset && exactNodeAtOffset !== node) ||
+    // The lezer node immediately to the left of the cursor. When it is an
+    // open tag's `TagName`, the author is still typing that tag's name (the
+    // tag hasn't been terminated with `>` yet). The body-classifying branches
+    // below would otherwise misread such a cursor, because error recovery
+    // gives the half-typed tag an element of its own that wraps whatever
+    // follows: another tag (`<a><nu|<text></text></a>`, #1328), or the
+    // character that ended the name, which becomes text content
+    // (`<p><nu|}</p>`, #1767). A following *close* tag (`<text><nu|</text>`,
+    // #1328) instead leaves the cursor on a close-tag boundary. Detect all of
+    // these so those branches defer to the open-tag-name handling instead.
+    const leftLezerCursor = this._lezerCursor();
+    leftLezerCursor.moveTo(offset, -1);
+    const leftLezerNodeParentName = leftLezerCursor.node.parent?.type?.name as
+        LezerSyntaxNodeName | undefined;
+    const atOpenTagNameEnd =
+        (leftLezerCursor.node.type.name as LezerSyntaxNodeName) === "TagName" &&
+        (leftLezerNodeParentName === "OpenTag" ||
+            leftLezerNodeParentName === "SelfClosingTag");
+
+    // The cursor is in a body when it is not on the containing element itself:
+    // on one of that element's children (the exact node at the offset differs
+    // from it), with no node or parent to place it in, or on the empty-named
+    // element the parser produces for a lone `<` at the top level. A tag name
+    // still being typed (`<p><nu|}</p>`) is left to the `openTagName` handling
+    // below.
+    const cursorIsInSomeBody =
         !exactNodeAtOffset ||
+        exactNodeAtOffset !== node ||
         !parent ||
-        (node?.type === "element" && node.name === "" && parent.type === "root")
-    ) {
-        // If our exact node is not the same as our containing element, then we're a child of the containing
-        // element and so we're in the body.
+        (node?.type === "element" &&
+            node.name === "" &&
+            parent.type === "root");
+    if (!atOpenTagNameEnd && cursorIsInSomeBody) {
         cursorPosition = "body";
     }
 
+    // The cursor sits exactly on an element's opening `<` (`node.start === offset`),
+    // so it is positioned before that element in the containing body rather
+    // than inside the element itself (#1327).
+    //
+    // Excluded when `atOpenTagNameEnd` (`<a><nu|<text></text></a>`, where the
+    // element starting at the cursor is the tag the recovered `<nu>` wrapped):
+    // the author is still typing the open tag name, so we defer to the
+    // `openTagName` handling below rather than treating the cursor as the
+    // parent's body.
     if (
         node?.type === "element" &&
         node.position?.start?.offset === offset &&
-        parent?.type === "element" &&
-        prevChar &&
-        !prevChar.match(/(\s|\n|<)/)
+        !atOpenTagNameEnd
     ) {
         cursorPosition = "body";
-        node = parent as DastElement;
+        const isNamedElement = node.name !== "";
+        if (parent?.type === "element") {
+            node = parent as DastElement;
+        } else {
+            node = null;
+            // Represent top-level body context as `{ node: null, cursorPosition: "body" }`,
+            // but keep a lone `<` as `unknown` so partial-tag handling below
+            // preserves its existing behavior.
+            cursorIsTopLevelBody = parent?.type === "root" && isNamedElement;
+        }
     }
 
-    if (!node) {
+    if (!node && !cursorIsTopLevelBody) {
         cursorPosition = "unknown";
     }
     if (node && cursorPosition === "unknown") {
@@ -62,39 +104,92 @@ export function elementAtOffsetWithContext(
         // XXX Fix this after the CodeMirror update
         // @ts-ignore
         const atNodeBoundary = leftNode.index !== rightNode.index;
-        // If we're at a node boundary, we pick the node to the left if the previous character
-        // is a word character. This should help with completion contexts, since the author
-        // is probably still typing a word, or is expecting completions from the word on the left.
+        // If we're at a node boundary, we pick the node to the left when the author
+        // is probably still typing what sits there: either the previous character is
+        // a word character (so completions should come from the word on the left), or
+        // the cursor is at the end of an open tag's name.
+        //
+        // The second is wider than the first. A lezer `TagName` runs over much more
+        // than `\w` does — `-`, `.`, `:`, and, `\w` being ASCII-only, every accented
+        // or non-Latin letter — so `<p><my-|</p>` is a cursor at the end of a name
+        // being typed, and its completions belong to that name (#1780).
         const lezerNode = atNodeBoundary
-            ? prevChar.match(/\w/)
+            ? prevChar.match(/\w/) || atOpenTagNameEnd
                 ? leftNode
                 : rightNode
             : leftNode;
         const rightNodeType = rightNode.type.name as LezerSyntaxNodeName;
-        if (atNodeBoundary && rightNodeType === "StartCloseTag") {
-            // Cursor is at the boundary between an OpenTag's `>` and the
-            // immediately following close tag's `</` (i.e.
-            // `<mathInput>|</mathInput>` — the very position the
-            // autocompleter drops the cursor after inserting a tag pair).
-            // That's the body of the element on the left. Skip the switch
-            // below — its `EndTag → openTag` case would overwrite this
-            // classification, since `leftNode` here is the OpenTag's `>` token.
+        if (
+            atNodeBoundary &&
+            rightNodeType === "StartCloseTag" &&
+            !atOpenTagNameEnd
+        ) {
+            // Cursor is at the boundary between some element's `>` and the
+            // immediately following close tag's `</`. Whether that `>` opens
+            // or closes an element, the cursor sits in *a* body, so set `body`
+            // and skip the switch below (its `EndTag → openTag` case would
+            // otherwise overwrite this). Which element's body it is depends on
+            // whether the `>` to the left *opens* or *closes* an element.
+            //
+            // Excluded when `atOpenTagNameEnd` (`<text><nu|</text>`), where
+            // `leftNode` is an unterminated open tag's `TagName` rather than a
+            // `>` — there the author is still typing the tag name, so we fall
+            // through to the `openTagName` handling below.
             cursorPosition = "body";
-            node = this.nodeAtOffset(leftNode.from, {
+            const leftElement = this.nodeAtOffset(leftNode.from, {
                 type: "element",
             }) as DastElement | null;
+            const leftParentType = leftNode.parent?.type?.name as
+                LezerSyntaxNodeName | undefined;
+            if (
+                leftElement &&
+                (leftParentType === "CloseTag" ||
+                    leftParentType === "SelfClosingTag")
+            ) {
+                // The token to the left is a close-tag's `>` or a self-closing
+                // `/>`, so it *closes* the element on the left; that element is
+                // finished and the cursor is in the *parent's* body (i.e.
+                // `<p><math>x</math>|</p>` is the body of `<p>`, not `<math>`,
+                // and `<p><math/>|</p>` likewise — #1327).
+                const parentElement = this.getParent(leftElement);
+                node =
+                    parentElement?.type === "element"
+                        ? (parentElement as DastElement)
+                        : null;
+            } else {
+                // The cursor is in the body of the element on the left: either
+                // right after its *open* tag (`<mathInput>|</mathInput>` — the
+                // position the autocompleter drops the cursor after inserting a
+                // tag pair) or within its body content (`<a> |</a>`).
+                node = leftElement;
+            }
         } else {
             const lezerNodeType = lezerNode.type.name as LezerSyntaxNodeName;
             const lezerNodeParentType = lezerNode.parent?.type?.name as
-                | LezerSyntaxNodeName
-                | undefined;
+                LezerSyntaxNodeName | undefined;
             switch (lezerNodeType) {
                 case "TagName": {
-                    cursorPosition =
+                    if (
                         lezerNodeParentType === "OpenTag" ||
                         lezerNodeParentType === "SelfClosingTag"
-                            ? "openTagName"
-                            : "closeTagName";
+                    ) {
+                        cursorPosition = "openTagName";
+                        // Point `node` at the element whose tag name is being
+                        // typed. When error recovery parsed a half-typed `<nu`
+                        // (immediately followed by another tag) as a complete
+                        // element, `nodeAtOffset(offset)` returned the
+                        // *following* element instead, so without this the
+                        // completion layer would filter by the wrong tag name
+                        // and replace the wrong range (#1328).
+                        const tagOwner = this.nodeAtOffset(lezerNode.from, {
+                            type: "element",
+                        }) as DastElement | null;
+                        if (tagOwner) {
+                            node = tagOwner;
+                        }
+                    } else {
+                        cursorPosition = "closeTagName";
+                    }
                     break;
                 }
                 case "AttributeName":
@@ -118,6 +213,8 @@ export function elementAtOffsetWithContext(
                 }
                 case "OpenTag":
                 case "SelfClosingTag":
+                case "SelfCloseEndTag":
+                    // `/>` is still open-tag context for self-closing elements.
                     cursorPosition = "openTag";
                     break;
                 case "EndTag":
@@ -195,8 +292,7 @@ export function elementAtOffsetWithContext(
         cursor.moveTo(prevNonWhitespaceCharOffset, 1);
         const lezerNodeType = cursor.node.type.name as LezerSyntaxNodeName;
         const lezerNodeParentType = cursor.node.parent?.type?.name as
-            | LezerSyntaxNodeName
-            | undefined;
+            LezerSyntaxNodeName | undefined;
         switch (lezerNodeType) {
             case "TagName": {
                 if (lezerNodeParentType === "CloseTag") {

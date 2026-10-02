@@ -3,6 +3,10 @@ import {
     SectioningComponentNumberWithSiblings,
     UnnumberedSectioningComponent,
 } from "./abstract/SectioningComponent";
+import {
+    DIVISION_SEQUENCE,
+    returnSequencePassThroughDefinitions,
+} from "../utils/sequenceNumbering";
 
 export class Section extends SectioningComponentNumberWithSiblings {
     static componentType = "section";
@@ -26,6 +30,8 @@ export class Section extends SectioningComponentNumberWithSiblings {
     }
 }
 
+// A subsection is called a section, at every depth: all three element names
+// map onto one catalog key in `utils/sectionWords.js`.
 export class Subsection extends Section {
     static componentType = "subsection";
 
@@ -33,15 +39,6 @@ export class Subsection extends Section {
         summary:
             "A sectional component nested one heading level deeper than `<section>`",
     };
-    static returnStateVariableDefinitions() {
-        let stateVariableDefinitions = super.returnStateVariableDefinitions();
-
-        stateVariableDefinitions.sectionName.definition = () => ({
-            setValue: { sectionName: "Section" },
-        });
-
-        return stateVariableDefinitions;
-    }
 }
 export class Subsubsection extends Section {
     static componentType = "subsubsection";
@@ -50,15 +47,6 @@ export class Subsubsection extends Section {
         summary:
             "A sectional component nested one heading level deeper than `<subsection>`",
     };
-    static returnStateVariableDefinitions() {
-        let stateVariableDefinitions = super.returnStateVariableDefinitions();
-
-        stateVariableDefinitions.sectionName.definition = () => ({
-            setValue: { sectionName: "Section" },
-        });
-
-        return stateVariableDefinitions;
-    }
 }
 
 export class Paragraphs extends SectioningComponentNumberWithSiblings {
@@ -97,44 +85,14 @@ export class Aside extends SectioningComponentNumberWithSiblings {
                 "Whether to delay rendering this section's contents until expanded.",
         };
 
-        attributes.collapsible = {
-            description: "Whether the section can be collapsed and expanded.",
-            createComponentOfType: "boolean",
-            createStateVariable: "collapsible",
-            defaultValue: true,
-            public: true,
-            forRenderer: true,
-        };
-        attributes.startOpen = {
-            createComponentOfType: "boolean",
-            createStateVariable: "startOpen",
-            defaultValue: false,
-            description:
-                "Whether the collapsible section starts in the open state.",
-        };
+        attributes.collapsible.defaultValue = true;
+        attributes.startOpen.defaultValue = false;
 
         return attributes;
     }
 
     static returnStateVariableDefinitions() {
         let stateVariableDefinitions = super.returnStateVariableDefinitions();
-
-        delete stateVariableDefinitions.collapsible;
-
-        stateVariableDefinitions.open.returnDependencies = () => ({
-            startOpen: {
-                dependencyType: "stateVariable",
-                variableName: "startOpen",
-            },
-        });
-
-        stateVariableDefinitions.open.definition = ({ dependencyValues }) => ({
-            useEssentialOrDefaultValue: {
-                open: {
-                    defaultValue: dependencyValues.startOpen,
-                },
-            },
-        });
 
         stateVariableDefinitions.rendered.returnDependencies = () => ({
             startOpen: {
@@ -348,44 +306,14 @@ export class Proof extends UnnumberedSectioningComponent {
                 "Whether to delay rendering this section's contents until expanded.",
         };
 
-        attributes.collapsible = {
-            createComponentOfType: "boolean",
-            createStateVariable: "collapsible",
-            defaultValue: true,
-            public: true,
-            description: "Whether the section can be collapsed and expanded.",
-            forRenderer: true,
-        };
-        attributes.startOpen = {
-            createComponentOfType: "boolean",
-            createStateVariable: "startOpen",
-            defaultValue: false,
-            description:
-                "Whether the collapsible section starts in the open state.",
-        };
+        attributes.collapsible.defaultValue = true;
+        attributes.startOpen.defaultValue = false;
 
         return attributes;
     }
 
     static returnStateVariableDefinitions() {
         let stateVariableDefinitions = super.returnStateVariableDefinitions();
-
-        delete stateVariableDefinitions.collapsible;
-
-        stateVariableDefinitions.open.returnDependencies = () => ({
-            startOpen: {
-                dependencyType: "stateVariable",
-                variableName: "startOpen",
-            },
-        });
-
-        stateVariableDefinitions.open.definition = ({ dependencyValues }) => ({
-            useEssentialOrDefaultValue: {
-                open: {
-                    defaultValue: dependencyValues.startOpen,
-                },
-            },
-        });
 
         stateVariableDefinitions.rendered.returnDependencies = () => ({
             startOpen: {
@@ -416,9 +344,15 @@ export class Proof extends UnnumberedSectioningComponent {
     }
 }
 
-export class Problems extends SectioningComponent {
+export class Problems extends SectioningComponentNumberWithSiblings {
     static componentType = "problems";
     static rendererType = "section";
+
+    // `<problems>` groups divisions and is one itself, so it is numbered among
+    // its sibling divisions rather than in the sequence that runs through the
+    // document's figures and tables. Unlike those siblings it is named by a
+    // word the author may replace.
+    static allowRenameTo = true;
 
     static componentDocs = {
         summary:
@@ -458,6 +392,13 @@ export class StandinForFutureLayoutTag extends SectioningComponent {
             setValue: { containerTag: "aside" },
         });
 
+        // It shows no number, so the divisions inside it are numbered among
+        // the divisions beside it.
+        Object.assign(
+            stateVariableDefinitions,
+            returnSequencePassThroughDefinitions(DIVISION_SEQUENCE),
+        );
+
         return stateVariableDefinitions;
     }
 }
@@ -473,5 +414,19 @@ export class externalContent extends SectioningComponent {
         attributes.includeAutoNameIfNoTitle.defaultValue = false;
         attributes.includeAutoNumberIfNoTitle.defaultValue = false;
         return attributes;
+    }
+
+    static returnStateVariableDefinitions() {
+        let stateVariableDefinitions = super.returnStateVariableDefinitions();
+
+        // It shows no number, so the divisions it brings in are numbered among
+        // the divisions beside it, as they would be had they been written
+        // there.
+        Object.assign(
+            stateVariableDefinitions,
+            returnSequencePassThroughDefinitions(DIVISION_SEQUENCE),
+        );
+
+        return stateVariableDefinitions;
     }
 }

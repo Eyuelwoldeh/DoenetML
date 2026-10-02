@@ -4,9 +4,9 @@
     "description": "A language server for DoenetML",
     "icon": "assets/doenet-small.png",
     "author": "Jason Siefken",
-    "license": "AGPL",
+    "license": "AGPL-3.0-or-later",
     "publisher": "doenet",
-    "version": "0.7.20",
+    "version": "0.7.27",
     "repository": {
         "type": "git",
         "url": "https://github.com/Doenet/DoenetML"
@@ -21,7 +21,7 @@
         "language-server"
     ],
     "engines": {
-        "vscode": "^1.76.0"
+        "vscode": "^1.85.0"
     },
     "browser": "./build/extension/index.js",
     "contributes": {
@@ -66,9 +66,45 @@
                 "enablement": "resourceLangId == doenet",
                 "command": "doenet.formatAsMarkdown",
                 "title": "Format Doenet Source as Markdown (experimental)"
+            },
+            {
+                "enablement": "resourceLangId == doenet",
+                "command": "doenet.revealCursorInPreview",
+                "title": "Scroll Doenet Preview to Cursor"
+            },
+            {
+                "enablement": "resourceLangId == doenet",
+                "command": "doenet.triggerSuggest",
+                "title": "Trigger Doenet Suggestions"
+            }
+        ],
+        "keybindings": [
+            {
+                "command": "doenet.revealCursorInPreview",
+                "key": "ctrl+alt+p",
+                "mac": "cmd+alt+p",
+                "when": "editorTextFocus && editorLangId == doenet"
+            },
+            {
+                "command": "doenet.triggerSuggest",
+                "key": "ctrl+space",
+                "mac": "ctrl+space",
+                "when": "editorTextFocus && !editorReadonly && editorLangId == doenet && !suggestWidgetVisible"
+            },
+            {
+                "command": "doenet.triggerSuggest",
+                "key": "ctrl+i",
+                "mac": "cmd+i",
+                "when": "editorTextFocus && !editorReadonly && editorLangId == doenet && !suggestWidgetVisible"
             }
         ],
         "menus": {
+            "commandPalette": [
+                {
+                    "command": "doenet.triggerSuggest",
+                    "when": "false"
+                }
+            ],
             "editor/title": [
                 {
                     "command": "doenet.showPreview",
@@ -76,6 +112,14 @@
                     "when": "resourceLangId == doenet"
                 }
             ]
+        },
+        "configurationDefaults": {
+            "[doenet]": {
+                "editor.quickSuggestions": {
+                    "other": "on"
+                },
+                "editor.wordBasedSuggestions": "off"
+            }
         },
         "configuration": {
             "title": "Doenet",
@@ -88,6 +132,11 @@
                     ],
                     "default": "doenet",
                     "markdownDescription": "How to format DoenetML files when pretty-printing.\n\n-  `doenet` will format files using DoenetML-specific features (for example allowing `<` in text instead of requiring it be escaped as `&lt;`).\n-  `xml` will format the document as a valid XML document."
+                },
+                "doenet.preview.scrollPreviewWithEditor": {
+                    "type": "boolean",
+                    "default": true,
+                    "markdownDescription": "Scroll the Doenet preview to follow the editor's cursor as it moves.\n\nWhen off, the preview only scrolls when you ask it to, with the `Scroll Doenet Preview to Cursor` command (`ctrl+alt+p`, `cmd+alt+p` on macOS). That command works either way."
                 }
             }
         }

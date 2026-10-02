@@ -6,6 +6,7 @@ import {
 import {
     returnLabelAttributes,
     returnLabelStateVariableDefinitions,
+    returnRenderOnlyLabelChildDefinitions,
 } from "../utils/label";
 import { normalizeMathExpression } from "@doenet/utils";
 import {
@@ -14,6 +15,7 @@ import {
 } from "../utils/triggering";
 import InlineComponent from "./abstract/InlineComponent";
 import { returnSelectedStyleStateVariableDefinition } from "@doenet/utils";
+import { codedDiagnostic } from "../utils/diagnostics";
 
 export default class UpdateValue extends InlineComponent {
     constructor(args) {
@@ -32,6 +34,7 @@ export default class UpdateValue extends InlineComponent {
         summary: "Updates one or more state variables on a target component",
     };
     static rendererType = "button";
+    static renderChildren = true;
 
     static createAttributesObject() {
         let attributes = super.createAttributesObject();
@@ -159,6 +162,10 @@ export default class UpdateValue extends InlineComponent {
 
         let labelDefinitions = returnLabelStateVariableDefinitions();
         Object.assign(stateVariableDefinitions, labelDefinitions);
+        Object.assign(
+            stateVariableDefinitions,
+            returnRenderOnlyLabelChildDefinitions(),
+        );
 
         let anchorDefinition = returnAnchorStateVariableDefinition();
         Object.assign(stateVariableDefinitions, anchorDefinition);
@@ -170,7 +177,14 @@ export default class UpdateValue extends InlineComponent {
         };
 
         stateVariableDefinitions.targetComponentIdx = {
-            additionalStateVariablesDefined: ["unresolvedPath"],
+            // `targetOriginalPath` is the `target` reference's path as the
+            // author wrote it — positions and all — kept so that a failure
+            // can quote the `$…` back to them. The component index alone is
+            // no use for that: it never appeared in the document.
+            additionalStateVariablesDefined: [
+                "unresolvedPath",
+                "targetOriginalPath",
+            ],
             returnDependencies: () => ({
                 target: {
                     dependencyType: "attributeRefResolutions",
@@ -185,6 +199,7 @@ export default class UpdateValue extends InlineComponent {
                         setValue: {
                             targetComponentIdx: target.componentIdx,
                             unresolvedPath: target.unresolvedPath,
+                            targetOriginalPath: target.originalPath,
                         },
                     };
                 } else {
@@ -192,6 +207,7 @@ export default class UpdateValue extends InlineComponent {
                         setValue: {
                             targetComponentIdx: null,
                             unresolvedPath: null,
+                            targetOriginalPath: null,
                         },
                     };
                 }
@@ -268,11 +284,13 @@ export default class UpdateValue extends InlineComponent {
                     targetIdentities === null ||
                     targetIdentities.length === 0
                 ) {
-                    diagnostics.push({
-                        message:
-                            "Invalid target for `<updateValue>`: cannot find target.",
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0043",
+                            args: { source: "updateValue" },
+                        }),
+                    );
                 }
 
                 return {
@@ -286,6 +304,7 @@ export default class UpdateValue extends InlineComponent {
             stateVariablesDeterminingDependencies: [
                 "targetIdentities",
                 "unresolvedPath",
+                "targetOriginalPath",
             ],
             returnDependencies: function ({ stateValues }) {
                 let dependencies = {
@@ -320,6 +339,11 @@ export default class UpdateValue extends InlineComponent {
                                     "stateVariableFromUnresolvedPath",
                                 componentIdx: target.componentIdx,
                                 unresolvedPath: stateValues.unresolvedPath,
+                                // So that an index in the path that cannot be
+                                // applied is reported as the reference the
+                                // author wrote in `target`.
+                                referenceOriginalPath:
+                                    stateValues.targetOriginalPath,
                                 returnAsComponentObject: true,
                                 variablesOptional: true,
                                 caseInsensitiveVariableMatch: true,
@@ -352,13 +376,13 @@ export default class UpdateValue extends InlineComponent {
                     for (let ind in dependencyValues.targetIdentities) {
                         let target = dependencyValues["target" + ind];
                         if (target == null) {
-                            let message =
-                                "Invalid target for `<updateValue>`: cannot find target.";
-
-                            diagnostics.push({
-                                message,
-                                type: "warning",
-                            });
+                            diagnostics.push(
+                                codedDiagnostic({
+                                    type: "warning",
+                                    code: "doenet-w0043",
+                                    args: { source: "updateValue" },
+                                }),
+                            );
                             continue;
                         }
                         targets.push(target);
@@ -375,17 +399,29 @@ export default class UpdateValue extends InlineComponent {
                                         prop += `[idx]`;
                                     }
                                 }
-                                let message = `Invalid target for \`<updateValue>\`: cannot find a state variable named "${prop}" on a \`<${target.componentType}>\`.`;
-                                diagnostics.push({
-                                    message,
-                                    type: "warning",
-                                });
+                                diagnostics.push(
+                                    codedDiagnostic({
+                                        type: "warning",
+                                        code: "doenet-w0044",
+                                        args: {
+                                            source: "updateValue",
+                                            property: prop,
+                                            component: target.componentType,
+                                        },
+                                    }),
+                                );
                             } else {
-                                let message = `Invalid target for \`<updateValue>\`: cannot find a state variable named "value" on a \`<${target.componentType}>\`.`;
-                                diagnostics.push({
-                                    message,
-                                    type: "warning",
-                                });
+                                diagnostics.push(
+                                    codedDiagnostic({
+                                        type: "warning",
+                                        code: "doenet-w0044",
+                                        args: {
+                                            source: "updateValue",
+                                            property: "value",
+                                            component: target.componentType,
+                                        },
+                                    }),
+                                );
                             }
                         }
                     }

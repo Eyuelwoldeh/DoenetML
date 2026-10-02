@@ -3,7 +3,94 @@ import me from "math-expressions";
 import { convertValueToMathExpression } from "@doenet/utils";
 import { breakEmbeddedStringsIntoParensPieces } from "../commonsugar/breakstrings";
 import { returnGroupIntoComponentTypeSeparatedBySpacesOutsideParens } from "../commonsugar/lists";
-import { textToAst } from "../../utils/math";
+import { evaluateToNumber, textToAst } from "../../utils/math";
+import { codedDiagnostic } from "../../utils/diagnostics";
+
+/**
+ * The `type` a child inherits from its parent, as the parent will actually use
+ * it.
+ *
+ * `parentAttributes.type` is the raw authored string: sugar runs before any
+ * state variable exists, so the validated value is not available here. When the
+ * parent declares `validValues` for its own `type` — `<substitute>` accepts
+ * only `math` and `text` — a value outside that set is one the parent will
+ * itself replace with its default, and inheriting the raw string instead makes
+ * the two disagree.
+ *
+ * That disagreement is what #1870 was: `<substitute type="banana" match="x"
+ * replacement="y">` had `stateValues.type` of `math`, reported as `doenet-i0048`,
+ * while `match` and `replacement` were built as `<number>` — the fallback here,
+ * reported as `doenet-w0016`. The `math` branch then called
+ * `subscripts_to_strings()` on a number and the document did not render. Two
+ * contradictory diagnostics and a blank page, for one misspelled attribute.
+ *
+ * Returning the parent's default rather than adding a third guard: the author
+ * is told once, by the parent's own validation, what the value was treated as.
+ */
+function inheritedType({
+    parentAttributes,
+    parentComponentType,
+    componentInfoObjects,
+}) {
+    const rawType = parentAttributes.type?.value;
+    // Only an absent attribute short-circuits. `type=""` is a value the parent
+    // *will* put through `validateAttributeValue` and replace with its default,
+    // so treating it as "nothing was written" is the same disagreement again:
+    // `<substitute type="" match="x" replacement="y">` gave the parent `math`
+    // and the children `number`.
+    if (rawType == null || !parentComponentType) {
+        return rawType;
+    }
+
+    const parentClass =
+        componentInfoObjects?.allComponentClasses?.[parentComponentType];
+    const parentTypeAttr = parentClass?.createAttributesObject?.()?.type;
+    const validValues = parentTypeAttr?.validValues;
+    if (!validValues) {
+        return rawType;
+    }
+
+    // `createAttributesObject()` is read raw here, but every other consumer
+    // reads it through `preprocessAttributesObject`, which under `toLowerCase`
+    // lower-cases `validValues[].value` and `defaultValue` before
+    // `validateAttributeValue` ever sees them. So both sides are lower-cased
+    // here too. Comparing a lower-cased authored value against an
+    // authored-case `validValues` would never match a valid value spelled with
+    // a capital -- `<answer type="videoWatched">` is the shape -- and would
+    // hand back the parent's default for a value the parent accepted.
+    //
+    // No parent that creates a `_componentWithSelectableType` today declares a
+    // mixed-case `type` value (the four classes that do -- `answer`,
+    // `extractMath`, `sampleRandomNumbers`, `selectRandomNumbers` -- create no
+    // such child), so this is fidelity to the rule rather than a live bug.
+    const lowerCase = parentTypeAttr.toLowerCase === true;
+    const allowed = validValues.map((v) => {
+        const value = v.value ?? v;
+        return lowerCase ? String(value).toLowerCase() : value;
+    });
+    const normalized = lowerCase
+        ? String(rawType).trim().toLowerCase()
+        : String(rawType).trim();
+    if (allowed.includes(normalized)) {
+        return normalized;
+    }
+
+    // What `validateAttributeValue` will fall back to for the parent, spelled
+    // the way it spells it: `defaultValue` wins whenever it is not `undefined`
+    // -- a `null` default means the attribute is *dropped*, not replaced, and
+    // must not fall through -- and `defaultPrimitiveValue` stands in only for
+    // an attribute that creates a primitive. `preprocessAttributesObject`
+    // lower-cases `defaultValue` under `toLowerCase` and leaves
+    // `defaultPrimitiveValue` alone, so match that too.
+    const { defaultValue, defaultPrimitiveValue, createPrimitiveOfType } =
+        parentTypeAttr;
+    if (defaultValue !== undefined) {
+        return lowerCase && typeof defaultValue === "string"
+            ? defaultValue.toLowerCase()
+            : defaultValue;
+    }
+    return createPrimitiveOfType ? defaultPrimitiveValue : undefined;
+}
 
 export class ComponentWithSelectableType extends BaseComponent {
     static componentType = "_componentWithSelectableType";
@@ -28,23 +115,32 @@ export class ComponentWithSelectableType extends BaseComponent {
             matchedChildren,
             componentAttributes,
             parentAttributes,
+            parentComponentType,
+            componentInfoObjects,
             nComponents,
             stateIdInfo,
         }) {
             let diagnostics = [];
             let type = componentAttributes.type?.value;
             if (!type) {
-                type = parentAttributes.type?.value;
+                type = inheritedType({
+                    parentAttributes,
+                    parentComponentType,
+                    componentInfoObjects,
+                });
             }
             if (!type) {
                 type = "number";
             } else if (
                 !["number", "letters", "math", "text", "boolean"].includes(type)
             ) {
-                diagnostics.push({
-                    message: `Invalid type ${type}, setting type to number.`,
-                    type: "warning",
-                });
+                diagnostics.push(
+                    codedDiagnostic({
+                        type: "warning",
+                        code: "doenet-w0016",
+                        args: { type },
+                    }),
+                );
                 type = "number";
             }
 
@@ -122,10 +218,16 @@ export class ComponentWithSelectableType extends BaseComponent {
                         type,
                     )
                 ) {
-                    diagnostics.push({
-                        message: `Invalid type ${type}, setting type to number.`,
-                        type: "info",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            // Info here, a warning at the other three call
+                            // sites. The code names the situation, not the
+                            // severity, so they share it.
+                            type: "info",
+                            code: "doenet-w0016",
+                            args: { type },
+                        }),
+                    );
                     type = "number";
                 }
 
@@ -248,10 +350,13 @@ export class ComponentListWithSelectableType extends ComponentWithSelectableType
                         type,
                     )
                 ) {
-                    diagnostics.push({
-                        message: `Invalid type ${type}, setting type to number.`,
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0016",
+                            args: { type },
+                        }),
+                    );
                     type = "number";
                 }
 
@@ -454,10 +559,13 @@ export class ComponentListOfListsWithSelectableType extends ComponentWithSelecta
             } else if (
                 !["number", "letters", "math", "text", "boolean"].includes(type)
             ) {
-                diagnostics.push({
-                    message: `Invalid type ${type}, setting type to number.`,
-                    type: "warning",
-                });
+                diagnostics.push(
+                    codedDiagnostic({
+                        type: "warning",
+                        code: "doenet-w0016",
+                        args: { type },
+                    }),
+                );
                 type = "number";
             }
 
@@ -607,9 +715,15 @@ function convertValueToType(value, type) {
         value = value[0];
     }
     if (type === "number") {
+        // Both branches have to spell "not a number" the same way, and for a
+        // `number`-typed value that spelling is `NaN`. The sibling
+        // `Number(value)` already gives `NaN` for anything unconvertible. The
+        // engine used to report an expression it cannot evaluate as `null`,
+        // which is `0` to arithmetic and which `Number.isNaN` answers `false`
+        // for; it answers `NaN` now, and `evaluateToNumber` still maps the
+        // `Complex` arm onto the same spelling.
         if (value instanceof me.class) {
-            let num = value.evaluate_to_constant();
-            return num;
+            return evaluateToNumber(value);
         }
         return Number(value);
     } else if (type === "math") {

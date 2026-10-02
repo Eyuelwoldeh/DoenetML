@@ -5,6 +5,7 @@ import {
     moveVector,
     updateBooleanInputValue,
     updateMathInputValue,
+    updateValue,
 } from "../utils/actions";
 import { PublicDoenetMLCore } from "../../CoreWorker";
 import { getDiagnosticsByType } from "../utils/diagnostics";
@@ -459,6 +460,54 @@ describe("Vector Tag Tests @group4", function () {
         });
 
         await common_test_process({ core, resolvePathToNodeIdx });
+    });
+
+    // Regression guard for the move to the Rust math-expressions engine, kept
+    // in its reduced form: the drag sequences above reach the same bug only
+    // after several moves, and report it as an arithmetic mismatch deep in a
+    // helper rather than as the update never happening.
+    //
+    // Setting `head` on a displacement-defined vector means setting the
+    // displacement, so one component at a time arrives and the inverse builds a
+    // partial vector — an AST array with a hole for the component it is
+    // deliberately leaving alone. A hole does not survive `me.fromAst` on an
+    // engine that serializes the tree, and the throw aborted the whole update:
+    // no error surfaced, and neither the point, the head, nor the displacement
+    // moved. The hole is now marked explicitly — see `UNSPECIFIED_COMPONENT`
+    // and `markUnspecifiedComponents` in `utils/math.ts`.
+    it("dragging a point that extends the head of a displacement-defined vector", async () => {
+        let { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+  <vector name="v" displacement="(-4,2)" />
+  <point extend="$v.head" name="copy" />
+  `,
+        });
+
+        const trees = async (name: string, variable: string) => {
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            return stateVariables[await resolvePathToNodeIdx(name)].stateValues[
+                variable
+            ].map((v: any) => v.simplify().tree);
+        };
+
+        expect(await trees("v", "head")).eqls([-4, 2]);
+        expect(await trees("v", "displacement")).eqls([-4, 2]);
+
+        await movePoint({
+            core,
+            componentIdx: await resolvePathToNodeIdx("copy"),
+            x: 7,
+            y: 9,
+        });
+
+        // The tail stays at the origin, so the displacement must absorb the move.
+        expect(await trees("copy", "xs")).eqls([7, 9]);
+        expect(await trees("v", "head")).eqls([7, 9]);
+        expect(await trees("v", "tail")).eqls([0, 0]);
+        expect(await trees("v", "displacement")).eqls([7, 9]);
     });
 
     it("vector with just displacement and label, head/tail/displacement copied", async () => {
@@ -5696,12 +5745,12 @@ describe("Vector Tag Tests @group4", function () {
         let bi = false;
 
         async function check_items() {
-            let parens1 = `( ${x1}, ${y1} )`;
-            let brackets1 = `⟨ ${x1}, ${y1} ⟩`;
-            let parens2 = `( ${x2}, ${y2} )`;
-            let brackets2 = `⟨ ${x2}, ${y2} ⟩`;
-            let parens3 = `( ${x3}, ${y3} )`;
-            let brackets3 = `⟨ ${x3}, ${y3} ⟩`;
+            let parens1 = `(${x1}, ${y1})`;
+            let brackets1 = `⟨${x1}, ${y1}⟩`;
+            let parens2 = `(${x2}, ${y2})`;
+            let brackets2 = `⟨${x2}, ${y2}⟩`;
+            let parens3 = `(${x3}, ${y3})`;
+            let brackets3 = `⟨${x3}, ${y3}⟩`;
 
             let stateVariables = await core.returnAllStateVariables(
                 false,
@@ -6239,42 +6288,42 @@ describe("Vector Tag Tests @group4", function () {
         let stateVariables = await core.returnAllStateVariables(false, true);
         expect(
             stateVariables[await resolvePathToNodeIdx("p1v")].stateValues.text,
-        ).eqls("( 2.64, 113 )");
+        ).eqls("(2.64, 113)");
         expect(
             stateVariables[await resolvePathToNodeIdx("p1d")].stateValues.text,
-        ).eqls("( 2.64, 113 )");
+        ).eqls("(2.64, 113)");
         expect(
             stateVariables[await resolvePathToNodeIdx("p1t")].stateValues.text,
-        ).eqls("( 2.58, 510.52 )");
+        ).eqls("(2.58, 510.52)");
         expect(
             stateVariables[await resolvePathToNodeIdx("p1h")].stateValues.text,
-        ).eqls("( 5.22, 623.52 )");
+        ).eqls("(5.22, 623.52)");
 
         expect(
             stateVariables[await resolvePathToNodeIdx("p2v")].stateValues.text,
-        ).eqls("( 2.63535, 113 )");
+        ).eqls("(2.63535, 113)");
         expect(
             stateVariables[await resolvePathToNodeIdx("p2d")].stateValues.text,
-        ).eqls("( 2.63535, 113 )");
+        ).eqls("(2.63535, 113)");
         expect(
             stateVariables[await resolvePathToNodeIdx("p2t")].stateValues.text,
-        ).eqls("( 2.58107, 510.524 )");
+        ).eqls("(2.58107, 510.524)");
         expect(
             stateVariables[await resolvePathToNodeIdx("p2h")].stateValues.text,
-        ).eqls("( 5.21642, 623.523 )");
+        ).eqls("(5.21642, 623.523)");
 
         expect(
             stateVariables[await resolvePathToNodeIdx("p3v")].stateValues.text,
-        ).eqls("( 3, 113 )");
+        ).eqls("(3, 113)");
         expect(
             stateVariables[await resolvePathToNodeIdx("p3d")].stateValues.text,
-        ).eqls("( 3, 113 )");
+        ).eqls("(3, 113)");
         expect(
             stateVariables[await resolvePathToNodeIdx("p3t")].stateValues.text,
-        ).eqls("( 3, 511 )");
+        ).eqls("(3, 511)");
         expect(
             stateVariables[await resolvePathToNodeIdx("p3h")].stateValues.text,
-        ).eqls("( 5, 624 )");
+        ).eqls("(5, 624)");
     });
 
     it("warnings", async () => {
@@ -6413,5 +6462,218 @@ describe("Vector Tag Tests @group4", function () {
         expect(v1Latex).match(/10\^{-12}|10\^\{21\}|10\^21/);
         expect(v2Latex).contain("0.000000000007");
         expect(v2Latex).contain("2000000000000000000000");
+    });
+
+    it("update tail, head, and displacement with updateValue", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+  <graph>
+    <vector name="v">(3,4)</vector>
+  </graph>
+
+  <updateValue name="uvTail" target="$v.tail" newValue="(7,8)" />
+  <updateValue name="uvHead" target="$v.head" newValue="(8,9)" />
+  <updateValue name="uvDisplacement" target="$v.displacement" newValue="(9,1)" />
+    `,
+        });
+
+        const vIdx = await resolvePathToNodeIdx("v");
+
+        let stateVariables = await core.returnAllStateVariables(false, true);
+        check_vec_htd({
+            componentIdx: vIdx,
+            t: [0, 0],
+            h: [3, 4],
+            d: [3, 4],
+            stateVariables,
+        });
+
+        // this vector is specified by its displacement, so moving the tail
+        // carries the head along, leaving the displacement alone
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("uvTail"),
+            core,
+        });
+        stateVariables = await core.returnAllStateVariables(false, true);
+        check_vec_htd({
+            componentIdx: vIdx,
+            t: [7, 8],
+            h: [10, 12],
+            d: [3, 4],
+            stateVariables,
+        });
+
+        // moving the head keeps the tail fixed, changing the displacement
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("uvHead"),
+            core,
+        });
+        stateVariables = await core.returnAllStateVariables(false, true);
+        check_vec_htd({
+            componentIdx: vIdx,
+            t: [7, 8],
+            h: [8, 9],
+            d: [1, 1],
+            stateVariables,
+        });
+
+        // changing the displacement keeps the tail fixed, moving the head
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("uvDisplacement"),
+            core,
+        });
+        stateVariables = await core.returnAllStateVariables(false, true);
+        check_vec_htd({
+            componentIdx: vIdx,
+            t: [7, 8],
+            h: [16, 9],
+            d: [9, 1],
+            stateVariables,
+        });
+    });
+
+    it("updateValue on tail, head, or displacement matches dragging a point extending it", async () => {
+        // Setting one of these properties is the same change as dragging a
+        // point that extends it — not the same as dragging the vector's own
+        // handle, which additionally holds the opposite end in place.
+        // Each property, paired with the vector components it should leave
+        // the new value in.
+        const properties = [
+            { property: "tail", t: [7, 8], h: [10, 12], d: [3, 4] },
+            { property: "head", t: [0, 0], h: [7, 8], d: [7, 8] },
+            { property: "displacement", t: [0, 0], h: [7, 8], d: [7, 8] },
+        ];
+
+        // Applies one way of setting the property to a fresh document, then
+        // reports where the vector ended up.
+        async function resulting_htd(
+            property: string,
+            setProperty: (args: {
+                core: PublicDoenetMLCore;
+                resolvePathToNodeIdx: ResolvePathToNodeIdx;
+            }) => Promise<void>,
+        ) {
+            const { core, resolvePathToNodeIdx } = await createTestCore({
+                doenetML: `
+  <graph>
+    <vector name="v">(3,4)</vector>
+    <point extend="$v.${property}" name="p" />
+  </graph>
+
+  <updateValue name="uv" target="$v.${property}" newValue="(7,8)" />
+    `,
+            });
+
+            await setProperty({ core, resolvePathToNodeIdx });
+
+            const v = (await core.returnAllStateVariables(false, true))[
+                await resolvePathToNodeIdx("v")
+            ].stateValues;
+            const components = (xs: any[]) => xs.map((x) => x.simplify().tree);
+            return {
+                t: components(v.tail),
+                h: components(v.head),
+                d: components(v.displacement),
+            };
+        }
+
+        for (const { property, ...expected } of properties) {
+            const viaUpdateValue = await resulting_htd(
+                property,
+                async ({ core, resolvePathToNodeIdx }) => {
+                    await updateValue({
+                        componentIdx: await resolvePathToNodeIdx("uv"),
+                        core,
+                    });
+                },
+            );
+            const viaDraggingPoint = await resulting_htd(
+                property,
+                async ({ core, resolvePathToNodeIdx }) => {
+                    await movePoint({
+                        componentIdx: await resolvePathToNodeIdx("p"),
+                        x: 7,
+                        y: 8,
+                        core,
+                    });
+                },
+            );
+
+            // spelled out, so neither path can pass by doing nothing
+            expect(viaUpdateValue, property).eqls(expected);
+            expect(viaDraggingPoint, property).eqls(expected);
+        }
+    });
+
+    it("update the tail of an extended vector with updateValue", async () => {
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+  <vector name="v">(3,4)</vector>
+  <vector extend="$v" name="v2" />
+
+  <updateValue name="uvTail" target="$v2.tail" newValue="(7,8)" />
+    `,
+        });
+
+        async function check_both(t: number[], h: number[], d: number[]) {
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            for (const name of ["v", "v2"]) {
+                check_vec_htd({
+                    componentIdx: await resolvePathToNodeIdx(name),
+                    t,
+                    h,
+                    d,
+                    stateVariables,
+                });
+            }
+        }
+
+        await check_both([0, 0], [3, 4], [3, 4]);
+
+        // the extension passes the whole tail through to the original vector
+        await updateValue({
+            componentIdx: await resolvePathToNodeIdx("uvTail"),
+            core,
+        });
+        await check_both([7, 8], [10, 12], [3, 4]);
+    });
+
+    it("a head with no real value leaves numericalEndpoints NaN", async () => {
+        // `numericalEndpoints` is `forRenderer`. `Number(null)` is `0`, so
+        // while the engine answered `null` a head with no numeric value was
+        // drawn at the origin rather than not drawn.
+        //
+        // `v2` is the leg that measures the guard rather than the engine:
+        // `evaluate_to_constant()` answers a math.js `Complex` for
+        // `sqrt(-4)`, which reaches the renderer prototype-stripped and is not
+        // the `number` this array declares. Only `evaluateToNumber` folds it.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+  <graph>
+    <vector name="v" head="(q,b)" />
+    <vector name="v2" head="(sqrt(-4),1)" />
+  </graph>
+  `,
+        });
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        const endpoints =
+            stateVariables[await resolvePathToNodeIdx("v")].stateValues
+                .numericalEndpoints;
+        expect(endpoints).eqls([
+            [0, 0],
+            [NaN, NaN],
+        ]);
+
+        const complexEndpoints =
+            stateVariables[await resolvePathToNodeIdx("v2")].stateValues
+                .numericalEndpoints;
+        expect(complexEndpoints).eqls([
+            [0, 0],
+            [NaN, 1],
+        ]);
     });
 });

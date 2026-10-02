@@ -7,6 +7,7 @@ import {
     type AxisJXG,
 } from "./utils/jsxgraph";
 import useJSXGraphBoardSync from "./utils/useJSXGraphBoardSync";
+import { useMathJaxOutOfTabOrder } from "./utils/useMathJaxOutOfTabOrder";
 import { JXGBoard } from "./jsxgraph-distrib/types";
 import { GraphSVs } from "./graph";
 import { CallActionArgs, RendererAction } from "../useDoenetRenderer";
@@ -33,6 +34,10 @@ export default function JSXGraphRenderer({
     surfaceStyle,
 }: JSXGraphRendererProps) {
     const [board, setBoard] = useState<JXGBoard | null>(null);
+
+    // The board's container: JSXGraph appends the SVG surface and every
+    // HTML-rendered text (labels, and so the MathJax they typeset) to it.
+    const boardContainer = useRef<HTMLDivElement | null>(null);
 
     const previousBoundingbox = useRef<number[]>([0, 0, 0, 0]);
     const xaxis = useRef<AxisJXG | null | undefined>(null);
@@ -170,6 +175,11 @@ export default function JSXGraphRenderer({
         }
     }, [board]);
 
+    // MathJax marks everything it typesets as a tab stop, but a label drawn on
+    // the board is decoration on a picture; see the hook for why it must not
+    // keep that tab stop.
+    useMathJaxOutOfTabOrder(boardContainer);
+
     useJSXGraphBoardSync({
         board,
         id,
@@ -188,7 +198,21 @@ export default function JSXGraphRenderer({
 
     return (
         <>
-            <div id={id} className="jxgbox" style={surfaceStyle} />
+            <div
+                id={id}
+                className="jxgbox"
+                style={surfaceStyle}
+                ref={boardContainer}
+                // A graph is coordinate space, and mathematical notation stays
+                // left-to-right in a right-to-left language. Pinned rather than
+                // inherited because JSXGraph writes `text-anchor: start|end` on
+                // its SVG labels, which resolve against the computed direction:
+                // under RTL every tick and axis label would jump to the wrong
+                // side of the point it names, and `-5` would render as `5-`.
+                // JSXGraph appends both the SVG surface and its HTML labels
+                // here, so this one attribute covers all of it.
+                dir="ltr"
+            />
             {board ? (
                 <BoardContext.Provider value={board}>
                     {children}

@@ -64,10 +64,32 @@ const DIAGNOSTIC_TYPE_TO_LSP_SEVERITY: Record<
 };
 
 /**
+ * The heading the editor's tooltip shows over an accessibility diagnostic.
+ *
+ * `source` is the LSP's slot for the producer's own label for a *kind* of
+ * diagnostic, and the CodeMirror tooltip shows it in place of the severity
+ * word. It is therefore reader-facing text, and the viewer is where the
+ * reader's language is known — the language server has no locale.
+ *
+ * Defaulted to the English these have always been, so a caller that has no
+ * translator to offer (the unit tests, and any host embedding this directly)
+ * gets exactly what it got before.
+ */
+export type AccessibilityHeadings = { level1: string; level2: string };
+
+const EN_ACCESSIBILITY_HEADINGS: AccessibilityHeadings = {
+    level1: "WCAG AA Accessibility Violation",
+    level2: "Accessibility alert",
+};
+
+/**
  * Converts a single editor diagnostic into an LSP-compatible diagnostic.
  * Accessibility diagnostics are surfaced as warnings with custom source/markClass.
  */
-function toLspDiagnostic(diagnostic: DiagnosticRecord): EditorLspDiagnostic {
+function toLspDiagnostic(
+    diagnostic: DiagnosticRecord,
+    accessibilityHeadings: AccessibilityHeadings,
+): EditorLspDiagnostic {
     const range = dastPositionToLspRange(diagnostic.position!);
 
     if (isAccessibilityRecord(diagnostic)) {
@@ -76,10 +98,14 @@ function toLspDiagnostic(diagnostic: DiagnosticRecord): EditorLspDiagnostic {
             severity: DiagnosticSeverity.Warning,
             range,
             code: `accessibility-level-${diagnostic.level}`,
+            // Translated, which is why `getDiagnosticHeadingClass` in
+            // `@doenet/codemirror` must not be the only thing keying on the
+            // English: it matches `code` and `markClass` first, and both are
+            // set right here.
             source:
                 diagnostic.level === 1
-                    ? "WCAG AA Accessibility Violation"
-                    : "Accessibility alert",
+                    ? accessibilityHeadings.level1
+                    : accessibilityHeadings.level2,
             markClass: `cm-doenet-accessibility-diagnostic cm-doenet-accessibility-diagnostic-level-${diagnostic.level}`,
         };
     }
@@ -88,6 +114,25 @@ function toLspDiagnostic(diagnostic: DiagnosticRecord): EditorLspDiagnostic {
         message: diagnostic.message,
         severity: DIAGNOSTIC_TYPE_TO_LSP_SEVERITY[diagnostic.type],
         range,
+        // `code` is where LSP expects the stable name of a diagnostic, and it
+        // is what a `codeDescription` link will hang off (#1548). Populating
+        // it costs nothing and puts the code in front of any client that
+        // renders the field; the CodeMirror tooltip does not yet — it reads
+        // `code` only to pick the accessibility heading style, as the branch
+        // above relies on. Only records that have migrated to the catalogs
+        // carry one (#1518); `code` is optional in LSP, so the rest are
+        // unchanged.
+        ...(diagnostic.code === undefined ? {} : { code: diagnostic.code }),
+        // `data` is the LSP's slot for payload a client hands back later; the
+        // one consumer today is `dedupeLspDiagnostics`, which needs the
+        // arguments to tell two occurrences of one code apart. A code names a
+        // message template, so the same code raised twice on one component
+        // with different arguments — `doenet-w0040` for a bad maximum and
+        // again for a bad minimum — is two diagnostics at one span, and
+        // without the arguments the dedupe would collapse them.
+        ...(diagnostic.args === undefined
+            ? {}
+            : { data: { args: diagnostic.args } }),
     };
 }
 
@@ -98,10 +143,12 @@ export function toAdditionalDiagnosticsForLsp({
     diagnostics,
     showInfoAnnotations,
     showAccessibilityAnnotations,
+    accessibilityHeadings = EN_ACCESSIBILITY_HEADINGS,
 }: {
     diagnostics: DiagnosticRecord[];
     showInfoAnnotations: boolean;
     showAccessibilityAnnotations: boolean;
+    accessibilityHeadings?: AccessibilityHeadings;
 }): EditorLspDiagnostic[] {
     return diagnostics
         .filter((diagnostic) => {
@@ -127,7 +174,9 @@ export function toAdditionalDiagnosticsForLsp({
 
             return false;
         })
-        .map(toLspDiagnostic);
+        .map((diagnostic) =>
+            toLspDiagnostic(diagnostic, accessibilityHeadings),
+        );
 }
 
 /**

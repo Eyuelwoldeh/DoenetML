@@ -1,15 +1,18 @@
 // All code in this file will be executed in the context of an iframe
 // created by DoenetEditor.
 import type { DiagnosticsTabId, DoenetEditorHandle } from "@doenet/doenetml";
+// Comlink must be imported *here* so the iife build compiles it into this
+// script, never supplied as a free binding by the srcdoc. The srcdoc used to
+// `import` it from unpkg, and an `import` declaration is resolved before any
+// of the module body runs: a CDN fetch that stalled left this whole script
+// unexecuted, the `iframeReady` handshake the parent waits for unsent, and the
+// iframe stuck on its loading placeholder with no timeout and no error.
+// `test/cypress/component/srcdocSelfContained.cy.ts` guards the invariant.
+import * as Comlink from "comlink";
 
 declare const editorId: string;
 declare const doenetEditorProps: Record<string, any>;
 declare const doenetEditorPropsSpecified: string[];
-declare const ComlinkEditor: {
-    expose: Function;
-    windowEndpoint: Function;
-    releaseProxy: symbol;
-};
 declare global {
     interface Window {
         renderDoenetEditorToContainer: (
@@ -17,6 +20,11 @@ declare global {
             doenetMLSource?: string,
             config?: object,
         ) => DoenetEditorHandle | void;
+        /**
+         * Style-palette discovery, defined by standalone bundles new enough to
+         * ship it. Feature-detected so an older bundle reports no palettes.
+         */
+        getDoenetStylePalettes?: () => unknown[];
     }
 }
 
@@ -43,7 +51,7 @@ let lastAugmentedProps: Record<string, any> | null = null;
 // `updateEditorFunctionProps` constantly. The old handler re-invoked
 // `renderDoenetEditorToContainer` on each such change; when that churn
 // overlapped the core worker's boot window the worker never finished booting
-// and the editor showed "The document viewer could not be started." Now an
+// and the editor showed "This document could not be started." Now an
 // identity-only change just swaps the entry here — the editor keeps calling the
 // same stable dispatcher, which dereferences the new closure — so no re-render
 // happens and the boot is left undisturbed.
@@ -83,7 +91,7 @@ function functionPropArgsToMap(
 
 function releaseFunctionProxy(fn: Function) {
     try {
-        (fn as any)?.[ComlinkEditor.releaseProxy]?.();
+        (fn as any)?.[Comlink.releaseProxy]?.();
     } catch (e) {
         console.warn(
             "iframe DoenetEditor: failed to release stale Comlink proxy",
@@ -169,20 +177,38 @@ function resolveInitialDoenetMLSource(root: Element): string {
 // in a fresh iframe, so this ceiling only needs to cover one boot, not
 // a sum across retries.
 async function waitForStandaloneBundle(timeoutMs: number): Promise<boolean> {
-    if (typeof window.renderDoenetEditorToContainer === "function") {
+    // A code-split bundle's entry facade installs a queueing *stub* at this
+    // global before the bundle's eager chunk has evaluated, marked with
+    // `__doenetPendingRenderStub` (see `facadeRenderQueue.ts` in
+    // `@doenet/standalone`, which names this property as part of the bundle's
+    // surface). Waiting the stub out keeps the `iframeReady` handshake — and
+    // the style palettes reported with it — tied to the fully evaluated
+    // bundle, and means the handle returned by
+    // `renderDoenetEditorToContainer` below is always the real one.
+    function bundleReady(): boolean {
+        const render = window.renderDoenetEditorToContainer as
+            | (((...args: unknown[]) => unknown) & {
+                  __doenetPendingRenderStub?: boolean;
+              })
+            | undefined;
+        return (
+            typeof render === "function" && !render.__doenetPendingRenderStub
+        );
+    }
+    if (bundleReady()) {
         return true;
     }
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, 50));
-        if (typeof window.renderDoenetEditorToContainer === "function") {
+        if (bundleReady()) {
             return true;
         }
     }
     return false;
 }
 
-ComlinkEditor.expose(
+Comlink.expose(
     {
         renderEditorWithFunctionProps,
         updateEditorProps(updatedSerializableProps: Record<string, any>) {
@@ -264,7 +290,7 @@ ComlinkEditor.expose(
             editorControlHandle.updateRenderedView();
         },
     },
-    ComlinkEditor.windowEndpoint(globalThis.parent),
+    Comlink.windowEndpoint(globalThis.parent),
 );
 
 /**
@@ -316,7 +342,7 @@ function renderWithLastAugmentedProps() {
 
 // Defer `iframeReady` until the standalone bundle has defined
 // `renderDoenetEditorToContainer`. See `waitForStandaloneBundle` above
-// for why this gate is load-bearing. ComlinkEditor.expose above has
+// for why this gate is load-bearing. Comlink.expose above has
 // already run so the Comlink endpoint is wired and ready for the parent
 // to call as soon as we signal — there's just no point signalling
 // until the function the parent will eventually invoke is in place.
@@ -331,7 +357,10 @@ function renderWithLastAugmentedProps() {
 // move the user out of the silent-stuck state.
 (async () => {
     if (await waitForStandaloneBundle(60_000)) {
-        messageParentFromEditor({ iframeReady: true });
+        messageParentFromEditor({
+            iframeReady: true,
+            stylePalettes: readStylePalettesFromBundle(),
+        });
     } else {
         messageParentFromEditor({
             error: "Invalid DoenetML version or DoenetML package not found",
@@ -351,6 +380,24 @@ function renderWithLastAugmentedProps() {
         // here, there's nothing more we can do from inside the iframe.
     }
 });
+
+/**
+ * The style palettes of the standalone bundle running in this iframe, or
+ * `null` when the bundle predates palette discovery. Reported to the parent
+ * with `iframeReady` so a host can build a palette picker matching the
+ * DoenetML version it actually booted.
+ */
+function readStylePalettesFromBundle(): unknown[] | null {
+    try {
+        return window.getDoenetStylePalettes?.() ?? null;
+    } catch (err) {
+        console.error(
+            "iframe DoenetML: failed to read style palettes from the standalone bundle",
+            err,
+        );
+        return null;
+    }
+}
 
 /**
  * Send a message to the parent React component.

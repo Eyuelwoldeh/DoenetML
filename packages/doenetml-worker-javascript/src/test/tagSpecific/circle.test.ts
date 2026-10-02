@@ -5995,7 +5995,7 @@ $c7.radius
         ).eqls("2469.14");
         expect(
             stateVariables[await resolvePathToNodeIdx("c1c")].stateValues.text,
-        ).eqls("( 12.35, 0.123 )");
+        ).eqls("(12.35, 0.123)");
 
         expect(
             stateVariables[await resolvePathToNodeIdx("c1ar")].stateValues.text,
@@ -6005,16 +6005,16 @@ $c7.radius
         ).eqls("2469.1");
         expect(
             stateVariables[await resolvePathToNodeIdx("c1ac")].stateValues.text,
-        ).eqls("( 12.35, 0.1235 )");
+        ).eqls("(12.35, 0.1235)");
 
         expect(
             stateVariables[await resolvePathToNodeIdx("pc2tp")].stateValues
                 .text,
-        ).eqls("( 1234.57, 0.123 )");
+        ).eqls("(1234.57, 0.123)");
         expect(
             stateVariables[await resolvePathToNodeIdx("pc2atp")].stateValues
                 .text,
-        ).eqls("( 1234.6, 0.1235 )");
+        ).eqls("(1234.6, 0.1235)");
     });
 
     it("circle style descriptions", async () => {
@@ -6022,15 +6022,15 @@ $c7.radius
             doenetML: `
     <setup>
         <styleDefinition stylenumber="1" lineColor="blue" fillColor="blue" lineWidth="2" lineStyle="solid" />
-        <styleDefinition stylenumber="2" lineColor="red" fillColor="green" lineWidth="2" lineStyle="solid" />
+        <styleDefinition stylenumber="2" lineColor="red" fillColor="green" lineWidth="2" lineStyle="solid" fillStyle="horizontal" />
 
         <styleDefinition stylenumber="3" lineColor="blue" fillColor="blue" lineWidth="5" lineStyle="solid" />
-        <styleDefinition stylenumber="4" lineColor="red" fillColor="green" lineWidth="1" lineStyle="dotted" />
+        <styleDefinition stylenumber="4" lineColor="red" fillColor="green" lineWidth="1" lineStyle="dotted" fillStyle="dots" />
     </setup>
 
     <graph>
       <circle center="(-8,0)" name="c1" />
-      <circle center="(-8,4)" name="c2" filled />
+      <circle center="(-8,4)" name="c2" filled fillStyle="vertical" />
       <circle center="(-4,0)" name="c3" stylenumber="2" />
       <circle center="(-4,4)" name="c4" stylenumber="2" filled />
 
@@ -6115,11 +6115,11 @@ $c7.radius
 
         expect(
             stateVariables[await resolvePathToNodeIdx("st2")].stateValues.value,
-        ).toContain("filled blue");
+        ).toContain("filled blue with vertical lines");
         expect(
             stateVariables[await resolvePathToNodeIdx("stn2")].stateValues
                 .value,
-        ).toContain("filled blue circle");
+        ).toContain("filled blue circle with vertical lines");
         expect(
             stateVariables[await resolvePathToNodeIdx("bst2")].stateValues
                 .value,
@@ -6127,7 +6127,7 @@ $c7.radius
         expect(
             stateVariables[await resolvePathToNodeIdx("fst2")].stateValues
                 .value,
-        ).toContain("blue");
+        ).toContain("blue vertical lines");
 
         expect(
             stateVariables[await resolvePathToNodeIdx("st3")].stateValues.value,
@@ -6147,11 +6147,13 @@ $c7.radius
 
         expect(
             stateVariables[await resolvePathToNodeIdx("st4")].stateValues.value,
-        ).toContain("filled green with red border");
+        ).toContain("filled green with horizontal lines and red border");
         expect(
             stateVariables[await resolvePathToNodeIdx("stn4")].stateValues
                 .value,
-        ).toContain("filled green circle with a red border");
+        ).toContain(
+            "filled green circle with horizontal lines and a red border",
+        );
         expect(
             stateVariables[await resolvePathToNodeIdx("bst4")].stateValues
                 .value,
@@ -6159,7 +6161,7 @@ $c7.radius
         expect(
             stateVariables[await resolvePathToNodeIdx("fst4")].stateValues
                 .value,
-        ).toContain("green");
+        ).toContain("green horizontal lines");
 
         expect(
             stateVariables[await resolvePathToNodeIdx("st5")].stateValues.value,
@@ -6211,11 +6213,13 @@ $c7.radius
 
         expect(
             stateVariables[await resolvePathToNodeIdx("st8")].stateValues.value,
-        ).toContain("filled green with thin dotted red border");
+        ).toContain("filled green with dots and thin dotted red border");
         expect(
             stateVariables[await resolvePathToNodeIdx("stn8")].stateValues
                 .value,
-        ).toContain("filled green circle with a thin dotted red border");
+        ).toContain(
+            "filled green circle with dots and a thin dotted red border",
+        );
         expect(
             stateVariables[await resolvePathToNodeIdx("bst8")].stateValues
                 .value,
@@ -6223,7 +6227,7 @@ $c7.radius
         expect(
             stateVariables[await resolvePathToNodeIdx("fst8")].stateValues
                 .value,
-        ).toContain("green");
+        ).toContain("green dots");
     });
 
     it("hideOffGraphIndicator", async () => {
@@ -6368,5 +6372,40 @@ $c7.radius
 
         await test_items("light");
         await test_items("dark");
+    });
+
+    it("a symbolic radius leaves numericalRadius NaN, not null", async () => {
+        // `numericalRadius` is `forRenderer`. The engine briefly reported an
+        // expression it cannot evaluate as `null`, where legacy — and the
+        // engine again now — reported `NaN`. Both keep the circle off the
+        // board (the renderer gates on `numericalRadius > 0`, which neither
+        // passes), but `null` is `0` to the arithmetic the renderer does with
+        // it afterwards, and it is not the `number` the renderer declares.
+        //
+        // This asserts the engine's answer, not the guard's: with the `NaN`
+        // sentinel `evaluateToNumber` is a pass-through here, and a
+        // `sqrt(-4)` radius does not reach it — measured at the
+        // twenty-third pass, which re-anchored `<math>`'s and `<vector>`'s
+        // twins of this test on the `Complex` arm and found this one has no
+        // such leg. Falsify it by simulating the old sentinel
+        // (`toNumberOrNaN` returning `0` for a value with no numeric
+        // reading), not by reverting the guard.
+        const { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+  <graph><circle name="c" center="(0,0)" /></graph>
+  <mathInput name="mi" bindValueTo="$c.radius" />
+  `,
+        });
+
+        await updateMathInputValue({
+            latex: "a",
+            componentIdx: await resolvePathToNodeIdx("mi"),
+            core,
+        });
+
+        const stateVariables = await core.returnAllStateVariables(false, true);
+        const circle = stateVariables[await resolvePathToNodeIdx("c")];
+        expect(circle.stateValues.radius.tree).eq("a");
+        expect(circle.stateValues.numericalRadius).eqls(NaN);
     });
 });

@@ -1,9 +1,11 @@
+import { SERIALIZE_ENCOUNTERED_COMPONENT_PREFIX } from "./BaseComponent";
 import CompositeComponent from "./CompositeComponent";
 import {
     postProcessCopy,
     verifyReplacementsMatchSpecifiedType,
     addAttributesToSingleReplacement,
     addAttributesToSingleReplacementChange,
+    getSelfReferentialFallbackPropName,
 } from "../../utils/copy";
 import { flattenDeep, flattenLevels, deepClone } from "@doenet/utils";
 import {
@@ -11,6 +13,8 @@ import {
     convertUnresolvedAttributesForComponentType,
 } from "../../utils/dast/convertNormalizedDast";
 import { createNewComponentIndices } from "../../utils/componentIndices";
+import { codedDiagnostic } from "../../utils/diagnostics";
+import { errorComponentState } from "../../utils/dast/errors";
 
 export default class Copy extends CompositeComponent {
     static componentType = "_copy";
@@ -328,6 +332,13 @@ export default class Copy extends CompositeComponent {
                             recursive: true,
                             recurseNonStandardComposites:
                                 stateValues.unresolvedPath != null,
+                            // While a path is still to be resolved, the
+                            // recursion has to reach every replacement. Once
+                            // the reference has resolved to the composite
+                            // itself, a list composite among its replacements
+                            // is kept whole, so the copy shows its commas.
+                            stopAtListComposites:
+                                stateValues.unresolvedPath == null,
                             includeWithheldReplacements: true,
                             stopIfHaveProp: firstPropNameFromPath,
                         };
@@ -721,10 +732,11 @@ export default class Copy extends CompositeComponent {
                         return {
                             setValue: { numComponentsSpecified: null },
                             sendDiagnostics: [
-                                {
+                                codedDiagnostic({
                                     type: "warning",
-                                    message: `Cannot extend or copy an unrecognized component type: ${dependencyValues.typeAttr}.`,
-                                },
+                                    code: "doenet-w0065",
+                                    args: { type: dependencyValues.typeAttr },
+                                }),
                             ],
                         };
                     }
@@ -1481,33 +1493,86 @@ export default class Copy extends CompositeComponent {
             serializedReplacements = res.components;
             nComponents = res.nComponents;
         } catch (e) {
-            console.error("we're calling this circular", e);
-            let message = "Circular dependency detected";
-            if (component.attributes.createComponentOfType?.primitive) {
-                message += ` involving \`<${component.attributes.createComponentOfType.primitive.value}>\` component`;
+            // When the error is "Encountered X", it means this Copy is a descendant of its
+            // own source component (a self-referential copy, e.g., `$a` inside `a`'s label).
+            // In recognized rendering contexts, fall back to the source's public `value`
+            // state variable rather than showing an error.
+            if (e.message?.startsWith(SERIALIZE_ENCOUNTERED_COMPONENT_PREFIX)) {
+                // Walk up the ancestor chain to determine if we're in a recognized context.
+                // ancestor.componentClass gives the class of each ancestor (closest first).
+                // We walk through transparent composites (treatAsComponentForRecursiveReplacements,
+                // e.g. <group>) since they pass their contents into their parent's context
+                // unchanged. Any other component (e.g. <point>, <math>) establishes its own
+                // context, so we stop there. For example, `$a` inside
+                // `<label><math>$a</math></label>` uses math's context rather than label's.
+                const fallbackPropName = getSelfReferentialFallbackPropName({
+                    componentAncestors: component.ancestors,
+                    componentInfoObjects,
+                    replacementSourceComponentType:
+                        replacementSourceComponent.componentType,
+                });
+
+                if (fallbackPropName) {
+                    try {
+                        let fallbackResults = await replacementFromProp({
+                            component,
+                            components,
+                            nComponents,
+                            stateIdInfo,
+                            replacementSource: replacementSourceComponent,
+                            propName: fallbackPropName,
+                            allDoenetMLs,
+                            compositeAttributesObj,
+                            componentInfoObjects,
+                            numComponentsForSource,
+                            publicCaseInsensitiveAliasSubstitutions,
+                        });
+                        diagnostics.push(...fallbackResults.diagnostics);
+                        nComponents = fallbackResults.nComponents;
+                        return {
+                            serializedReplacements:
+                                fallbackResults.serializedReplacements,
+                            propVariablesCopiedByReplacement:
+                                fallbackResults.propVariablesCopiedByReplacement,
+                            diagnostics,
+                            nComponents,
+                        };
+                    } catch (innerError) {
+                        // Fall through to the circular dependency handler below
+                        // so this still reports as the original self-reference.
+                    }
+                }
             }
-            message += ".";
+
+            console.error("we're calling this circular", e);
+            // Same situation the composite expander reports, so the same code.
+            const circular = codedDiagnostic({
+                type: "error",
+                code: "doenet-e0005",
+                args: {
+                    componentType:
+                        component.attributes.createComponentOfType?.primitive
+                            ?.value ?? "none",
+                },
+            });
             serializedReplacements = [
                 {
                     type: "serialized",
                     componentType: "_error",
                     componentIdx: nComponents++,
                     stateId: `${stateIdInfo.prefix}${stateIdInfo.num++}`,
-                    state: { message },
+                    state: errorComponentState(circular.message, circular),
                     attributes: {},
                     doenetAttributes: {},
                     children: [],
                 },
             ];
-            diagnostics.push({
-                message,
-                type: "error",
-            });
+            diagnostics.push(circular);
             return { serializedReplacements, diagnostics, nComponents };
         }
 
-        // when copying with link=false, ignore fixed if from essential state
-        // so that, for example, a copy from a sequence with link=false is not fixed
+        // for a `copy` (not an `extend`), ignore fixed if from essential state
+        // so that, for example, a `copy` from a sequence is not fixed
         // TODO: also now removing the `fixed` attribute. Is that the right choice?
         if (!link && serializedReplacements[0].state) {
             delete serializedReplacements[0].state.fixed;
@@ -2403,15 +2468,27 @@ export async function replacementFromProp({
                     endOffset,
                 );
             }
-            diagnostics.push({
-                message: `Could not find prop ${unresolvedPropName} on a component of type ${replacementSource.componentType}`,
-                type: "info",
-            });
+            diagnostics.push(
+                codedDiagnostic({
+                    type: "info",
+                    code: "doenet-i0018",
+                    args: {
+                        property: unresolvedPropName,
+                        component: replacementSource.componentType,
+                    },
+                }),
+            );
         } else if (propName !== "__prop_name_not_found") {
-            diagnostics.push({
-                message: `Could not find prop ${propName} on a component of type ${replacementSource.componentType}`,
-                type: "info",
-            });
+            diagnostics.push(
+                codedDiagnostic({
+                    type: "info",
+                    code: "doenet-i0018",
+                    args: {
+                        property: propName,
+                        component: replacementSource.componentType,
+                    },
+                }),
+            );
         }
         return {
             serializedReplacements: [],
@@ -3669,8 +3746,8 @@ export async function replacementFromProp({
                     for (let attrName in stateVarObj.shadowingInstructions
                         .addAttributeComponentsShadowingStateVariables) {
                         if (attrObj[attrName]?.createComponentOfType) {
-                            // when copying with link=false, don't copy fixed attribute
-                            // so that, for example, a copy from a sequence with link=false is not fixed
+                            // for a `copy` (not an `extend`), don't copy fixed attribute
+                            // so that, for example, a `copy` from a sequence is not fixed
                             if (attrName !== "fixed") {
                                 let vName =
                                     stateVarObj.shadowingInstructions

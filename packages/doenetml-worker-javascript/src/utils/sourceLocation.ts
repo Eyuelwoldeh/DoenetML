@@ -30,6 +30,93 @@ export function getSourceLocationForComponent(
 }
 
 /**
+ * One part of a resolved reference path, as the resolver hands it back: the
+ * `p` and the `styleDescription[1]` of `$p.styleDescription[1]`, each carrying
+ * the span of source it was read from.
+ */
+type ReferencePathPart = {
+    position?: Position;
+    sourceDoc?: number;
+};
+
+/**
+ * The DoenetML an author wrote for a reference, read back out of the source.
+ *
+ * Given the `originalPath` of a ref resolution, returns the span it covers —
+ * `p.styleDescription[1]` for `$p.styleDescription[1]`, *without* the leading
+ * `$`, which every caller adds when it composes its message.
+ *
+ * Reconstructing the text is the only way to name a reference back to the
+ * author. By the time anything goes wrong the reference is a component index
+ * and a state-variable name, and neither of those is anything the author
+ * typed; the source they typed is the one description they can act on.
+ *
+ * Returns `""` when the offsets aren't there. A path part built by a composite
+ * rather than parsed from a document (a `<repeat>` remapping its body, say)
+ * has no position, and a message naming an empty reference is worse than no
+ * message — so a caller that gets `""` back should say nothing rather than
+ * quote nothing.
+ */
+export function doenetMLStringForReference(
+    originalPath: ReferencePathPart[] | undefined | null,
+    allDoenetMLs: readonly string[] | undefined,
+): string {
+    if (!originalPath || originalPath.length === 0) {
+        return "";
+    }
+    const startOffset = originalPath[0].position?.start.offset;
+    const endOffset =
+        originalPath[originalPath.length - 1].position?.end.offset;
+    const sourceDoc = originalPath[0].sourceDoc ?? 0;
+
+    if (startOffset == undefined || endOffset == undefined) {
+        return "";
+    }
+    return allDoenetMLs?.[sourceDoc]?.substring(startOffset, endOffset) ?? "";
+}
+
+/**
+ * The `$` or `$$` an author wrote in front of a reference.
+ *
+ * {@link doenetMLStringForReference} returns the path without it, and a caller
+ * composing a message has to put one back. Hardcoding `$` misquotes every
+ * function reference: `$$fs[$i]` comes back as `$fs[$i]`, naming something the
+ * author did not write and could not search their document for.
+ *
+ * Read from the source rather than inferred, because by this point nothing on
+ * the component says which spelling produced it.
+ *
+ * A parenthesized path is written `$(x)` or `$$(f)`, and its path starts inside
+ * the parentheses — so the `(` is stepped over before looking back for the
+ * dollars, without which `$$(f)` would come back as an ordinary `$`. The parentheses
+ * themselves are not reported: `doenetMLStringForReference` spans the path, so
+ * `$$(fs[$i])` is quoted as `$$fs[$i]`, which names the same reference in the
+ * spelling that does not need them.
+ *
+ * Falls back to `$` whenever the source is not there to read — the same answer
+ * as before, for a reference we cannot say more about. An `extend=` attribute
+ * has no `$` at all and lands there too.
+ */
+export function doenetMLDollarsForReference(
+    originalPath: ReferencePathPart[] | undefined | null,
+    allDoenetMLs: readonly string[] | undefined,
+): string {
+    const startOffset = originalPath?.[0]?.position?.start.offset;
+    if (startOffset == undefined) {
+        return "$";
+    }
+    const sourceDoc = originalPath![0].sourceDoc ?? 0;
+    const source = allDoenetMLs?.[sourceDoc];
+    if (source == undefined) {
+        return "$";
+    }
+    // `$(x)` and `$$(f)` start their path one character further in.
+    const dollarsEnd =
+        source[startOffset - 1] === "(" ? startOffset - 1 : startOffset;
+    return source.substring(dollarsEnd - 2, dollarsEnd) === "$$" ? "$$" : "$";
+}
+
+/**
  * Matches the run of XML tag-name characters immediately after `<`.
  * Per XML 1.0 a name may contain a wider set of characters, but DoenetML
  * tag names only ever use these — keeping the class tight avoids accidentally

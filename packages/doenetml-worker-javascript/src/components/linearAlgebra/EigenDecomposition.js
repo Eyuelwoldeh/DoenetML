@@ -5,6 +5,8 @@ import {
 } from "../../utils/numberDisplay";
 import BaseComponent from "../abstract/BaseComponent";
 import me from "math-expressions";
+import { codedDiagnostic } from "../../utils/diagnostics";
+const { eigs, square, abs, divide } = me.math;
 
 export default class EigenDecomposition extends BaseComponent {
     static componentType = "eigenDecomposition";
@@ -129,16 +131,16 @@ export default class EigenDecomposition extends BaseComponent {
 
                 let result;
                 try {
-                    result = me.math.eigs(matrixArray);
+                    result = eigs(matrixArray);
                 } catch (e) {
                     console.error(
                         "Could nt calculate eigenvalues of matrix",
                         e,
                     );
-                    let warning = {
-                        message: "Could not calculate eigenvalues of matrix",
+                    let warning = codedDiagnostic({
                         type: "warning",
-                    };
+                        code: "doenet-w0059",
+                    });
                     return {
                         setValue: { decomposition: null, numEigenvectors: 0 },
                         sendDiagnostics: [warning],
@@ -264,12 +266,9 @@ export default class EigenDecomposition extends BaseComponent {
                     // eigenvector3 is all components of the third eigenvector
 
                     let eigenvectorInd = Number(varEnding) - 1;
-                    if (
-                        !(
-                            Number.isInteger(eigenvectorInd) &&
-                            eigenvectorInd >= 0
-                        )
-                    ) {
+                    if (!(
+                        Number.isInteger(eigenvectorInd) && eigenvectorInd >= 0
+                    )) {
                         return [];
                     }
 
@@ -355,10 +354,10 @@ export default class EigenDecomposition extends BaseComponent {
                             globalDependencyValues.decomposition.eigenvectors[i]
                                 .vector[j];
                         vector.push(val);
-                        vectorMag += me.math.square(me.math.abs(val));
+                        vectorMag += square(abs(val));
                     }
                     vectorMag = Math.sqrt(vectorMag);
-                    vector = vector.map((x) => me.math.divide(x, vectorMag));
+                    vector = vector.map((x) => divide(x, vectorMag));
 
                     for (let j = 0; j < arraySize[1]; j++) {
                         eigenvectors[`${i},${j}`] = vector[j];

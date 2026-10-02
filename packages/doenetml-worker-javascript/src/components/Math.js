@@ -24,9 +24,10 @@ import {
     textToMathFactory,
     latexToMathFactory,
     roundForDisplay,
-    mergeListsWithOtherContainers,
+    mergeListsIfNeeded,
     superSubscriptsToUnicode,
     unicodeToSuperSubscripts,
+    plainComplex,
     preprocessMathInverseDefinition,
 } from "../utils/math";
 import { createInputStringFromChildren } from "../utils/parseMath";
@@ -52,7 +53,7 @@ export default class MathComponent extends InlineComponent {
     // used when creating new component via adapter or copy prop
     static primaryStateVariableForDefinition = "unnormalizedValue";
 
-    // for copying a property with link="false"
+    // for a `copy` of a property,
     // make sure it doesn't use the essential state variable unnormalizedValue
     static primaryEssentialStateVariable = "value";
 
@@ -136,10 +137,29 @@ export default class MathComponent extends InlineComponent {
         attributes.displayDigits.highlighted = true;
 
         attributes.renderMode = {
-            description: 'How the math is rendered (e.g. "inline", "display").',
+            description: "How the math is rendered.",
             createComponentOfType: "text",
             createStateVariable: "renderMode",
             defaultValue: "inline",
+            toLowerCase: true,
+            // The math renderer understands two further modes, neither of
+            // which `<math>` can reach. `numbered` needs an `equationTag` state
+            // variable to fill its `\tag{}`, and only the equation components
+            // (`<me>`, `<men>`, `<odeSystem>`) define one. `align` needs `&`
+            // alignment markers in the LaTeX, which the math-expressions
+            // expression underlying `<math>` cannot carry — that mode is
+            // reached through components like `<md>` instead.
+            validValues: [
+                {
+                    value: "inline",
+                    description: "Render inline with the surrounding text.",
+                },
+                {
+                    value: "display",
+                    description:
+                        "Render as a centered equation on its own line.",
+                },
+            ],
             public: true,
             forRenderer: true,
         };
@@ -743,7 +763,17 @@ export default class MathComponent extends InlineComponent {
                 },
             }),
             definition: function ({ dependencyValues }) {
-                let number = dependencyValues.value.evaluate_to_constant();
+                // `plainComplex` because a math.js `Complex` does not survive
+                // the structured clone to the main thread with its prototype,
+                // and `?? NaN` as belt and braces: `plainComplex` passes
+                // anything that is not a `Complex` straight through, and this
+                // variable's own description promises NaN for anything that is
+                // not a number. `evaluate_to_constant()` reports `x+y` as
+                // `NaN` itself, so the `??` no longer has a case it must catch.
+                let number =
+                    plainComplex(
+                        dependencyValues.value.evaluate_to_constant(),
+                    ) ?? NaN;
                 return { setValue: { number } };
             },
             inverseDefinition: function ({ desiredStateVariableValues }) {
@@ -1257,17 +1287,15 @@ export default class MathComponent extends InlineComponent {
 }
 
 function calculateExpressionWithCodes({ dependencyValues, changes }) {
-    if (
-        !(
-            ("stringMathChildren" in changes &&
-                changes.stringMathChildren.componentIdentitiesChanged) ||
-            "format" in changes ||
-            "splitSymbols" in changes ||
-            "parseScientificNotation" in changes ||
-            "functionSymbols" in changes ||
-            "mathChildrenFunctionSymbols" in changes
-        )
-    ) {
+    if (!(
+        ("stringMathChildren" in changes &&
+            changes.stringMathChildren.componentIdentitiesChanged) ||
+        "format" in changes ||
+        "splitSymbols" in changes ||
+        "parseScientificNotation" in changes ||
+        "functionSymbols" in changes ||
+        "mathChildrenFunctionSymbols" in changes
+    )) {
         // if component identities of stringMathChildren didn't change
         // and format didn't change
         // then expressionWithCodes remains unchanged.
@@ -1357,7 +1385,7 @@ function calculateMathValue({ dependencyValues } = {}) {
         value = value.substitute(subsMapping);
     }
 
-    value = me.fromAst(mergeListsWithOtherContainers(value.tree));
+    value = mergeListsIfNeeded(value);
 
     return {
         setValue: { unnormalizedValue: value },

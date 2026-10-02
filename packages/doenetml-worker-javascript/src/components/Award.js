@@ -7,7 +7,10 @@ import {
 } from "../utils/booleanLogic";
 import { unwrapSource } from "../utils/dast/convertNormalizedDast";
 import { comparePathsIgnorePosition } from "../utils/dast/path";
-import { returnSimplifyExpandOnCompareWarning } from "../utils/answer";
+import {
+    returnCreditAttributeAndStateVariableDefinition,
+    returnSimplifyExpandOnCompareWarning,
+} from "../utils/answer";
 
 export default class Award extends BaseComponent {
     static componentType = "award";
@@ -25,15 +28,10 @@ export default class Award extends BaseComponent {
     static createAttributesObject() {
         let attributes = super.createAttributesObject();
 
-        attributes.credit = {
-            createComponentOfType: "number",
-            createStateVariable: "credit",
+        attributes.credit = returnCreditAttributeAndStateVariableDefinition({
             defaultValue: 1,
-            public: true,
-            attributesForCreatedComponent: { convertBoolean: "true" },
-            description:
-                "Fraction of credit (0 to 1) granted when this award matches.",
-        };
+            componentDescription: "this award matches",
+        }).attribute;
         attributes.matchPartial = {
             createComponentOfType: "boolean",
             createStateVariable: "matchPartial",
@@ -384,6 +382,12 @@ export default class Award extends BaseComponent {
     static returnStateVariableDefinitions() {
         let stateVariableDefinitions = super.returnStateVariableDefinitions();
 
+        stateVariableDefinitions.credit =
+            returnCreditAttributeAndStateVariableDefinition({
+                defaultValue: 1,
+                componentDescription: "this award matches",
+            }).stateVariableDefinition;
+
         Object.assign(
             stateVariableDefinitions,
             returnSimplifyExpandOnCompareWarning(),
@@ -619,12 +623,9 @@ export default class Award extends BaseComponent {
                     Math.min(1, fractionSatisfiedIfSubmit),
                 );
 
-                let creditAchievedIfSubmit = 0;
-                if (Number.isFinite(dependencyValues.credit)) {
-                    creditAchievedIfSubmit =
-                        Math.max(0, Math.min(1, dependencyValues.credit)) *
-                        fractionSatisfiedIfSubmit;
-                }
+                // `credit` is already clamped to [0, 1].
+                const creditAchievedIfSubmit =
+                    dependencyValues.credit * fractionSatisfiedIfSubmit;
                 return {
                     setValue: {
                         fractionSatisfiedIfSubmit,
@@ -859,6 +860,79 @@ export default class Award extends BaseComponent {
             isAlias: true,
             targetVariableName: "feedback1",
             description: "The first feedback message produced by this award.",
+        };
+
+        // Identifies which answer-input state variables this award's condition
+        // references, so the answer can compute per-input coloring.
+        // Each entry is { componentIdx, propVariable } pointing to the source
+        // component+variable that a code-child in the <when> expression shadows.
+        // Only entries whose componentIdx is one of the answer's own inputs are included.
+        stateVariableDefinitions.colorInputsSeparatelyFromAnswer = {
+            returnDependencies: () => ({
+                colorInputsSeparately: {
+                    dependencyType: "parentStateVariable",
+                    variableName: "colorInputsSeparately",
+                },
+            }),
+            definition({ dependencyValues }) {
+                return {
+                    setValue: {
+                        colorInputsSeparatelyFromAnswer:
+                            dependencyValues.colorInputsSeparately ?? false,
+                    },
+                };
+            },
+        };
+
+        stateVariableDefinitions.referencedInputStateVars = {
+            stateVariablesDeterminingDependencies: [
+                "colorInputsSeparatelyFromAnswer",
+            ],
+            returnDependencies({ stateValues }) {
+                const deps = {
+                    colorInputsSeparatelyFromAnswer: {
+                        dependencyType: "parentStateVariable",
+                        variableName: "colorInputsSeparately",
+                    },
+                };
+                // Only add the remaining deps when colorInputsSeparately is
+                // active — avoids resolving When.referencedStateVars (which
+                // traverses descendants) unnecessarily.
+                if (stateValues.colorInputsSeparatelyFromAnswer) {
+                    // Lightweight structural set — no live values so coloring
+                    // doesn't go stale on every keystroke.
+                    deps.allInputComponentIdxs = {
+                        dependencyType: "parentStateVariable",
+                        variableName: "allInputComponentIdxs",
+                    };
+                    deps.whenChild = {
+                        dependencyType: "child",
+                        childGroups: ["whens"],
+                        variableNames: ["referencedStateVars"],
+                    };
+                }
+                return deps;
+            },
+            definition({ dependencyValues }) {
+                if (!dependencyValues.colorInputsSeparatelyFromAnswer) {
+                    return { setValue: { referencedInputStateVars: [] } };
+                }
+
+                const allInputComponentIdxs =
+                    dependencyValues.allInputComponentIdxs ?? new Set();
+
+                const referencedStateVars =
+                    dependencyValues.whenChild?.[0]?.stateValues
+                        .referencedStateVars ?? [];
+                return {
+                    setValue: {
+                        referencedInputStateVars: referencedStateVars.filter(
+                            (ref) =>
+                                allInputComponentIdxs.has(ref.componentIdx),
+                        ),
+                    },
+                };
+            },
         };
 
         return stateVariableDefinitions;

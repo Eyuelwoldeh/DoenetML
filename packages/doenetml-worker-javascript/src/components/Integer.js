@@ -10,6 +10,7 @@ import {
 import me from "math-expressions";
 import { renameStateVariable } from "../utils/stateVariables";
 import { textToAst } from "../utils/math";
+import { toNumberOrNaN } from "@doenet/utils";
 
 export default class Integer extends NumberComponent {
     static componentType = "integer";
@@ -188,7 +189,11 @@ export default class Integer extends NumberComponent {
             inverseDefinition({ desiredStateVariableValues, dependencyValues }) {
                 let desiredValue = desiredStateVariableValues.value;
                 if (desiredValue instanceof me.class) {
-                    desiredValue = desiredValue.evaluate_to_constant();
+                    // An expression with no numeric value, or a complex one,
+                    // must not round to a number.
+                    desiredValue = toNumberOrNaN(
+                        desiredValue.evaluate_to_constant(),
+                    );
                 } else {
                     desiredValue = Number(desiredValue);
                 }

@@ -1,9 +1,16 @@
 import type { DastElement } from "@doenet/parser";
-import { buildEffectiveMathInputFunctionNames } from "@doenet/utils";
+// Its own subpath rather than the root export, which would drag
+// math-expressions and the AST and URL helpers onto the boot path of a worker
+// the editor waits on. `test/no-root-utils-import.test.ts` explains it in full
+// and keeps it that way.
+import { buildEffectiveMathInputFunctionNames } from "@doenet/utils/components/mathInputFunctionNames";
 import {
     AutoCompleter,
+    isParenthesizedRefMacro,
+    segmentFitsBareMacro,
     type AliasedElementSchema,
     type CompletionContext,
+    type RefMemberCompletionContext,
     type ElementSchema,
     type SchemaAttribute,
     type SchemaProperty,
@@ -33,6 +40,7 @@ import { COMPLETION_TYPES } from "../completion-types";
 import type {
     FunctionNamesBreakdownPayload,
     HelpContent,
+    SizeSyntaxPayload,
     SuggestionItem,
 } from "./types";
 
@@ -149,8 +157,7 @@ function findSchemaProperty(
 function augmentWithPerInstanceAttributes(
     effective: SchemaEntryForHelp | undefined,
     perInstanceAllowlist:
-        | ReadonlyMap<string, DeclaredModuleAttribute>
-        | undefined,
+        ReadonlyMap<string, DeclaredModuleAttribute> | undefined,
 ): SchemaEntryForHelp | undefined {
     if (
         !effective ||
@@ -475,20 +482,22 @@ function fullIdentifierAtOffset(
 }
 
 /**
- * Detect whether the segment under the cursor sits inside a `$(...)` macro,
- * by checking whether the char immediately before `replaceFromOffset` is `(`.
- * This is the same signal `getCompletionContext` uses to choose the macro
- * char class for `replaceFromOffset` and `typedPrefix`.
+ * Detect whether the name starting at `nameOffset` is the one right after a
+ * macro's `$(`, which decides the char class it is read with — hyphens are
+ * legal in `$(foo-bar)` and not in `$foo`.
+ *
+ * Only ever asked of the first segment of a path, where the macro's opening
+ * punctuation is the character in front. A *member* segment reads its form off
+ * the completion context instead, since the `(` is several segments to its
+ * left and the path in between can contain a `$` of its own (`$(rep[$i].x`).
  */
-function isParenthesizedSegment(
-    source: string,
-    replaceFromOffset: number,
-): boolean {
-    return source.charAt(replaceFromOffset - 1) === "(";
+function isParenthesizedMacroName(source: string, nameOffset: number): boolean {
+    return (
+        source.charAt(nameOffset - 1) === "(" &&
+        source.charAt(nameOffset - 2) === "$"
+    );
 }
 
-const SIMPLE_IDENT_REGEX = /^[A-Za-z_][A-Za-z0-9_]*$/;
-const BRACKET_INDEX_SUFFIX_REGEX = /(\[[^\]]*\])*$/;
 /** Global match for individual `[...]` groups so we can count them per segment. */
 const BRACKET_INDEX_ALL_REGEX = /\[[^\]]*\]/g;
 
@@ -505,19 +514,15 @@ function countBracketIndices(rawSegment: string | undefined): number {
 }
 
 /**
- * Wrap a path segment's name in parens if it isn't a SimpleIdent (e.g.,
- * contains hyphens), mirroring the grammar that requires `$(foo-bar)` over
- * `$foo-bar`. Trailing bracket-index suffixes are kept outside the parens
- * (`rep[1]` stays as `rep[1]`, never `(rep[1])`). Used to format
- * `displayPath` for the help-panel sentence so it renders the same syntax
- * the author would type.
+ * Render a whole macro path the way the author would have to type it.
+ *
+ * Parentheses go around the *path*, not around a segment: the grammar's
+ * parenthesized form is `$(a.my-b)`, and neither `$a.(my-b)` nor `$(a).my-b`
+ * is a reference. So one hyphenated segment anywhere parenthesizes everything.
  */
-function formatPathSegment(segment: string): string {
-    const bracketSuffix = segment.match(BRACKET_INDEX_SUFFIX_REGEX)?.[0] ?? "";
-    const baseName = segment.slice(0, segment.length - bracketSuffix.length);
-    return SIMPLE_IDENT_REGEX.test(baseName)
-        ? segment
-        : `(${baseName})${bracketSuffix}`;
+function formatMacroPath(segments: readonly string[]): string {
+    const path = segments.join(".");
+    return segments.every(segmentFitsBareMacro) ? path : `(${path})`;
 }
 
 /**
@@ -816,6 +821,108 @@ function computeFunctionNamesBreakdownForAttribute(
     };
 }
 
+/**
+ * Component type whose value is a length: a bare number of pixels, a number
+ * with a unit, or a percentage. Matching on the type rather than on
+ * `width`/`height` by name means a `componentSize` attribute added to the
+ * worker later is explained without a change here.
+ */
+const COMPONENT_SIZE_TYPE = "componentSize";
+
+/**
+ * Elements whose `width` selects the nearest named `size` preset instead of
+ * being used as a literal length — the value is a hint, not a measurement, so
+ * the panel says so. See {@link SizeSyntaxPayload.snapsToSizePreset}.
+ */
+const ELEMENTS_SNAPPING_WIDTH_TO_SIZE: ReadonlySet<string> = new Set([
+    "graph",
+    "image",
+    "video",
+]);
+
+/**
+ * Elements whose `width` is read only as a share of the width around them.
+ * A side-by-side layout divides its row into percentages; an absolute width
+ * there raises the `side-by-side-absolute-widths` warning and is coerced to
+ * relative, so the absolute forms are not offered.
+ */
+const ELEMENTS_WITH_RELATIVE_ONLY_WIDTH: ReadonlySet<string> = new Set([
+    "sideBySide",
+    "sbsGroup",
+]);
+
+/**
+ * The accepted length forms, in the order the panel lists them: the absolute
+ * units first (pixels being the one an author reaches for), then the relative
+ * one. `mm` is left out as the near-duplicate of `cm` rather than because it
+ * is rejected.
+ *
+ * The list is filtered down for the two attributes that take only part of it
+ * — see {@link computeSizeSyntaxForAttribute}. Naming a form only to rule it
+ * out is more confusing than never raising it, so each attribute is offered
+ * exactly what it honors.
+ */
+const COMPONENT_SIZE_EXAMPLES: SizeSyntaxPayload["examples"] = [
+    { value: "600", kind: "absolute" },
+    { value: "600px", kind: "absolute" },
+    { value: "6in", kind: "absolute" },
+    { value: "450pt", kind: "absolute" },
+    { value: "15cm", kind: "absolute" },
+    { value: "50%", kind: "relative" },
+];
+
+const COMPONENT_SIZE_ABSOLUTE_EXAMPLES: SizeSyntaxPayload["examples"] =
+    COMPONENT_SIZE_EXAMPLES.filter((e) => e.kind === "absolute");
+
+const COMPONENT_SIZE_RELATIVE_EXAMPLES: SizeSyntaxPayload["examples"] =
+    COMPONENT_SIZE_EXAMPLES.filter((e) => e.kind === "relative");
+
+/**
+ * Pick the forms an attribute actually honors:
+ *
+ * - A **height** gets the absolute forms only. A percentage needs a containing
+ *   block with a definite size to measure against; along the block axis there
+ *   is none, so a percentage height resolves to `auto` and the element falls
+ *   back to its content height.
+ * - A **side-by-side width** gets the relative form only, since the runtime
+ *   coerces an absolute one (see {@link ELEMENTS_WITH_RELATIVE_ONLY_WIDTH}).
+ * - Every other `componentSize` attribute gets the full list.
+ */
+function componentSizeExamplesFor(
+    elementName: string,
+    isHeight: boolean,
+): SizeSyntaxPayload["examples"] {
+    if (isHeight) return COMPONENT_SIZE_ABSOLUTE_EXAMPLES;
+    if (ELEMENTS_WITH_RELATIVE_ONLY_WIDTH.has(elementName)) {
+        return COMPONENT_SIZE_RELATIVE_EXAMPLES;
+    }
+    return COMPONENT_SIZE_EXAMPLES;
+}
+
+/**
+ * Build the "Accepted sizes" payload for an attribute, or `undefined` when the
+ * attribute's value is not a length. Every `componentSize` attribute qualifies,
+ * so a size attribute added to the worker later is explained without a change
+ * here; `_componentSizeList` attributes (a `<sideBySide>`'s `widths` and
+ * `margins`) are deliberately not, since a list of sizes needs a different
+ * explanation than a single one.
+ */
+function computeSizeSyntaxForAttribute(
+    elementName: string,
+    schemaAttr: SchemaAttribute,
+): SizeSyntaxPayload | undefined {
+    if (schemaAttr.type !== COMPONENT_SIZE_TYPE) return undefined;
+
+    const isHeight = schemaAttr.name.toLowerCase() === "height";
+    const snapsToSizePreset =
+        !isHeight && ELEMENTS_SNAPPING_WIDTH_TO_SIZE.has(elementName);
+
+    return {
+        examples: componentSizeExamplesFor(elementName, isHeight),
+        ...(snapsToSizePreset ? { snapsToSizePreset: true } : {}),
+    };
+}
+
 function helpForAttribute(
     ownEntry: ElementSchema | undefined,
     effectiveEntry: SchemaEntryForHelp | undefined,
@@ -845,6 +952,8 @@ function helpForAttribute(
         activeDefaultCtx,
     );
 
+    const sizeSyntax = computeSizeSyntaxForAttribute(ownEntry.name, schemaAttr);
+
     return {
         kind: "attribute",
         elementName: ownEntry.name,
@@ -854,16 +963,20 @@ function helpForAttribute(
         // matching `helpForElement`. (E.g. `<row functionSymbols>` inside
         // `<matrix>` shows `matrixRow`'s description and links to its page.)
         docsSlug: effectiveEntry.docsSlug ?? null,
-        // Only declared `validValues` flow into `autocompleteValues` (with
-        // per-value descriptions); boolean primitives intentionally omit
-        // this row since their attribute description already conveys
-        // true/false. Boolean aliases injected via valueForTrue/valueForFalse
-        // are kept out of `autocompleteValues` by the schema generator.
+        // Declared `validValues` and `suggestedValues` both flow into
+        // `autocompleteValues` (with per-value descriptions); boolean
+        // primitives intentionally omit this row since their attribute
+        // description already conveys true/false. Boolean aliases injected via
+        // valueForTrue/valueForFalse are kept out of `autocompleteValues` by
+        // the schema generator.
         allowedValues: schemaAttr.autocompleteValues,
+        allowedValuesArePerItem: schemaAttr.isList,
+        allowedValuesAreSuggestions: schemaAttr.suggestedValuesOnly,
         defaultValue: schemaAttr.defaultValue,
         ...(activeDefault ? { activeDefault } : {}),
         ...(styleBreakdown ? { styleBreakdown } : {}),
         ...(functionNamesBreakdown ? { functionNamesBreakdown } : {}),
+        ...(sizeSyntax ? { sizeSyntax } : {}),
     };
 }
 
@@ -960,13 +1073,11 @@ function tryArrayEntryHelp(
     // rather than `points[…].x`, and `arr[0][2].z` rather than collapsing
     // both indices). `rawPathParts` is position-aligned with `pathParts`,
     // so slicing from `arrayPropPathIndex` picks the array-prop segment
-    // through the cursor's `memberName`. Hyphenated names are paren-wrapped
-    // by `formatPathSegment` so the rendering matches what the author
-    // would actually have to type.
-    const displayTail = ctx.rawPathParts
-        .slice(arrayPropPathIndex)
-        .map(formatPathSegment)
-        .join(".");
+    // through the cursor's `memberName`. This is a tail of a path rather
+    // than a whole one — it is rendered on its own, without a `$` — so no
+    // parentheses go around it; every segment here is a schema property or
+    // index alias, all of which are SimpleIdents anyway.
+    const displayTail = ctx.rawPathParts.slice(arrayPropPathIndex).join(".");
 
     return {
         kind: "arrayEntry",
@@ -988,19 +1099,15 @@ function tryArrayEntryHelp(
 async function helpForRefMember(
     completer: AutoCompleter,
     offset: number,
-    ctx: {
-        typedPrefix: string;
-        replaceFromOffset: number;
-        pathParts: string[];
-        pathPartHasIndex: boolean[];
-        rawPathParts: string[];
-    },
+    ctx: RefMemberCompletionContext,
 ): Promise<HelpContent> {
     const memberName = fullIdentifierAtOffset(
         completer.source,
         ctx.replaceFromOffset,
         offset,
-        isParenthesizedSegment(completer.source, ctx.replaceFromOffset),
+        // Every segment of the parenthesized form reads with the richer
+        // `Ident` char class, members included.
+        isParenthesizedRefMacro(ctx),
     );
     if (!memberName) return NONE;
     return await helpForRefMemberByName(completer, offset, ctx, memberName);
@@ -1009,18 +1116,13 @@ async function helpForRefMember(
 /**
  * Build the `displayPath` for a member-help payload by joining the raw path
  * prefix (with authored bracket indices preserved) and replacing the final
- * segment with the resolved `memberName`. Every segment is passed through
- * `formatPathSegment` so hyphenated names get re-wrapped in parens
- * (`getCompletionContext` strips parens during normalization).
+ * segment with the resolved `memberName`.
  */
 function buildMemberDisplayPath(
     rawPathParts: readonly string[],
     memberName: string,
 ): string {
-    return [
-        ...rawPathParts.slice(0, -1).map(formatPathSegment),
-        formatPathSegment(memberName),
-    ].join(".");
+    return formatMacroPath([...rawPathParts.slice(0, -1), memberName]);
 }
 
 /**
@@ -1040,7 +1142,7 @@ async function unresolvedRefForChain(
     if (reason !== "notFound" && reason !== "multiple") return null;
     return {
         kind: "unresolvedRef",
-        displayPath: ctx.rawPathParts.map(formatPathSegment).join("."),
+        displayPath: formatMacroPath(ctx.rawPathParts),
         reason,
     };
 }
@@ -1240,7 +1342,7 @@ async function helpForRefName(
         completer.source,
         ctx.replaceFromOffset,
         offset,
-        isParenthesizedSegment(completer.source, ctx.replaceFromOffset),
+        isParenthesizedMacroName(completer.source, ctx.replaceFromOffset),
     );
     if (!refName) return NONE;
     return await helpForRefNameByName(completer, offset, refName);
@@ -1261,7 +1363,7 @@ async function helpForRefNameByName(
         return {
             kind: "refName",
             refName,
-            displayPath: formatPathSegment(refName),
+            displayPath: formatMacroPath([refName]),
             targetElementName: referent.name,
             line,
         };
@@ -1275,7 +1377,7 @@ async function helpForRefNameByName(
         return {
             kind: "refName",
             refName,
-            displayPath: formatPathSegment(refName),
+            displayPath: formatMacroPath([refName]),
             // `targetElementName` is the binding's introducer — the only static,
             // always-correct answer (the iteration value's type is dynamic).
             targetElementName: derived.owner.name,
@@ -1301,7 +1403,7 @@ async function helpForRefNameByName(
     if (reason === "found") return NONE;
     return {
         kind: "unresolvedRef",
-        displayPath: formatPathSegment(refName),
+        displayPath: formatMacroPath([refName]),
         reason,
     };
 }

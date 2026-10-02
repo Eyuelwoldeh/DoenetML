@@ -1,0 +1,136 @@
+export * from "./index";
+import { doenetGlobalConfig, hostProvidedWorkerUrl } from "./global-config";
+// Re-exported beside `setExternalCoreWorkerUrl` so `@doenet/standalone` can
+// make its worker re-point defer to a host-chosen URL the same way the
+// resolution at the bottom of this module does.
+export { hostProvidedWorkerUrl } from "./global-config";
+
+// Externalized-worker entry point (counterpart to `doenetml-inline-worker.ts`).
+//
+// Instead of embedding the entire ~15 MB core worker as an inline Blob string
+// in the importing bundle, point the worker URL at a separately-served
+// `doenetml-worker/index.js` co-located next to whatever bundle imported this
+// module (resolved relative to this module's own URL at runtime). Dropping the
+// worker string means each realm that loads the bundle no longer holds its own
+// ~15 MB copy.
+//
+// `workerPath` is held in a variable rather than inlined into the `new URL(...)`
+// call so Vite does not statically rewrite it as a build-time asset reference;
+// we want a plain runtime resolution against `import.meta.url`.
+const workerPath = "./doenetml-worker/index.js";
+
+/**
+ * Resolve the URL to load the worker from. Returns `null` if no URL can be
+ * resolved (the caller then leaves the `global-config.ts` default in place).
+ */
+function resolveWorkerUrl(): string | null {
+    // Normal case: the worker directory is co-served next to this bundle.
+    try {
+        return new URL(workerPath, import.meta.url).href;
+    } catch {
+        // `import.meta.url` is not a hierarchical URL — e.g. the bundle was
+        // loaded from a blob:/data: URL (some hosts and the component tests
+        // do this). Relative resolution against such a base throws, and
+        // "next to the bundle" does not exist.
+    }
+    // Fallback: origin-root `/doenetml-worker/index.js` against the document
+    // base URL — the same convention as `getWorkerUrl()` in global-config.ts.
+    // In a srcdoc iframe, `document.baseURI` inherits the embedding page's
+    // base URL, so this resolves against the host page's origin.
+    try {
+        return new URL("/doenetml-worker/index.js", document.baseURI).href;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * The bootstrap Blob URL this module created for the current worker URL, so a
+ * later call can revoke it instead of leaking it. `null` while the worker URL
+ * in force needs no wrapper.
+ */
+let ownedBootstrapUrl: string | null = null;
+
+/**
+ * Point the viewer's core worker at `workerUrl`, wrapping it for cross-origin
+ * loading where that is needed.
+ *
+ * Exported so `@doenet/standalone` can redirect the worker to a version-pinned
+ * copy of itself — see `pinPackageVersion` there, which explains why the URL
+ * this module resolves is not always the one to use. It has to be a call an
+ * importer makes afterwards rather than something configured ahead of time: the
+ * resolution below runs in this module's body, before any importer's. Both
+ * calls land at module evaluation, and must: a second call revokes the Blob URL
+ * the first wrapped the worker in, and past the first viewer mount that URL can
+ * already be held elsewhere — a mounted editor hands `doenetWorkerUrl` to the
+ * LSP, which spawns its own core from it later.
+ */
+export function setExternalCoreWorkerUrl(workerUrl: string) {
+    // Same-origin needs no wrapper: `new Worker(url)` works directly, and every
+    // worker created from that URL shares the browser's HTTP + compiled-script
+    // cache. Cross-origin (the CDN case, as PreTeXt and doenet.org load it) a
+    // dedicated `new Worker(crossOriginUrl)` is blocked, so wrap the worker in a
+    // tiny SAME-ORIGIN classic-worker bootstrap that `importScripts()` the real
+    // (CORS-served) worker. `importScripts` is allowed cross-origin in classic
+    // workers — which is exactly what `createCoreWorker` (`utils/docUtils.ts`)
+    // creates — so this realm holds only the ~100-byte bootstrap instead of the
+    // multi-MB worker, which is fetched and parsed on the worker thread.
+    //
+    // The bootstrap also records the real script URL in
+    // `self.__doenetWorkerScriptUrl`: the worker fetches its WASM from beside
+    // its own script (see the loading ladder in @doenet/doenetml-worker's
+    // src/wasmLoading.ts), and a worker booted from this blob URL has only the
+    // blob to resolve against.
+    const bootstrapUrl = isSameOrigin(workerUrl)
+        ? null
+        : URL.createObjectURL(
+              new Blob(
+                  [
+                      `self.__doenetWorkerScriptUrl = ${JSON.stringify(workerUrl)};` +
+                          `importScripts(${JSON.stringify(workerUrl)});`,
+                  ],
+                  {
+                      type: "text/javascript",
+                  },
+              ),
+          );
+    if (ownedBootstrapUrl !== null) {
+        URL.revokeObjectURL(ownedBootstrapUrl);
+    }
+    ownedBootstrapUrl = bootstrapUrl;
+    doenetGlobalConfig.doenetWorkerUrl = bootstrapUrl ?? workerUrl;
+}
+
+/**
+ * Is `url` same-origin with the realm that loaded this bundle? Blob/data URLs
+ * are same-origin to their realm.
+ */
+function isSameOrigin(url: string): boolean {
+    try {
+        const u = new URL(url, self.location.href);
+        if (u.protocol === "blob:" || u.protocol === "data:") {
+            return true;
+        }
+        return u.origin === self.location.origin;
+    } catch {
+        // If we cannot parse/compare, assume same-origin and let `new Worker`
+        // attempt it directly.
+        return true;
+    }
+}
+
+try {
+    // A worker URL the host set before this module evaluated is an explicit
+    // deployment choice; leave it in force rather than re-resolving.
+    if (!hostProvidedWorkerUrl) {
+        const workerUrl = resolveWorkerUrl();
+        if (workerUrl !== null) {
+            setExternalCoreWorkerUrl(workerUrl);
+        }
+        // workerUrl === null: keep the default from global-config.ts.
+    }
+} catch (e) {
+    // Never let worker-URL resolution break evaluation of the whole bundle —
+    // the default from global-config.ts remains in effect.
+    console.warn("Unable to resolve external DoenetML worker URL:", e);
+}

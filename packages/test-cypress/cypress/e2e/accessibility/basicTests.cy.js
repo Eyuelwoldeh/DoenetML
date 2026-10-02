@@ -208,6 +208,12 @@ describe("Basic accessibility tests", { tags: ["@group5"] }, function () {
         });
     });
 
+    // A block `<choiceInput>` renders its fieldset label in a `<div>` carrying
+    // `aria-labelledby`, never a native `<legend>` — a `<legend>` pushes a list
+    // item's marker off the label's row (see `tagSpecific/list.cy.js`). The axe
+    // pass is what confirms the fieldset is still named for assistive technology
+    // without one. The last list here puts an input in an `<li>`, the shape
+    // where the `<legend>` was doing visible damage.
     it("Lists", () => {
         cy.window().then(async (win) => {
             win.postMessage(
@@ -237,6 +243,14 @@ describe("Basic accessibility tests", { tags: ["@group5"] }, function () {
                             </ol>
                         </li>
                     </ul>
+
+                    <ol>
+                        <li><choiceInput name="ciInLi">
+                            <label>Which of these are variables?</label>
+                            <choice credit="1">t</choice>
+                            <choice>g</choice>
+                        </choiceInput></li>
+                    </ol>
   `,
                 },
                 "*",
@@ -244,6 +258,10 @@ describe("Basic accessibility tests", { tags: ["@group5"] }, function () {
         });
 
         cy.get(".doenet-viewer").should("contain.text", "apple");
+        // Positively, so a stale id would fail here rather than make the
+        // `not.exist` below pass for the wrong reason.
+        cy.get("#ciInLi > div#ciInLi-label").should("exist");
+        cy.get("#ciInLi > legend").should("not.exist");
 
         cy.checkAccessibility([".doenet-viewer"], {
             onlyWarnImpacts: ["moderate", "minor"],
@@ -630,6 +648,7 @@ describe("Basic accessibility tests", { tags: ["@group5"] }, function () {
     </p>
     <p><booleanInput><label>yes</label></booleanInput></p>
     <p><matrixInput><label>A:</label></matrixInput></p>
+    <p><fractionInput><label>A fraction:</label></fractionInput></p>
 
   `,
                 },
@@ -685,6 +704,9 @@ describe("Basic accessibility tests", { tags: ["@group5"] }, function () {
         <p><label for="$mat">A:</label></p>
         <p><matrixInput name="mat"/></p>
 
+        <p><label for="$frac">A fraction:</label></p>
+        <p><fractionInput name="frac"/></p>
+
     `,
                 },
                 "*",
@@ -736,6 +758,7 @@ describe("Basic accessibility tests", { tags: ["@group5"] }, function () {
     </p>
     <p><booleanInput><shortDescription>yes</shortDescription></booleanInput></p>
     <p><matrixInput><shortDescription>A</shortDescription></matrixInput></p>
+    <p><fractionInput><shortDescription>A fraction</shortDescription></fractionInput></p>
 
   `,
                 },
@@ -1474,13 +1497,13 @@ describe("Basic accessibility tests", { tags: ["@group5"] }, function () {
                 {
                     doenetML: `
     <p>
-    <textInput name="ti" labelPosition="right"><label>Text</label></textInput>
+    <textInput name="ti" labelPosition="end"><label>Text</label></textInput>
     </p>
     <p>
-    <mathInput name="mi" labelPosition="left"><label>Math</label></mathInput>
+    <mathInput name="mi" labelPosition="start"><label>Math</label></mathInput>
     </p>
     <p>
-    <booleanInput name="bi" labelPosition="right"><label>Boolean</label></booleanInput>
+    <booleanInput name="bi" labelPosition="end"><label>Boolean</label></booleanInput>
     </p>
                     `,
                 },

@@ -56,8 +56,7 @@ jobs:
             - name: Use Node.js 24
               uses: actions/setup-node@v6
               with:
-                  # See ci.yml for the rationale behind pinning to 24.15.0.
-                  node-version: 24.15.0
+                  node-version: 24.x
                   registry-url: https://registry.npmjs.org
                   cache: "npm"
 
@@ -65,6 +64,11 @@ jobs:
               run: npm ci
 
             - name: Verify CI succeeded for target commit
+              # `verify-ci.mjs` now waits out a CI run that is still going
+              # rather than failing on it, under a 60-minute budget of its own.
+              # This is the backstop on that wait, so a hanging API read cannot
+              # hold the runner indefinitely.
+              timeout-minutes: 70
               env:
                   GITHUB_TOKEN: ${{ github.token }}
                   REPO: ${{ github.repository }}
@@ -74,9 +78,7 @@ jobs:
             - name: Update versions
               run: |
                   CURRENT_VERSION=$(node -p "require('./packages/doenetml/package.json').version")
-                  TIMESTAMP=$(date +%Y%m%d%H%M%S)
-                  COMMIT_HASH=$(git rev-parse --short HEAD)
-                  VERSION="${CURRENT_VERSION}-dev.${TIMESTAMP}.${COMMIT_HASH}"
+                  VERSION="${CURRENT_VERSION}-dev.${{ github.run_number }}"
                   npm run version -- ${VERSION} --no-git-tag-version
 
             - name: Build workspaces
@@ -91,14 +93,162 @@ jobs:
                   VITE_PREFIGURE_MODULE_URL: "https://cdn.jsdelivr.net/npm/@doenet/prefigure@latest/prefigure.js"
 
             - name: Publish dev release
+              id: publish-npm
               if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
               run: npm run publish -- --tag dev
               env:
                   WIREIT_CACHE: "local"
 
+            # Waits for npm to finish processing the publish, and then for
+            # jsDelivr to fetch it, before purging — so this is minutes rather
+            # than seconds; see `jsdelivr-purge-lib.sh`. The script gives each
+            # wait its own wall-clock budget (20 and 15 minutes) and then sleeps
+            # about another 8 between its purge retries; `timeout-minutes` is
+            # the backstop over the whole of that, since the requests themselves
+            # are bounded one at a time rather than in aggregate, and it keeps a
+            # wedged one from holding the runner.
+            #
+            # Gated on the publish having *run*, not on it having succeeded:
+            # `npm run publish` is four independent workspace publishes and npm
+            # does not stop at the first one that fails, so a failed step tells
+            # you nothing about whether @doenet/standalone went out. Skipping
+            # the purge on that signal would leave `dev` on the CDN a release
+            # behind for 12 hours because some unrelated package failed. The
+            # registry wait inside the script is the real gate: it refuses to
+            # purge until npm serves this version under the tag.
             - name: Purge jsDelivr cache
-              if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+              if: >-
+                  !cancelled() &&
+                  (steps.publish-npm.outcome == 'success' ||
+                   steps.publish-npm.outcome == 'failure')
+              timeout-minutes: 50
               run: bash .github/scripts/purge-jsdelivr.sh dev
+
+    # Publishes a VS Code extension pre-release on every successful CI run on
+    # main, mirroring the `dev-release` pattern for npm packages.
+    #
+    # Version scheme: the extension version uses an integer semver (required by
+    # the VS Code Marketplace), so we cannot use the `-dev.N` suffix that npm
+    # dev packages use.  Instead we add a large offset (10000) to the publish
+    # workflow run number to keep the patch well above any stable patch while
+    # remaining unique and monotonically increasing.  The two are correlatable:
+    #   npm 0.7.20-dev.150  ↔  VS Code 0.7.10150  (publish workflow run 150)
+    # A workflow rerun republishes the same code under the same version, which
+    # is correct — "version already published" on a rerun means the first
+    # attempt succeeded.
+    #
+    # Secret requirement: `VSCE_PAT` must be configured as a **repository-level**
+    # secret (not only in the `production` environment) for this job to publish.
+    # If the secret is absent the publish step emits a warning and exits cleanly.
+    # `OVSX_PAT` does the same for the Open VSX mirror, which is what puts the
+    # extension within reach of VS Code-compatible editors such as VSCodium
+    # (#1317).  Each registry is published independently: a missing token for
+    # one leaves the other's publish untouched.
+    dev-vscode-extension:
+        name: Dev VS Code Extension Pre-release
+        runs-on: ubuntu-latest
+        if: >-
+            (github.event_name == 'workflow_run' &&
+            github.event.workflow_run.conclusion == 'success' &&
+            github.event.workflow_run.head_branch == 'main') ||
+            (github.event_name == 'workflow_dispatch' && inputs.channel == 'dev')
+        permissions:
+            actions: read
+            contents: read
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v6
+              with:
+                  ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+
+            - name: Determine checked out commit SHA
+              id: checked-sha
+              run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+            - name: Use Node.js 24
+              uses: actions/setup-node@v6
+              with:
+                  node-version: 24.x
+                  cache: "npm"
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Verify CI succeeded for target commit
+              # `verify-ci.mjs` now waits out a CI run that is still going
+              # rather than failing on it, under a 60-minute budget of its own.
+              # This is the backstop on that wait, so a hanging API read cannot
+              # hold the runner indefinitely.
+              timeout-minutes: 70
+              env:
+                  GITHUB_TOKEN: ${{ github.token }}
+                  REPO: ${{ github.repository }}
+                  TARGET_SHA: ${{ steps.checked-sha.outputs.sha }}
+              run: node .github/scripts/verify-ci.mjs
+
+            - name: Compute pre-release version
+              id: prerelease-version
+              run: |
+                  # Read the current stable version from the extension manifest.
+                  CURRENT=$(node -p "require('./packages/vscode-extension/extension/package.json').version")
+                  MAJOR=$(echo "$CURRENT" | cut -d. -f1)
+                  MINOR=$(echo "$CURRENT" | cut -d. -f2)
+                  # Add 10000 to the publish workflow run number to keep pre-release
+                  # patches well above any stable patch (e.g. 0.7.20).  Correlates
+                  # with the npm dev release: npm 0.7.20-dev.150 ↔ VS Code 0.7.10150.
+                  PATCH=$(( ${{ github.run_number }} + 10000 ))
+                  VERSION="${MAJOR}.${MINOR}.${PATCH}"
+                  echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+                  echo "Pre-release version: ${VERSION} (publish run: ${{ github.run_number }})"
+
+            - name: Set pre-release version in extension manifest
+              run: |
+                  node -e "
+                    const fs = require('fs');
+                    const version = '${{ steps.prerelease-version.outputs.version }}';
+                    for (const p of [
+                      'packages/vscode-extension/package.json',
+                      'packages/vscode-extension/extension/package.json',
+                    ]) {
+                      const pkg = JSON.parse(fs.readFileSync(p, 'utf8'));
+                      pkg.version = version;
+                      fs.writeFileSync(p, JSON.stringify(pkg, null, 4) + '\n');
+                    }
+                  "
+
+            - name: Build VS Code extension
+              run: |
+                  export NODE_OPTIONS="--max_old_space_size=6114"
+                  npm run build -w @doenet/vscode-extension
+              env:
+                  WIREIT_CACHE: "local"
+
+            - name: Publish VS Code extension pre-release
+              if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+              run: |
+                  # secrets.* is not available in `if:` expressions (GitHub Actions
+                  # treats secrets as empty strings there), so we guard here in the
+                  # shell where the secret is actually populated via env:.
+                  if [ -z "${VSCE_PAT}" ]; then
+                      echo "::warning::VSCE_PAT repository secret is not set — VS Code extension pre-release was not published."
+                      echo "Add VSCE_PAT as a repository-level secret (Settings → Secrets → Actions) to enable pre-release publishing."
+                      exit 0
+                  fi
+                  npm run publish:prerelease -w @doenet/vscode-extension
+              env:
+                  VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+            - name: Publish Open VSX pre-release
+              if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+              run: |
+                  if [ -z "${OVSX_PAT}" ]; then
+                      echo "::warning::OVSX_PAT repository secret is not set — Open VSX pre-release was not published."
+                      echo "Add OVSX_PAT as a repository-level secret (Settings → Secrets → Actions) to enable Open VSX pre-release publishing."
+                      exit 0
+                  fi
+                  npm run publish:openvsx:prerelease -w @doenet/vscode-extension
+              env:
+                  OVSX_PAT: ${{ secrets.OVSX_PAT }}
 
     production-release:
         name: Production Release
@@ -125,8 +275,7 @@ jobs:
             - name: Use Node.js 24
               uses: actions/setup-node@v6
               with:
-                  # See ci.yml for the rationale behind pinning to 24.15.0.
-                  node-version: 24.15.0
+                  node-version: 24.x
                   registry-url: https://registry.npmjs.org
                   cache: "npm"
 
@@ -134,6 +283,11 @@ jobs:
               run: npm ci
 
             - name: Verify CI succeeded for target commit
+              # `verify-ci.mjs` now waits out a CI run that is still going
+              # rather than failing on it, under a 60-minute budget of its own.
+              # This is the backstop on that wait, so a hanging API read cannot
+              # hold the runner indefinitely.
+              timeout-minutes: 70
               env:
                   GITHUB_TOKEN: ${{ github.token }}
                   REPO: ${{ github.repository }}
@@ -183,17 +337,106 @@ jobs:
                   WIREIT_CACHE: "local"
 
             - name: Publish production release
+              id: publish-npm
               if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
               run: npm run publish
               env:
                   WIREIT_CACHE: "local"
-
-            - name: Purge jsDelivr cache
-              if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
-              run: bash .github/scripts/purge-jsdelivr.sh latest
 
             - name: Publish VS Code extension
               if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
               run: npm run publish -w @doenet/vscode-extension
               env:
                   VSCE_PAT: ${{ secrets.VSCE_PAT }}
+
+            - name: Publish Open VSX release
+              if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+              run: |
+                  # Warn rather than fail when the token is missing, so a
+                  # release that has already gone out to npm and the
+                  # Marketplace is not left red over a mirror that can be
+                  # re-run on its own.
+                  if [ -z "${OVSX_PAT}" ]; then
+                      echo "::warning::OVSX_PAT repository secret is not set — the Open VSX release was not published."
+                      echo "Add OVSX_PAT as a repository-level secret (Settings → Secrets → Actions) to enable Open VSX publishing."
+                      exit 0
+                  fi
+                  npm run publish:openvsx -w @doenet/vscode-extension
+              env:
+                  OVSX_PAT: ${{ secrets.OVSX_PAT }}
+
+            # Last, and deliberately so. The purge waits for npm to finish
+            # processing the publish and then for jsDelivr to fetch it before it
+            # fires, which takes minutes rather than seconds (see
+            # `jsdelivr-purge-lib.sh`), and it now fails the job when the tag
+            # will not move. Neither should stand between a
+            # published npm release and the extension registries: those do not
+            # depend on the CDN, and a purge that has to be re-run should not
+            # take the Marketplace publish with it.
+            #
+            # The condition is what keeps that from cutting the other way. Being
+            # last, this step would otherwise be skipped whenever a step above
+            # failed — leaving `latest` on the CDN a release behind for 12 hours
+            # because an extension registry was down. `!cancelled()` runs it
+            # anyway, and it is tied to the npm publish instead.
+            #
+            # Tied to that step having *run*, though, not to it having
+            # succeeded. `npm run publish` is four independent workspace
+            # publishes and npm does not stop at the first one that fails, so a
+            # failed step is equally consistent with @doenet/standalone — the
+            # only package this purges — having published fine while
+            # `v06-to-v07` did not. Naming the two outcomes the step can have
+            # when it ran leaves out the case that genuinely has nothing to
+            # purge: the dry run, where it does not run at all. Whether
+            # standalone did publish is then decided where it can be — by the
+            # registry wait inside the script, which refuses to purge until npm
+            # serves this version under the tag, and fails the step if it never
+            # does.
+            #
+            # `timeout-minutes` is the backstop on the script's own waiting —
+            # 20 minutes of registry wait, 15 of CDN wait and roughly 8 of
+            # sleeps between purge retries, which is now spent once per
+            # floating URL rather than once in total. That is about 52 minutes
+            # of waiting in the worst case, which no longer fits under 50, so
+            # the backstop is 60: a wedged request still cannot hold the
+            # runner, and a slow-but-succeeding second purge is not cut off
+            # partway by the backstop meant for a wedged one.
+            #
+            # Two floating URLs move on a production release, not one. `latest`
+            # is the dist-tag; the line range is what a host pins when it sets
+            # `doenetmlVersion="0.7"`, which jsDelivr resolves as an npm semver
+            # range and caches for 12 hours like any other floating URL. It has
+            # never been purged, so those hosts have been served the previous
+            # release for up to half a day after each one. The line is derived
+            # from the release rather than written down, so it follows the
+            # version without anyone having to remember to change it.
+            - name: Purge jsDelivr cache
+              if: >-
+                  !cancelled() &&
+                  (steps.publish-npm.outcome == 'success' ||
+                   steps.publish-npm.outcome == 'failure')
+              timeout-minutes: 60
+              env:
+                  RELEASE_VERSION: ${{ steps.release-tag.outputs.version }}
+              run: |
+                  # No line range tracks a prerelease: `@0.7` is the npm range
+                  # `>=0.7.0 <0.8.0`, and a semver range never matches a
+                  # version with a prerelease part, so `0.8.0-beta1` is served
+                  # by no range URL and has nothing cached under one. Asking
+                  # for it anyway would verify the range against a version it
+                  # cannot serve and fail a release that is perfectly fine, so
+                  # a prerelease gets the dist-tag alone — the same reason the
+                  # dev channel passes no extra spec.
+                  #
+                  # Build metadata is stripped before looking for the `-`, so
+                  # that the test means "has a prerelease part" and not "has a
+                  # hyphen": `1.0.0+build-1` carries one inside its `+` suffix
+                  # and is a plain release that `1.0` does serve.
+                  if [[ "${RELEASE_VERSION%%+*}" == *-* ]]; then
+                      echo "${RELEASE_VERSION} is a prerelease; no line range resolves to it. Purging the 'latest' dist-tag only."
+                      bash .github/scripts/purge-jsdelivr.sh latest
+                  else
+                      LINE="$(echo "${RELEASE_VERSION}" | cut -d. -f1,2)"
+                      echo "Purging the 'latest' dist-tag and the '${LINE}' line range."
+                      bash .github/scripts/purge-jsdelivr.sh latest "" "${LINE}"
+                  fi

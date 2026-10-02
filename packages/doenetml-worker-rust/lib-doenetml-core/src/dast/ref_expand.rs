@@ -50,6 +50,29 @@ impl Expander {
                     match resolver.resolve(&ref_.path, ref_.idx, false) {
                         Ok(ref_resolution) => {
                             // Get the tag name of the referent
+                            // Author-reachable, and the one thing #1921's audit
+                            // found. The resolver registers *names* only for
+                            // elements (`build_resolver` walks elements), which
+                            // is what the invariant used to rest on -- but
+                            // `resolve` also follows *index* resolutions, and
+                            // those are recorded for whatever a composite's
+                            // child is (`ref_resolve/index_resolutions.rs`),
+                            // with no element check. `expand_refs` walks in
+                            // ascending index order, so `$g[1]<group
+                            // name="g">$x</group>` resolves to a child that is
+                            // still a `FlatNode::Ref` and traps here, taking
+                            // the whole document down. The shapes are pinned in
+                            // `dast/panic_reachability.test.rs`
+                            // (`an_index_into_a_composite_of_refs_traps`).
+                            //
+                            // Left as a panic here, and tracked in #1942. It
+                            // traps the same way on `main`, and the choice
+                            // between reporting it (the `FlatError` the `Err`
+                            // arm below already builds) and resolving it
+                            // whatever the order is a decision of its own: the
+                            // first renders the page but leaves the reference
+                            // yielding nothing, which is not what the author
+                            // wrote.
                             let name = match &flat_root.nodes[ref_resolution.node_idx] {
                                 FlatNode::Element(e) => e.name.clone(),
                                 _ => panic!("Expected an element"),
@@ -71,6 +94,8 @@ impl Expander {
                             parent: ref_.parent,
                             message: format_error_message(err, &ref_.path),
                             error_type: ErrorType::Warning,
+                            code: None,
+                            args: None,
                             unresolved_path: if let ResolutionError::NoReferent = err {
                                 Some(ref_.path.clone())
                             } else {
@@ -122,6 +147,13 @@ impl Expander {
                                     );
                                     // The `<li>` tags are the exclusive children of the `<ol>` tag.
                                     // We created the same number of `<li>` tags as there are `inputs`.
+                                    // Internal invariant: `merge_content` was
+                                    // just handed a `DastElementContent::Element`
+                                    // three lines up, so the node it returned is
+                                    // that element. Audited for #1921; function
+                                    // references with several inputs, element
+                                    // inputs, nested calls and an index before
+                                    // the call all leave it holding.
                                     let li_node_indices =
                                         match &flat_root.nodes[lookup_idx(&ol).unwrap()] {
                                             FlatNode::Element(e) => e,
@@ -154,6 +186,8 @@ impl Expander {
                                 parent: function_ref.parent,
                                 message: format!("Ref resolution error: {err}"),
                                 error_type: ErrorType::Warning,
+                                code: None,
+                                args: None,
                                 unresolved_path: if let ResolutionError::NoReferent = err {
                                     Some(function_ref.path.clone())
                                 } else {
@@ -218,6 +252,8 @@ impl Expander {
                 element.children.push(flat_root.merge_content(
                     &DastElementContent::Error(DastError {
                         error_type: Some(ErrorType::Error),
+                        code: None,
+                        args: None,
                         message: "Duplicate `extend` or `copy` attributes".to_string(),
                         position: element.position.clone(),
                         source_doc: element.source_doc,
@@ -303,6 +339,8 @@ impl Expander {
                     &DastElementContent::Error(DastError {
                         message,
                         error_type: Some(error_type),
+                        code: None,
+                        args: None,
                         position: extend_or_copy.position.clone(),
                         source_doc: extend_or_copy.source_doc,
                     }),
@@ -353,3 +391,7 @@ fn lookup_idx(untagged: &UntaggedContent) -> Result<Index, anyhow::Error> {
 #[cfg(test)]
 #[path = "ref_expand.test.rs"]
 mod test;
+
+#[cfg(test)]
+#[path = "panic_reachability.test.rs"]
+mod panic_reachability_test;

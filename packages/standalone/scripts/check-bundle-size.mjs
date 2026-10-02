@@ -1,0 +1,803 @@
+/**
+ * Guards the built standalone bundles against silent growth, and against the
+ * specific way they have grown before: a WASM core sitting somewhere it does
+ * not belong.
+ *
+ * There are two of them, held to different rules.
+ *
+ * The **Rust document core** ships as {@link WASM_CORE_FILE}, a separate
+ * `.wasm` the worker fetches from beside its own script (#1438), so the
+ * browser's URL-keyed machine-code cache shares one compilation across
+ * workers, iframes, and page views. It used to be inlined — first into
+ * `doenet-standalone.js` (~28 MB, until #1465), then as a base64
+ * `data:application/wasm` URI inside the worker bundle (8.3 MiB of its ~14
+ * MiB, until #1438) — and nothing in the build noticed either its size or
+ * where it had landed. A change that inlines it back into any emitted script,
+ * or that stops the `.wasm` being copied beside the worker, would be just as
+ * quiet.
+ *
+ * **`@doenet/math`'s core** is the opposite case: it *is* inlined, as bare
+ * base64 rather than a data URI, because it has to reach a worker and a main
+ * thread that cannot both fetch a sibling file. One copy per script is the
+ * expected arrangement, and two is the failure —
+ * {@link countInlinedBinaries} tells the two cores apart by content so each
+ * can be held to its own rule.
+ *
+ * Three checks, doing different jobs:
+ *
+ *  - The placement checks — three rules — need no threshold and never need
+ *    adjusting. The document core belongs in {@link WASM_CORE_FILE} and
+ *    nowhere else: no emitted script may carry a wasm data URI, and the
+ *    `.wasm` itself must be emitted, starting with WebAssembly's magic bytes —
+ *    a worker with no sibling copy falls back to fetching the release from the
+ *    CDN, which no offline deployment or test environment can serve. The math
+ *    core may appear at most once per script. A multi-megabyte inline that is
+ *    neither belongs in no script at all. The script scan covers *every*
+ *    emitted script under `dist/`, not just the budgeted ones, so a copy that
+ *    lands in a newly emitted chunk is still caught.
+ *  - The catalog check covers the same kind of mistake for `@doenet/i18n`'s
+ *    message catalogs, which this bundle serves from `dist/locales/` rather
+ *    than carrying. Both halves are silent failures: a catalog inlined back
+ *    into a script costs everyone the bytes (see {@link collectCatalogProbes}),
+ *    and a catalog nobody copied leaves that language falling back to English
+ *    (see {@link servedCatalogProblems}). Both halves are live: English is the
+ *    only inlined locale, so every other catalog this repository ships is one
+ *    the first half probes for and the second half insists on finding.
+ *  - The size budgets in `bundle-budgets.json` catch the general case the
+ *    checks above cannot see — a heavy dependency, a duplicated copy of
+ *    something that is not wasm. They are expected to be raised as the project
+ *    grows; the point is that raising one lands in the diff.
+ *
+ * Run via `npm run check:size -w packages/standalone`. Exits non-zero, and
+ * prints every problem it found rather than just the first, when a bundle is
+ * over budget, when a budgeted file is missing, when `bundle-budgets.json` is
+ * unusable, when the document core is inlined into any script or its served
+ * `.wasm` is missing or corrupt, when the math core appears twice in one
+ * script, when a script holds a multi-megabyte inline that is neither, or when
+ * a served catalog is in the wrong place or missing.
+ *
+ * A third way the catalogs can fail to arrive — served, and nothing reading
+ * them, because a bundle holds two copies of the module that decides what is
+ * loadable — is checked for every package rather than this one, by
+ * `packages/i18n/scripts/check-bundle-instances.ts`.
+ *
+ * The exported helpers exist so `check-bundle-size.test.mjs` can exercise the
+ * decision logic without a build, against synthetic bundles and throwaway
+ * budgets files; only `main()` reads the real `dist/`.
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const PACKAGE_ROOT = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+);
+const BUDGETS_FILE = path.join(PACKAGE_ROOT, "bundle-budgets.json");
+const DIST_DIR = path.join(PACKAGE_ROOT, "dist");
+
+/**
+ * The one emitted file that is supposed to carry the core: the `.wasm` the
+ * worker fetches from beside its own script. It is copied here from
+ * `@doenet/doenetml-worker` by `viteStaticCopy` in `vite.config.ts`; if that
+ * destination changes, change this constant to match.
+ */
+export const WASM_CORE_FILE =
+    "dist/doenetml-worker/lib_doenetml_worker_bg.wasm";
+
+/** `@doenet/i18n`'s catalogs, which this bundle serves rather than carries. */
+const I18N_ROOT = path.resolve(PACKAGE_ROOT, "..", "i18n");
+const LOCALES_DIR = path.join(I18N_ROOT, "locales");
+const LOAD_MODULE_FILE = path.join(I18N_ROOT, "src", "load.ts");
+/**
+ * `!../locales/<locale>/*.ftl` — the locales that are inlined, not served.
+ *
+ * The same pattern is read for the same reason by `lazyGlobExclusions` in
+ * `packages/i18n/scripts/catalogUtils.ts`, which `lint:i18n` uses to hold the
+ * exclusions to `BUNDLED_LOCALES`. It is spelled out twice rather than shared
+ * because this is a plain-node script and that one is TypeScript — but drift
+ * is loud rather than silent: a change to the glob's spelling makes this find
+ * no inlined locales, probe English, and fail on the very next build.
+ */
+const GLOB_EXCLUSION_PATTERN = /"!\.\.\/locales\/([^/"]+)\/\*\.ftl"/g;
+/**
+ * `key = value` at the top level of an FTL catalog.
+ *
+ * The value stops at the line ending rather than running to `$`, which on a
+ * CRLF checkout would put a carriage return on the end of every probe. That
+ * probe matches nothing in an emitted script, so the leak check would pass
+ * whatever it was shown.
+ */
+const FTL_MESSAGE_PATTERN = /^([a-z0-9-]+) = ([^\r\n]+)/gm;
+/**
+ * `\xNN`, `\uNNNN` or `\u{N…}` — how a minifier spells a character it will not
+ * write literally.
+ */
+const ESCAPED_CODE_POINT =
+    /\\(?:x([0-9A-Fa-f]{2})|u\{([0-9A-Fa-f]{1,6})\}|u([0-9A-Fa-f]{4}))/g;
+/**
+ * Namespaces to look through for a probe, in the order they are tried. Any
+ * one distinctive string identifies the catalog, so the order only decides
+ * which is found first.
+ */
+const PROBE_NAMESPACES = ["diagnostics", "chrome", "editor", "content"];
+/**
+ * How long a translated string has to be before it is trusted to identify its
+ * catalog. Short ones ("Total", "OK") are shared across languages often enough
+ * to raise a false alarm.
+ */
+const PROBE_MIN_LENGTH = 16;
+
+/** A base64 run long enough that nothing but an embedded binary explains it. */
+const BIG_BLOB_MIN = 1_000_000;
+const WASM_URI = /data:application\/wasm;base64/g;
+/** Emitted JavaScript, in any extension a bundler might choose. */
+const SCRIPT_EXTENSION = /\.[cm]?js$/;
+
+/** The marker that precedes the DoenetML core's payload when it is inlined. */
+const WASM_URI_PREFIX = "data:application/wasm;base64,";
+
+/**
+ * The base64 spelling of the WebAssembly magic number, `\0asm`. A blob that
+ * starts a base64 string at offset 0 — which `@doenet/math`'s does, being a
+ * whole string literal — encodes those four bytes as exactly this.
+ */
+const WASM_MAGIC_BASE64 = "AGFzbQ";
+
+/**
+ * Count maximal base64 runs of at least {@link BIG_BLOB_MIN} characters, split
+ * three ways.
+ *
+ *  - **DoenetML's Rust document core**, if something inlines it, arrives as a
+ *    `data:application/wasm;base64,…` URI, so its payload is preceded by
+ *    {@link WASM_URI_PREFIX}. It ships as {@link WASM_CORE_FILE} and belongs
+ *    in no script at all.
+ *  - **`@doenet/math`'s core** is a bare base64 string assigned to a constant
+ *    (`packages/math/src/generated/wasm-bytes.ts`), with no URI wrapper, so it
+ *    is recognized by the wasm magic it starts with. It belongs wherever math
+ *    is used — including these bundles — but never more than once per script.
+ *  - **Anything else** is an unexplained multi-megabyte inline: a data-URI
+ *    font, an image, a bundled worker. Nothing in this repository should be
+ *    producing one, and it belongs in no script at all.
+ *
+ * The third bucket is why classification is positive rather than by
+ * elimination. Sorting "not a wasm URI" straight into the math core made every
+ * such asset look like the one blob that is legal in a script, so the
+ * unexplained-inline check {@link unexplainedBlobProblem} could never fire.
+ *
+ * Both cores are identified by what the bytes *are*, never by the variable name
+ * holding them, which minification renames.
+ *
+ * Scanned by hand rather than with `/[A-Za-z0-9+/]{1000000,}/`, which throws
+ * `RangeError: Maximum call stack size exceeded` on a string this size — the
+ * bundles are megabytes and the engine backtracks itself to death. A single
+ * pass costs nothing and cannot blow up.
+ *
+ * @returns `{wasmUriBlobs, bareWasmBlobs, otherBlobs}`; their sum is every big
+ *   blob in `text`.
+ */
+export function countInlinedBinaries(text) {
+    let wasmUriBlobs = 0;
+    let bareWasmBlobs = 0;
+    let otherBlobs = 0;
+    let run = 0;
+    function finish(end) {
+        if (run < BIG_BLOB_MIN) {
+            return;
+        }
+        const start = end - run;
+        // `startsWith` clamps a negative position to 0, so without the length
+        // test a blob beginning within the first `WASM_URI_PREFIX.length`
+        // characters of the file would be classified by whether the *file*
+        // starts with the prefix. No input reaches that today, and the reason
+        // is a property of the prefix rather than of this loop: it ends in `,`,
+        // which is not a base64 character, so a run starting before its end is
+        // cut off at that comma and never reaches `BIG_BLOB_MIN`. Kept because
+        // that coupling is implicit — an inlined-asset prefix that happened to
+        // end in a base64 character would make it live, and no test can pin it
+        // in the meantime.
+        if (
+            start >= WASM_URI_PREFIX.length &&
+            text.startsWith(WASM_URI_PREFIX, start - WASM_URI_PREFIX.length)
+        ) {
+            wasmUriBlobs++;
+        } else if (text.startsWith(WASM_MAGIC_BASE64, start)) {
+            bareWasmBlobs++;
+        } else {
+            otherBlobs++;
+        }
+    }
+    for (let i = 0; i < text.length; i++) {
+        const c = text.charCodeAt(i);
+        const isBase64 =
+            (c >= 48 && c <= 57) || // 0-9
+            (c >= 65 && c <= 90) || // A-Z
+            (c >= 97 && c <= 122) || // a-z
+            c === 43 || // +
+            c === 47; // /
+        if (isBase64) {
+            run++;
+        } else {
+            finish(i);
+            run = 0;
+        }
+    }
+    finish(text.length);
+    return { wasmUriBlobs, bareWasmBlobs, otherBlobs };
+}
+
+function mib(bytes) {
+    return `${(bytes / 1024 / 1024).toFixed(2)} MiB`;
+}
+
+function readMessages(file) {
+    if (!fs.existsSync(file)) {
+        return new Map();
+    }
+    const source = fs.readFileSync(file, "utf-8");
+    return new Map(
+        [...source.matchAll(FTL_MESSAGE_PATTERN)].map((m) => [m[1], m[2]]),
+    );
+}
+
+/**
+ * A distinctive string from each *served* locale's catalogs.
+ *
+ * The served locales are every catalog directory `@doenet/i18n` does not
+ * inline, read from the exclusion list in its lazy-catalog glob — the same
+ * list `lint:i18n` holds to the inlined set, so this cannot drift from it
+ * independently.
+ *
+ * A probe has to be long enough, and has to differ from what *every inlined*
+ * locale says for the same key. Matching an inlined catalog is what makes a
+ * probe useless: those strings are legitimately in the bundle, so a translation
+ * that happens to reuse one would report a leak on every build. English is the
+ * culprit today, being the only inlined locale — a term left untranslated reads
+ * identically in both. The rule is written for the general case because
+ * inlining a second locale would add another, and neighbouring languages share
+ * plenty of wording.
+ *
+ * A locale that yields no such string simply gets no probe. That is the right
+ * failure mode for a catalog too close to an inlined one to fingerprint —
+ * better than a check that cries wolf, since the size budget still covers the
+ * general case.
+ *
+ * @returns `[locale, probe]` pairs.
+ */
+export function collectCatalogProbes(
+    localesDir = LOCALES_DIR,
+    loadModuleFile = LOAD_MODULE_FILE,
+) {
+    if (!fs.existsSync(localesDir) || !fs.existsSync(loadModuleFile)) {
+        return [];
+    }
+    const inlined = [
+        ...new Set(
+            [
+                ...fs
+                    .readFileSync(loadModuleFile, "utf-8")
+                    .matchAll(GLOB_EXCLUSION_PATTERN),
+            ].map((match) => match[1]),
+        ),
+    ];
+    /** `namespace → key → every string an inlined catalog gives that key`. */
+    const inlinedMessages = new Map(
+        PROBE_NAMESPACES.map((namespace) => {
+            const byKey = new Map();
+            for (const locale of inlined) {
+                const messages = readMessages(
+                    path.join(localesDir, locale, `${namespace}.ftl`),
+                );
+                for (const [key, value] of messages) {
+                    byKey.set(key, [...(byKey.get(key) ?? []), value]);
+                }
+            }
+            return [namespace, byKey];
+        }),
+    );
+    const probes = [];
+    for (const entry of fs.readdirSync(localesDir, { withFileTypes: true })) {
+        if (!entry.isDirectory() || inlined.includes(entry.name)) {
+            continue;
+        }
+        for (const namespace of PROBE_NAMESPACES) {
+            const translated = readMessages(
+                path.join(localesDir, entry.name, `${namespace}.ftl`),
+            );
+            const alsoInlined = inlinedMessages.get(namespace);
+            const probe = [...translated].find(
+                ([key, value]) =>
+                    value.length >= PROBE_MIN_LENGTH &&
+                    !(alsoInlined.get(key) ?? []).includes(value),
+            );
+            if (probe) {
+                probes.push([entry.name, probe[1]]);
+                break;
+            }
+        }
+    }
+    return probes;
+}
+
+/**
+ * The served locales whose catalog text is inside one emitted script.
+ *
+ * The comparison is made against the script with its character escapes
+ * decoded. `forceEsbuildMinifyPlugin` calls esbuild's `transform` without a
+ * `charset`, and esbuild then defaults to ASCII: every accented character in
+ * an inlined catalog is written back out as `\xNN` or `\uNNNN`, so
+ * `contribución` never appears literally in `doenet-standalone.js`. Matching
+ * the raw text would miss a leak for exactly the languages most likely to leak
+ * — outside English an accent is the rule rather than the exception.
+ *
+ * @param contents an emitted script's source.
+ * @param probes `[locale, probe]` pairs, from {@link collectCatalogProbes}.
+ * @returns the locales whose probe the script carries.
+ */
+export function catalogsInScript(contents, probes) {
+    if (probes.length === 0) {
+        return [];
+    }
+    const decoded = contents.replace(
+        ESCAPED_CODE_POINT,
+        (_whole, hex2, braced, hex4) =>
+            String.fromCodePoint(parseInt(hex2 ?? braced ?? hex4, 16)),
+    );
+    return probes
+        .filter(([, probe]) => decoded.includes(probe))
+        .map(([locale]) => locale);
+}
+
+/**
+ * The locale directories the build emitted, or `null` if there is no
+ * `dist/locales/` at all.
+ *
+ * `null` and `[]` mean different things: nothing copied is a broken build
+ * (`copyLocaleCatalogsPlugin` runs unconditionally), while an empty directory
+ * would be a `locales/` with nothing in it.
+ */
+function collectEmittedLocales(distDir = DIST_DIR) {
+    const localesDir = path.join(distDir, "locales");
+    if (!fs.existsSync(localesDir)) {
+        return null;
+    }
+    return fs
+        .readdirSync(localesDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name);
+}
+
+/** The locale directories `@doenet/i18n` has, which the build copies whole. */
+function collectSourceLocales(localesDir = LOCALES_DIR) {
+    if (!fs.existsSync(localesDir)) {
+        return [];
+    }
+    return fs
+        .readdirSync(localesDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name);
+}
+
+/**
+ * Problems with the catalogs the bundle is supposed to serve beside itself.
+ *
+ * The counterpart to the leak check in {@link findProblems}: that one catches a
+ * catalog that ended up inside a script, this one catches a catalog that ended
+ * up nowhere. A language that is neither inlined nor served silently renders in
+ * English, which no size budget would ever notice.
+ *
+ * Held against every locale directory in `@doenet/i18n` rather than against the
+ * served ones alone, because `copyLocaleCatalogsPlugin` copies all of them —
+ * so a locale that starts or stops being inlined needs nothing changed here,
+ * and the check keeps its meaning whatever that decision turns out to be.
+ *
+ * @param sourceLocales locale directories under `packages/i18n/locales/`, from
+ *   {@link collectSourceLocales}.
+ * @param emittedLocales locale directories under `dist/locales/`, or `null` if
+ *   the directory is missing, as {@link collectEmittedLocales} reports it.
+ */
+export function servedCatalogProblems(sourceLocales, emittedLocales) {
+    if (emittedLocales === null) {
+        return [
+            `dist/locales/ was not emitted, so no language beyond the inlined ones could\n` +
+                `    be fetched. It is copied there by copyLocaleCatalogsPlugin in\n` +
+                `    packages/standalone/vite.config.ts.`,
+        ];
+    }
+    return sourceLocales
+        .filter((locale) => !emittedLocales.includes(locale))
+        .map(
+            (locale) =>
+                `dist/locales/${locale}/ was not emitted, so a language served rather than\n` +
+                `    inlined cannot be fetched and would fall back to English. It is copied\n` +
+                `    there by copyLocaleCatalogsPlugin in\n` +
+                `    packages/standalone/vite.config.ts.`,
+        );
+}
+
+/**
+ * Every emitted script under `dist/`, keyed by its path relative to the
+ * package root (matching the keys in `bundle-budgets.json`).
+ *
+ * Deliberately limited to scripts. Source maps (`*.js.map`) embed the very
+ * blob they map, so counting them would report the core twice for a correct
+ * build, and `dist/style.css` legitimately carries a ~1 MB base64 run of its
+ * own (an inlined SVG webfont) that the blob heuristic cannot tell apart from
+ * wasm. Only a script can actually execute a duplicated Rust core.
+ *
+ * @param probes `[locale, probe]` pairs, from {@link collectCatalogProbes}.
+ */
+function collectEmittedScripts(probes) {
+    const scripts = new Map();
+    if (!fs.existsSync(DIST_DIR)) {
+        return scripts;
+    }
+    for (const entry of fs.readdirSync(DIST_DIR, {
+        withFileTypes: true,
+        recursive: true,
+    })) {
+        if (!entry.isFile() || !SCRIPT_EXTENSION.test(entry.name)) {
+            continue;
+        }
+        const file = path.join(entry.parentPath, entry.name);
+        const buffer = fs.readFileSync(file);
+        const contents = buffer.toString("utf-8");
+        // Keyed with forward slashes on every platform, so the keys in
+        // `bundle-budgets.json` match on Windows too.
+        const relative = path
+            .relative(PACKAGE_ROOT, file)
+            .split(path.sep)
+            .join("/");
+        const binaries = countInlinedBinaries(contents);
+        scripts.set(relative, {
+            size: buffer.length,
+            wasmUris: contents.match(WASM_URI)?.length ?? 0,
+            bigBlobs:
+                binaries.wasmUriBlobs +
+                binaries.bareWasmBlobs +
+                binaries.otherBlobs,
+            // Each of the three kinds is held to its own rule, so each is
+            // carried separately rather than recovered by subtraction.
+            doenetCores: binaries.wasmUriBlobs,
+            mathCores: binaries.bareWasmBlobs,
+            otherBlobs: binaries.otherBlobs,
+            inlinedCatalogs: catalogsInScript(contents, probes),
+        });
+    }
+    return scripts;
+}
+
+/**
+ * Read `bundle-budgets.json`, rejecting a shape the checks cannot enforce.
+ *
+ * Without this a typo'd or missing `maxBytes` would compare `size > undefined`,
+ * which is `false` — the file would be reported as within a `NaN MiB` budget
+ * and the check would pass. A budget that silently stops guarding is worse
+ * than no budget at all.
+ *
+ * @returns the `files` entries, as `[relativePath, budget]` pairs.
+ */
+export function loadBudgets(budgetsFile = BUDGETS_FILE) {
+    let parsed;
+    try {
+        parsed = JSON.parse(fs.readFileSync(budgetsFile, "utf-8"));
+    } catch (e) {
+        throw new Error(
+            `Could not read ${path.relative(PACKAGE_ROOT, budgetsFile)}: ${e.message}`,
+        );
+    }
+    const files = parsed?.files;
+    if (typeof files !== "object" || files === null || Array.isArray(files)) {
+        throw new Error(
+            `bundle-budgets.json must have a "files" object mapping each bundle path ` +
+                `to a budget.`,
+        );
+    }
+    const entries = Object.entries(files);
+    if (entries.length === 0) {
+        throw new Error(
+            `bundle-budgets.json lists no files, so nothing would be checked.`,
+        );
+    }
+    for (const [relative, budget] of entries) {
+        if (!Number.isFinite(budget?.maxBytes) || budget.maxBytes <= 0) {
+            throw new Error(
+                `bundle-budgets.json entry "${relative}" needs a positive numeric ` +
+                    `"maxBytes"; got ${JSON.stringify(budget?.maxBytes)}.`,
+            );
+        }
+    }
+    return entries;
+}
+
+/** Describe a script that carries the Rust document core, which none should. */
+function blobPlacementProblem(relative, emitted) {
+    const observed =
+        `${emitted.wasmUris} wasm data-URI(s) and ` +
+        `${emitted.doenetCores} inlined copies of it`;
+    return (
+        `${relative} should carry no copy of the Rust document core — it ships as\n` +
+        `    ${WASM_CORE_FILE}, fetched beside the worker\n` +
+        `    script — but has ${observed}.\n` +
+        `    Inlining it back into a script costs every realm the bytes and forfeits\n` +
+        `    the browser's shared machine-code cache, so it should be a deliberate\n` +
+        `    change.`
+    );
+}
+
+/**
+ * Describe a script carrying more than one copy of the `@doenet/math` core.
+ *
+ * Unlike the document core, this one is *meant* to be inlined: it is how the
+ * math seam reaches a worker and a main thread that cannot fetch a sibling
+ * file. One copy per script is the expected arrangement; two is not.
+ */
+function mathCorePlacementProblem(relative, count) {
+    return (
+        `${relative} carries ${count} copies of the @doenet/math core; one is expected.\n` +
+        `    Each copy is ~2.3 MiB of inlined base64 and a separate WASM instantiation\n` +
+        `    at runtime. It means the seam resolved as more than one module instance —\n` +
+        `    usually a package that bundles \`math-expressions\` into its own dist instead\n` +
+        `    of externalizing it, which then rides into every bundle embedding it.`
+    );
+}
+
+/**
+ * Describe a script carrying a multi-megabyte inline that is neither core.
+ *
+ * Both cores are recognized by their content (see
+ * {@link countInlinedBinaries}), so anything left over is an asset that started
+ * being inlined into JavaScript without anyone deciding it should be — a
+ * data-URI font, an image, a bundled worker. There is no script where that is
+ * expected, so this needs no threshold and no per-script exception.
+ */
+function unexplainedBlobProblem(relative, count) {
+    return (
+        `${relative} carries ${count} multi-megabyte inlined blob(s) that are neither\n` +
+        `    the Rust document core nor the @doenet/math core.\n` +
+        `    Some other asset is now being inlined into JavaScript rather than emitted\n` +
+        `    beside it. Emit it as a file, or — if inlining it really is intended —\n` +
+        `    teach countInlinedBinaries to recognize it so it stops being unexplained.`
+    );
+}
+
+/**
+ * The emitted scripts a budget key covers.
+ *
+ * A key is an exact `dist/`-relative path, except that `*` matches any run of
+ * characters other than `/` — which is how a budget pins down a code-split
+ * chunk whose emitted name carries a content hash
+ * (`dist/chunks/index-*.js`). Each matching script is held to the budget's
+ * `maxBytes` individually.
+ *
+ * @returns `[relativePath, emitted]` pairs.
+ */
+export function scriptsForBudget(relative, scripts) {
+    if (!relative.includes("*")) {
+        const emitted = scripts.get(relative);
+        return emitted ? [[relative, emitted]] : [];
+    }
+    const pattern = new RegExp(
+        "^" +
+            relative
+                .split("*")
+                .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+                .join("[^/]*") +
+            "$",
+    );
+    return [...scripts].filter(([name]) => pattern.test(name));
+}
+
+/**
+ * How the emitted core `.wasm` looks on disk: `null` if it was not emitted,
+ * otherwise its size and whether it starts with WebAssembly's magic bytes
+ * (`\0asm` — what separates a real module from, say, an HTML error page saved
+ * under the right name).
+ */
+function collectCoreWasm(file = path.join(PACKAGE_ROOT, WASM_CORE_FILE)) {
+    if (!fs.existsSync(file)) {
+        return null;
+    }
+    const header = Buffer.alloc(4);
+    const fd = fs.openSync(file, "r");
+    try {
+        fs.readSync(fd, header, 0, 4, 0);
+    } finally {
+        fs.closeSync(fd);
+    }
+    return {
+        size: fs.statSync(file).size,
+        hasWasmMagic: header.equals(Buffer.from([0x00, 0x61, 0x73, 0x6d])),
+    };
+}
+
+/**
+ * Problems with the served core `.wasm` itself — the counterpart to the
+ * inlined-blob scan: that one catches the core landing inside a script, this
+ * one catches it landing nowhere.
+ *
+ * @param coreWasm the emitted `.wasm` as {@link collectCoreWasm} reports it.
+ */
+export function coreWasmProblems(coreWasm) {
+    if (coreWasm === null) {
+        return [
+            `${WASM_CORE_FILE} was not emitted, so the worker has no\n` +
+                `    sibling copy of the Rust core to fetch, and every offline or self-hosted\n` +
+                `    deployment would fall back to fetching the release from the CDN. It is\n` +
+                `    copied there from @doenet/doenetml-worker by viteStaticCopy in\n` +
+                `    vite.config.ts; if it moved, update WASM_CORE_FILE in this script.`,
+        ];
+    }
+    if (!coreWasm.hasWasmMagic) {
+        return [
+            `${WASM_CORE_FILE} does not start with WebAssembly's\n` +
+                `    magic bytes (\\0asm), so the worker could not compile it.`,
+        ];
+    }
+    return [];
+}
+
+/**
+ * Compare the emitted scripts against the budgets, without touching the disk
+ * or the process.
+ *
+ * @param budgets `[relativePath, budget]` pairs, as returned by
+ *   {@link loadBudgets}.
+ * @param scripts the emitted scripts, as returned by
+ *   {@link collectEmittedScripts}.
+ * @returns `report` lines describing every emitted script, and `problems`
+ *   describing everything that should fail the build.
+ */
+export function findProblems(budgets, scripts) {
+    const problems = [];
+    const report = [];
+    const budgeted = new Set();
+
+    for (const [relative, budget] of budgets) {
+        const matches = scriptsForBudget(relative, scripts);
+        if (matches.length === 0) {
+            problems.push(
+                `${relative} does not exist — build the package before checking its size ` +
+                    `(\`npm run build -w packages/standalone\`).`,
+            );
+            continue;
+        }
+
+        for (const [name, emitted] of matches) {
+            budgeted.add(name);
+            report.push(
+                `  ${name}\n` +
+                    `      ${mib(emitted.size)} of ${mib(budget.maxBytes)} budget` +
+                    `  (${((emitted.size / budget.maxBytes) * 100).toFixed(1)}%)` +
+                    `, ${emitted.wasmUris} wasm URI(s), ${emitted.bigBlobs} inlined blob(s)`,
+            );
+
+            if (emitted.size > budget.maxBytes) {
+                problems.push(
+                    `${name} is ${mib(emitted.size)} (${emitted.size} bytes), over its ` +
+                        `${mib(budget.maxBytes)} budget by ${mib(emitted.size - budget.maxBytes)}.\n` +
+                        `    If the growth is intended, raise "maxBytes" for this file in\n` +
+                        `    packages/standalone/bundle-budgets.json in the same commit, so the\n` +
+                        `    increase is visible in review. If it is not intended, something was\n` +
+                        `    pulled in twice — compare against the previous build before raising it.`,
+                );
+            }
+        }
+    }
+
+    // Emitted scripts nobody has put a ceiling on. Not a failure — a new chunk
+    // is a normal thing for the bundler to do — but it is listed so that a
+    // chunk quietly growing into a second multi-megabyte payload is visible,
+    // and so somebody can decide whether it deserves a budget.
+    for (const [relative, emitted] of scripts) {
+        if (!budgeted.has(relative)) {
+            report.push(
+                `  ${relative}\n` +
+                    `      ${mib(emitted.size)}, no budget` +
+                    `, ${emitted.wasmUris} wasm URI(s), ${emitted.bigBlobs} inlined blob(s)`,
+            );
+        }
+    }
+
+    // Three rules, one per kind of inlined binary. The document core ships as
+    // its own `.wasm` file (whose presence `coreWasmProblems` checks
+    // separately), so no script may carry it; the math core is inlined by
+    // design but must not be duplicated; anything else is unexplained.
+    for (const [relative, emitted] of scripts) {
+        // Its payload always arrives as a wasm data-URI, so both counts move
+        // together, and each is checked so that a URI without a payload (or
+        // the reverse) is still caught.
+        if (emitted.wasmUris !== 0 || emitted.doenetCores !== 0) {
+            problems.push(blobPlacementProblem(relative, emitted));
+        }
+        // Allowed anywhere math is used, but never twice in one script. Two
+        // copies means the seam resolved as two module instances, each
+        // contributing its own ~2.3 MiB of inlined base64 — the failure this
+        // check exists to catch, and the reason the libraries that feed these
+        // bundles externalize the seam rather than bundling it.
+        if (emitted.mathCores > 1) {
+            problems.push(
+                mathCorePlacementProblem(relative, emitted.mathCores),
+            );
+        }
+        if (emitted.otherBlobs > 0) {
+            problems.push(unexplainedBlobProblem(relative, emitted.otherBlobs));
+        }
+    }
+    // Catalogs these bundles are supposed to serve, not carry. The build keeps
+    // them as plain runtime-fetched files in `dist/locales/` — version-pinnable
+    // there, and out of the single-file inline variant — by switching
+    // `__DOENET_CODE_SPLIT_CATALOGS__` off instead of code-splitting them the
+    // way the library build does. Anything that makes the glob reachable again
+    // — a define that stops being applied, a new eager import of a catalog —
+    // puts every translation back in here, and the size budget alone would
+    // absorb it for a long time.
+    for (const [relative, emitted] of scripts) {
+        const leaked = emitted.inlinedCatalogs;
+        if (leaked.length > 0) {
+            problems.push(
+                `${relative} carries the message catalogs for [${leaked.join(", ")}], which\n` +
+                    `    this bundle is supposed to serve from dist/locales/ rather than inline.\n` +
+                    `    Check that __DOENET_CODE_SPLIT_CATALOGS__ is still defined false in\n` +
+                    `    packages/standalone/vite.config.ts, and that nothing imports a catalog\n` +
+                    `    statically.`,
+            );
+        }
+    }
+
+    return { report, problems };
+}
+
+function main() {
+    const budgets = loadBudgets();
+    const probes = collectCatalogProbes();
+    const scripts = collectEmittedScripts(probes);
+    const { report, problems } = findProblems(budgets, scripts);
+
+    // An unbuilt `dist/` has already been reported as such; only ask where
+    // the served catalogs and the core `.wasm` went once there is a build to
+    // ask about.
+    if (scripts.size > 0) {
+        problems.push(...coreWasmProblems(collectCoreWasm()));
+        problems.push(
+            ...servedCatalogProblems(
+                collectSourceLocales(),
+                collectEmittedLocales(),
+            ),
+        );
+    }
+
+    console.log("standalone bundle sizes:");
+    console.log(report.join("\n"));
+
+    if (problems.length > 0) {
+        console.error(`\n${problems.length} problem(s):\n`);
+        for (const problem of problems) {
+            console.error(`  - ${problem}\n`);
+        }
+        process.exit(1);
+    }
+
+    console.log(
+        "\nwithin budget, the core is served as its own .wasm beside the worker, and\n" +
+            "the message catalogs are served rather than carried.",
+    );
+}
+
+// Only when run as a command; importing this module (from its test) must not
+// check the real `dist/` or exit the process.
+if (
+    process.argv[1] &&
+    path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+    try {
+        main();
+    } catch (e) {
+        // A configuration error is a failure of the check, not a stack trace to
+        // decipher in a CI log.
+        console.error(
+            `\nbundle size check could not run:\n\n  - ${e.message}\n`,
+        );
+        process.exit(1);
+    }
+}

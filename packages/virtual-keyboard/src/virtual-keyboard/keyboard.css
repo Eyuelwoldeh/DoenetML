@@ -10,9 +10,36 @@
     @apply bg-slate-200 border-slate-200 hover:bg-slate-300 hover:border-slate-300 active:bg-slate-400 active:border-slate-400 active:text-slate-50;
 }
 
+/*
+ * The keys are mathematical notation, so they stay left-to-right even when the
+ * tray around them is right-to-left. Every row is a flex row and every region a
+ * grid, both of which reverse under `rtl`, so an Arabic reader would otherwise
+ * get a mirrored QWERTY and a numeric pad running 3-2-1. The cursor keys are
+ * the sharpest case: `.key-left` sends MathQuill a `Left` keystroke whatever
+ * the CSS says, so a reversed row would leave the `←` key sitting on the right
+ * and moving the caret the other way.
+ *
+ * Stated here rather than as a `dir` attribute because `Keyboard` returns a
+ * different element per style; one rule covers all of them. The tab strip is
+ * included: its labels are `123`, `f(x)`, `ABC`, `αβγ` and `$%∞`, none of which
+ * is prose.
+ */
+.virtual-keyboard,
+.virtual-keyboard-tab-list {
+    direction: ltr;
+}
+
 .virtual-keyboard {
-    @apply flex gap-y-1 justify-center max-w-2xl sm:gap-y-2 gap-x-3;
+    /*
+     * How wide the keyboard may spread. A variable because the sub-keyboard
+     * has to agree with it, and because the touch-device block below raises
+     * it — two literals that must match are two literals that can drift.
+     */
+    --keyboard-max-width: 42rem;
+
+    @apply flex gap-y-1 justify-center sm:gap-y-2 gap-x-3;
     @apply flex-wrap sm:flex-nowrap;
+    max-width: var(--keyboard-max-width);
     .row {
         @apply flex gap-x-1 basis-full justify-center sm:gap-x-2;
     }
@@ -24,12 +51,13 @@
         }
     }
     .sub-keyboard {
-        @apply flex gap-y-1 flex-wrap justify-center max-w-2xl sm:gap-y-2;
+        @apply flex gap-y-1 flex-wrap justify-center sm:gap-y-2;
         @apply h-full;
+        max-width: var(--keyboard-max-width);
     }
 
     button {
-        background-color: #fff;
+        background-color: var(--kb-key-bg, #fff);
         @apply keyboard-button;
     }
 
@@ -82,8 +110,60 @@
     @apply flex flex-nowrap;
     button {
         @apply p-1 sm:p-2 px-1 sm:px-3 pb-1 border-b-2 mb-3;
+        /* Non-selected tabs: slate-200 underline so only the selected tab's
+           blue indicator stands out. Without an explicit color this falls
+           back to currentColor (black), drawing a harsh line under every tab. */
+        @apply border-slate-200;
     }
     button[aria-selected="true"] {
         @apply border-blue-400 text-blue-600;
+    }
+}
+
+/*
+ * Touch devices — see the note beside the matching block in
+ * `keyboard-tray.css`. A key was 39x40 on a phone and a layout tab 30x25;
+ * both are below the 44px a fingertip needs (issue #449).
+ *
+ * Height is raised outright, since it costs only tray height. Width is left
+ * to the flex layout, which already gives each key an equal share of the row:
+ * a phone cannot fit twelve 44px-wide keys across, and forcing it would push
+ * the row into an overflow or a wrap that helps no one. What helps the other
+ * end — a tablet, where the row had room to spare and the keys stayed small
+ * in the middle of it — is room for the row to grow, so the even share each
+ * key gets is a larger one, and a ceiling raised to match.
+ *
+ * Both halves are needed. `--keyboard-max-width` alone would hand the extra
+ * room to shift, backspace and space, the only keys with no ceiling of their
+ * own; the per-key `max-width` alone has nothing extra to hand out. Note that
+ * the ceiling is in `em`, and a key is a `button`, which this package's
+ * partial copy of Tailwind's preflight leaves at the UA font size of
+ * 13.33px — so `4em` is 53px and `4.5em` is 60px, not 64 and 72.
+ *
+ * Last in the file because every rule here raises one above it and each pair
+ * has equal specificity, so source order is all that separates them — a media
+ * query adds none. Shift, backspace and space are the exception: their
+ * `max-width: none` is set on `.virtual-keyboard .key-*`, two classes, which
+ * already outranks the one-class-one-type `button` selector here, so they
+ * stay unbounded without being named again. Backspace on the numeric layout
+ * is the exception to that exception — a rule above puts its ceiling back at
+ * `4em`, and outranks this block for the same reason — so it is the one key
+ * that has to be raised by name.
+ */
+@media (pointer: coarse) {
+    .virtual-keyboard {
+        --keyboard-max-width: 48rem;
+
+        button {
+            min-height: 2.75rem;
+            @apply max-w-[4.5em];
+        }
+    }
+    .virtual-keyboard.numeric .key-backspace {
+        @apply max-w-[4.5em];
+    }
+    .virtual-keyboard-tab-list button {
+        min-height: 2.75rem;
+        @apply px-3;
     }
 }

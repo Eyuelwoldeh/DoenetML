@@ -3,8 +3,8 @@
     "displayName": "DoenetML support",
     "description": "A language server for DoenetML",
     "author": "Jason Siefken",
-    "license": "AGPL",
-    "version": "0.7.20",
+    "license": "AGPL-3.0-or-later",
+    "version": "0.7.27",
     "repository": {
         "type": "git",
         "url": "https://github.com/Doenet/DoenetML"
@@ -14,7 +14,7 @@
         "Doenet DoenetML"
     ],
     "engines": {
-        "vscode": "^1.76.0"
+        "vscode": "^1.85.0"
     },
     "exports": {
         "./language-server": {
@@ -24,15 +24,19 @@
     },
     "scripts": {
         "vscode:prepublish": "npm run build",
-        "build": "npm run build:preview-window && npm run build:extension && npm run build:language-server",
+        "build": "npm run build:preview-window && npm run build:extension && npm run build:language-server && npm run build:doenetml-worker",
         "build:language-server": "wireit",
         "build:extension": "wireit",
         "build:preview-window": "wireit",
+        "build:doenetml-worker": "wireit",
         "dev": "vite -c vite.preview-window.config.mts",
         "watch": "npm run build && vite -c vite.language-server.config.mts build --watch",
         "test": "vitest",
         "package": "cd ./extension && vsce package --no-dependencies --out ../",
         "publish": "cd ./extension && vsce publish --no-dependencies",
+        "publish:prerelease": "cd ./extension && vsce publish --pre-release --no-dependencies",
+        "publish:openvsx": "cd ./extension && ovsx publish --no-dependencies",
+        "publish:openvsx:prerelease": "cd ./extension && ovsx publish --pre-release --no-dependencies",
         "run-in-browser:firefox": "vscode-test-web --browserType=firefox --extensionDevelopmentPath=./extension .",
         "run-in-browser:chrome": "vscode-test-web --browserType=chromium --extensionDevelopmentPath=./extension .",
         "run-in-browser": "npm run run-in-browser:firefox"
@@ -77,10 +81,23 @@
             "dependencies": [
                 "../doenetml:build"
             ]
+        },
+        "build:doenetml-worker": {
+            "command": "node scripts/build-doenetml-worker.mjs",
+            "files": [
+                "scripts/build-doenetml-worker.mjs"
+            ],
+            "output": [
+                "extension/build/doenetml-worker/**/*"
+            ],
+            "dependencies": [
+                "../doenetml-worker:build"
+            ]
         }
     },
     "devDependencies": {
         "@vscode/vsce": "^3.9.1",
+        "ovsx": "^1.0.2",
         "@types/vscode": "^1.99.0",
         "@types/vscode-webview": "^1.57.5",
         "@vscode/webview-ui-toolkit": "^1.4.0",

@@ -52,9 +52,9 @@ describe("color words", () => {
         const customHexByCanonicalName: Record<string, string> = {
             gray: "#757575",
             red: "#D4042D",
-            orange: "#F19143",
+            orange: "#a6510c",
             green: "#2ca02c",
-            blue: "#648FFF",
+            blue: "#1f5dff",
             purple: "#644CD6",
         };
 
@@ -101,7 +101,10 @@ describe("color words", () => {
     });
 
     it("maps non-named values to nearest canonical word", () => {
+        expect(colorValueToWord("#1f5dff")).eq("blue");
         expect(colorValueToWord("#648FFF")).eq("blue");
+        expect(colorValueToWord("#a6510c")).eq("orange");
+        expect(colorValueToWord("#F19143")).eq("orange");
         expect(colorValueToWord("rgb(0,0,255)")).eq("blue");
         expect(colorValueToWord("#800080")).eq("purple");
         expect(colorValueToWord("rgb(128,0,128)")).eq("purple");
@@ -109,8 +112,48 @@ describe("color words", () => {
         expect(colorValueToWord("rgb(200,200,200)")).eq("gray");
     });
 
+    it("perceptually classifies colors that raw RGB distance misnamed", () => {
+        // Regression coverage for issue #1527: these author-plausible colors were
+        // previously misnamed by raw RGB Euclidean distance against the anchors.
+        const perceptualHexByCanonicalName: Record<string, string[]> = {
+            blue: [
+                "#0072b2", // Okabe-Ito blue (was "cyan")
+                "#4882b8", // mid blue (was "purple")
+                "#00648f", // steel blue (was "green")
+            ],
+            purple: [
+                "#a35f85", // mauve/plum (was "gray")
+            ],
+            pink: [
+                "#cc79a7", // reddish purple (was "red")
+            ],
+            red: [
+                "#c22047", // crimson (was "brown")
+                "#922d4d", // wine (was "brown")
+            ],
+            gray: [
+                "#a99d96", // warm gray (was "yellow")
+            ],
+        };
+
+        for (const [canonicalName, hexes] of Object.entries(
+            perceptualHexByCanonicalName,
+        )) {
+            for (const hex of hexes) {
+                expect(colorValueToWord(hex), hex).eq(canonicalName);
+            }
+        }
+    });
+
+    it("classifies near-neutral colors as black/gray/white by lightness", () => {
+        expect(colorValueToWord("#050505")).eq("black");
+        expect(colorValueToWord("#a99d96")).eq("gray"); // warm gray
+        expect(colorValueToWord("#7f807e")).eq("gray"); // faintly tinted gray
+        expect(colorValueToWord("#fbfaf7")).eq("white"); // warm near-white
+    });
+
     it("provides localization hook metadata", () => {
-        const resolved = resolveColorWord("#648FFF", {
+        const resolved = resolveColorWord("#1f5dff", {
             translate: (key, englishWord) =>
                 key === "color.blue" ? "azul" : englishWord,
         });

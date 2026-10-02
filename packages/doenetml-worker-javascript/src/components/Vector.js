@@ -4,11 +4,16 @@ import {
     breakEmbeddedStringByCommas,
     returnBreakStringsSugarFunction,
 } from "./commonsugar/breakstrings";
-import { roundForDisplay } from "../utils/math";
+import {
+    roundForDisplay,
+    markUnspecifiedComponents,
+    evaluateToNumber,
+} from "../utils/math";
 import {
     convertValueToMathExpression,
-    vectorOperators,
+    returnGraphicalStyleDescriptionDefinitions,
     returnTextStyleDescriptionDefinitions,
+    vectorOperators,
 } from "@doenet/utils";
 import {
     buildNumberDisplayParameters,
@@ -18,6 +23,7 @@ import {
 } from "../utils/numberDisplay";
 import { returnGraphControlOrderAttribute } from "../utils/graphical";
 import { returnLineFamilyLabelPositionAttribute } from "../utils/graphicalLabels";
+import { codedDiagnostic } from "../utils/diagnostics";
 
 export default class Vector extends GraphicalComponent {
     constructor(args) {
@@ -348,72 +354,13 @@ export default class Vector extends GraphicalComponent {
             returnTextStyleDescriptionDefinitions();
         Object.assign(stateVariableDefinitions, styleDescriptionDefinitions);
 
-        stateVariableDefinitions.styleDescription = {
-            description: "A textual description of the vector's style.",
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                selectedStyle: {
-                    dependencyType: "stateVariable",
-                    variableName: "selectedStyle",
-                },
-                document: {
-                    dependencyType: "ancestor",
-                    componentType: "document",
-                    variableNames: ["theme"],
-                },
+        Object.assign(
+            stateVariableDefinitions,
+            returnGraphicalStyleDescriptionDefinitions({
+                kind: "stroke",
+                noun: "vector",
             }),
-            definition: function ({ dependencyValues }) {
-                let lineColorWord;
-                if (dependencyValues.document?.stateValues.theme === "dark") {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWordDarkMode;
-                } else {
-                    lineColorWord =
-                        dependencyValues.selectedStyle.lineColorWord;
-                }
-
-                let styleDescription =
-                    dependencyValues.selectedStyle.lineWidthWord;
-                if (dependencyValues.selectedStyle.lineStyleWord) {
-                    if (styleDescription) {
-                        styleDescription += " ";
-                    }
-                    styleDescription +=
-                        dependencyValues.selectedStyle.lineStyleWord;
-                }
-
-                if (styleDescription) {
-                    styleDescription += " ";
-                }
-
-                styleDescription += lineColorWord;
-
-                return { setValue: { styleDescription } };
-            },
-        };
-
-        stateVariableDefinitions.styleDescriptionWithNoun = {
-            description: 'Style description including the word "vector".',
-            public: true,
-            shadowingInstructions: {
-                createComponentOfType: "text",
-            },
-            returnDependencies: () => ({
-                styleDescription: {
-                    dependencyType: "stateVariable",
-                    variableName: "styleDescription",
-                },
-            }),
-            definition: function ({ dependencyValues }) {
-                let styleDescriptionWithNoun =
-                    dependencyValues.styleDescription + " vector";
-
-                return { setValue: { styleDescriptionWithNoun } };
-            },
-        };
+        );
 
         stateVariableDefinitions.inUnorderedList = {
             returnDependencies: () => ({
@@ -698,16 +645,15 @@ export default class Vector extends GraphicalComponent {
                     if (dependencyValues.headAttr !== null) {
                         // if overprescribed by specifying head, tail, and displacement
                         // we ignore head
-                        const warning = {
-                            type: "warning",
-                            message:
-                                "Vector is prescribed by head, tail, and displacement.  Ignoring specified head.",
-                        };
-                        if (dependencyValues.headAttr.position) {
-                            warning.position =
-                                dependencyValues.headAttr.position;
-                        }
-                        diagnostics.push(warning);
+                        diagnostics.push(
+                            codedDiagnostic({
+                                type: "warning",
+                                code: "doenet-w0007",
+                                position:
+                                    dependencyValues.headAttr.position ??
+                                    undefined,
+                            }),
+                        );
                     }
                     return {
                         setValue: { basedOnHead: false },
@@ -1179,10 +1125,10 @@ export default class Vector extends GraphicalComponent {
                             dependencyValues.numDimDisplacement !==
                             dependencyValues.numDimTail
                         ) {
-                            let warning = {
-                                message: "numDimensions mismatch in vector.",
+                            let warning = codedDiagnostic({
                                 type: "warning",
-                            };
+                                code: "doenet-w0008",
+                            });
                             return {
                                 setValue: { numDimensions: NaN },
                                 sendDiagnostics: [warning],
@@ -1193,10 +1139,10 @@ export default class Vector extends GraphicalComponent {
                             dependencyValues.numDimDisplacement !==
                             dependencyValues.numDimHead
                         ) {
-                            let warning = {
-                                message: "numDimensions mismatch in vector.",
+                            let warning = codedDiagnostic({
                                 type: "warning",
-                            };
+                                code: "doenet-w0008",
+                            });
                             return {
                                 setValue: { numDimensions: NaN },
                                 sendDiagnostics: [warning],
@@ -1210,10 +1156,10 @@ export default class Vector extends GraphicalComponent {
                             dependencyValues.numDimTail !==
                             dependencyValues.numDimHead
                         ) {
-                            let warning = {
-                                message: "numDimensions mismatch in vector.",
+                            let warning = codedDiagnostic({
                                 type: "warning",
-                            };
+                                code: "doenet-w0008",
+                            });
                             return {
                                 setValue: { numDimensions: NaN },
                                 sendDiagnostics: [warning],
@@ -1535,7 +1481,11 @@ export default class Vector extends GraphicalComponent {
                             desiredDisplacement.length = arraySize[0] + 1;
                             instructions.push({
                                 setDependency: "displacementAttr",
-                                desiredValue: me.fromAst(desiredDisplacement),
+                                desiredValue: me.fromAst(
+                                    markUnspecifiedComponents(
+                                        desiredDisplacement,
+                                    ),
+                                ),
                                 variableIndex: 0,
                             });
                         } else if (
@@ -1567,7 +1517,11 @@ export default class Vector extends GraphicalComponent {
                             desiredDisplacement.length = arraySize[0] + 1;
                             instructions.push({
                                 setDependency: "displacementShadow",
-                                desiredValue: me.fromAst(desiredDisplacement),
+                                desiredValue: me.fromAst(
+                                    markUnspecifiedComponents(
+                                        desiredDisplacement,
+                                    ),
+                                ),
                             });
                         } else if (
                             arraySize[0] === 1 &&
@@ -1889,7 +1843,9 @@ export default class Vector extends GraphicalComponent {
                         desiredHead.length = arraySize[0] + 1;
                         instructions.push({
                             setDependency: "headShadow",
-                            desiredValue: me.fromAst(desiredHead),
+                            desiredValue: me.fromAst(
+                                markUnspecifiedComponents(desiredHead),
+                            ),
                         });
                     } else if (
                         arraySize[0] === 1 &&
@@ -2146,7 +2102,9 @@ export default class Vector extends GraphicalComponent {
                         desiredTail.length = arraySize[0] + 1;
                         instructions.push({
                             setDependency: "tailShadow",
-                            desiredValue: me.fromAst(desiredTail),
+                            desiredValue: me.fromAst(
+                                markUnspecifiedComponents(desiredTail),
+                            ),
                         });
                     } else if (
                         arraySize[0] === 1 &&
@@ -2298,24 +2256,28 @@ export default class Vector extends GraphicalComponent {
                 },
             }),
             definition: function ({ dependencyValues }) {
+                // `evaluate_to_constant()` used to report a coordinate with no
+                // numeric value — a symbolic head or tail — as `null`, and this
+                // array goes straight to the renderer, where `Number(null)` is
+                // `0`: an undefined endpoint was drawn at the origin rather
+                // than not drawn at all. Map it to `NaN`, as `Point.js`'s
+                // `numericalXs` and `LineSegment.js`'s own `numericalEndpoints`
+                // already do — which also folds the `Complex` arm.
                 let numericalHead, numericalTail;
                 if (dependencyValues.numDimensions === 1) {
-                    numericalHead =
-                        dependencyValues.head[0].evaluate_to_constant();
-                    numericalTail =
-                        dependencyValues.tail[0].evaluate_to_constant();
+                    numericalHead = evaluateToNumber(dependencyValues.head[0]);
+                    numericalTail = evaluateToNumber(dependencyValues.tail[0]);
                 } else {
                     numericalHead = [];
                     numericalTail = [];
 
                     for (let i = 0; i < dependencyValues.numDimensions; i++) {
-                        let head =
-                            dependencyValues.head[i].evaluate_to_constant();
-                        numericalHead.push(head);
-
-                        let tail =
-                            dependencyValues.tail[i].evaluate_to_constant();
-                        numericalTail.push(tail);
+                        numericalHead.push(
+                            evaluateToNumber(dependencyValues.head[i]),
+                        );
+                        numericalTail.push(
+                            evaluateToNumber(dependencyValues.tail[i]),
+                        );
                     }
                 }
 

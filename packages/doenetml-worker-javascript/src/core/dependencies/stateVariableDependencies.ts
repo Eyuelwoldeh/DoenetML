@@ -46,7 +46,9 @@ export class StateVariableDependency extends Dependency {
         let component = this.dependencyHandler._components[this.componentIdx];
 
         if (!component) {
-            this.addBlockerUpdateTriggerForMissingComponent(this.componentIdx);
+            await this.addBlockerUpdateTriggerForMissingComponent(
+                this.componentIdx,
+            );
 
             return {
                 success: false,
@@ -114,7 +116,9 @@ export class StateVariableFromUnresolvedPathDependency extends Dependency {
         const component = this.dependencyHandler._components[this.componentIdx];
 
         if (!component) {
-            this.addBlockerUpdateTriggerForMissingComponent(this.componentIdx);
+            await this.addBlockerUpdateTriggerForMissingComponent(
+                this.componentIdx,
+            );
 
             return {
                 success: false,
@@ -421,9 +425,11 @@ export class StateVariableComponentTypeDependency extends StateVariableDependenc
                             }
                         }
 
+                        // absent when already consumed and not marked
+                        // changed since
                         let valueChanged0 =
                             this.valuesChanged[0][mappedVarName];
-                        if (valueChanged0.changed) {
+                        if (valueChanged0?.changed) {
                             if (!changes.valuesChanged) {
                                 changes.valuesChanged = {};
                             }
@@ -437,7 +443,7 @@ export class StateVariableComponentTypeDependency extends StateVariableDependenc
                                 });
                         }
                         if (consumeChanges) {
-                            this.valuesChanged[0][mappedVarName] = {};
+                            this.consumeChangeRecord(0, mappedVarName);
                         }
 
                         let hasVariableComponentType =

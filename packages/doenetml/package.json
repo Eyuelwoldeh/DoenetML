@@ -2,7 +2,7 @@
     "name": "@doenet/doenetml",
     "type": "module",
     "description": "Semantic markup for building interactive web activities",
-    "version": "0.7.20",
+    "version": "0.7.27",
     "license": "AGPL-3.0-or-later",
     "homepage": "https://github.com/Doenet/DoenetML#readme",
     "private": true,
@@ -31,7 +31,7 @@
         "test": "vitest",
         "test-cypress": "cypress open --component",
         "test-cypress-all": "cypress run --component -b 'chrome' --config video=false --headless",
-        "publish": "npm run build && cd dist && npm publish"
+        "publish": "npm run build && node ../../.github/scripts/npm-publish-with-retry.mjs dist"
     },
     "wireit": {
         "build:dev": {
@@ -45,7 +45,8 @@
                 "dist-dev/**/*.map",
                 "dist-dev/**/*.css",
                 "dist-dev/**/*.d.ts",
-                "dist-dev/**/*.json"
+                "dist-dev/**/*.json",
+                "dist-dev/**/*.wasm*"
             ],
             "dependencies": [
                 "build"
@@ -68,17 +69,20 @@
                 "dist/**/*.d.ts",
                 "dist/**/*.css",
                 "dist/**/*.json",
+                "dist/**/*.wasm*",
                 "dist/fonts/**/*"
             ],
             "dependencies": [
                 "../doenetml-worker:build",
                 "../codemirror:build",
                 "../ui-components:build",
+                "../i18n:build",
                 "../utils:build",
                 "../virtual-keyboard:build",
                 "../parser:build",
                 "../prefigure:build",
-                "../lsp-tools:build"
+                "../lsp-tools:build",
+                "../math:build"
             ]
         }
     },
@@ -89,7 +93,8 @@
     "dependencies": {
         "@doenet/lsp-tools": "*",
         "@doenet/static-assets": "*",
-        "dompurify": "^3.3.0"
+        "dompurify": "^3.4.11",
+        "math-expressions": "file:../math"
     },
     "prettier": {
         "tabWidth": 4

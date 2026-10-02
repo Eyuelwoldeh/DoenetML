@@ -1,5 +1,27 @@
-import { convertValueToMathExpression } from "@doenet/utils";
+import { convertValueToMathExpression, toNumberOrNaN } from "@doenet/utils";
 import me from "math-expressions";
+
+/**
+ * Reduce a list of vertices held as math expressions to plain numbers, so the
+ * numerical constraint functions can work on them.
+ *
+ * A vertex component that cannot be evaluated — `(a,b)` — must become `NaN`,
+ * which is what `evaluate_to_constant()` answers for it. `toNumberOrNaN` is
+ * still the right call because a *complex* component would otherwise reach the
+ * constraint functions as an object.
+ *
+ * This is the shape the marker has to have. When the engine answered `null`
+ * here, `null` was `0` to every arithmetic operator, so the constraint
+ * machinery placed such a vertex at the origin — it attracted to whatever was
+ * near `(0,0)` and translated the rest of a rigid shape to match — and the
+ * unconstrained value handed back through `me.fromAst` *threw* on `null`,
+ * taking the whole drag with it and leaving the shape where it was.
+ */
+function numericalizeVertices(vertices) {
+    return vertices.map((vertex) =>
+        vertex.map((v) => toNumberOrNaN(v.evaluate_to_constant())),
+    );
+}
 
 export function applyConstraintFromComponentConstraints(
     variables,
@@ -40,7 +62,7 @@ export function returnConstraintGraphInfoDefinitions() {
                 graphAncestor: {
                     dependencyType: "ancestor",
                     componentType: "graph",
-                    variableNames: ["xscale", "yscale"],
+                    variableNames: ["xScale", "yScale"],
                 },
                 shadowedConstraints: {
                     dependencyType: "shadowSource",
@@ -50,7 +72,7 @@ export function returnConstraintGraphInfoDefinitions() {
             definition({ dependencyValues }) {
                 if (dependencyValues.graphAncestor) {
                     let SVs = dependencyValues.graphAncestor.stateValues;
-                    let scales = [SVs.xscale, SVs.yscale, 1];
+                    let scales = [SVs.xScale, SVs.yScale, 1];
 
                     if (scales.every((x) => Number.isFinite(x) && x > 0)) {
                         return { setValue: { scales } };
@@ -596,8 +618,8 @@ export function returnVertexConstraintFunction(constraintFunction) {
         },
         ...args
     ) {
-        let numericalUnconstrainedVertices = unconstrainedVertices.map(
-            (vertex) => vertex.map((v) => v.evaluate_to_constant()),
+        let numericalUnconstrainedVertices = numericalizeVertices(
+            unconstrainedVertices,
         );
 
         let onlyMoveVertexInd = enforceRigid ? null : vertexIndMoved;
@@ -780,8 +802,8 @@ export function returnVertexConstraintFunctionFromEdges(constraintFunction) {
         },
         ...args
     ) {
-        let numericalUnconstrainedVertices = unconstrainedVertices.map(
-            (vertex) => vertex.map((v) => v.evaluate_to_constant()),
+        let numericalUnconstrainedVertices = numericalizeVertices(
+            unconstrainedVertices,
         );
 
         // calculate the edges and apply the constraint function

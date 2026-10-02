@@ -1,4 +1,6 @@
 import type Core from "../Core";
+import { diagnosticCodeFrom } from "../utils/diagnostics";
+import { errorComponentState } from "../utils/dast/errors";
 import type { ComponentInstance } from "../types/componentInstance";
 import type { ComponentIdx } from "@doenet/utils";
 import { createIsolatedComponents } from "./ComponentBuilder";
@@ -16,6 +18,7 @@ import {
     addReplacementsToResolver,
     determineParentAndIndexResolutionForResolver,
     gatherDiagnosticsAndAssignDoenetMLRange,
+    refreshRootNames,
 } from "./ResolverAdapter";
 import { postProcessCopy } from "../utils/copy";
 import { preprocessAttributesObject } from "../utils/attributes";
@@ -273,10 +276,16 @@ export class CompositeReplacementUpdater {
                     originalEffectiveLength,
                     firstIndex,
                 );
-                const updateOldReplacementsEnd = Math.min(
-                    originalEffectiveLength,
-                    firstIndex + (numberToDelete ?? 0),
-                );
+                // A replacement deleted along with its source is spliced out
+                // of `component.replacements` but keeps its place in the
+                // resolver, so `$composite[n]` still counts it. A change that
+                // recreates such replacements in place says how many of those
+                // places its new replacements take.
+                const updateOldReplacementsEnd =
+                    Math.min(
+                        originalEffectiveLength,
+                        firstIndex + (numberToDelete ?? 0),
+                    ) + (change.numberDeletedReplacementsToReplace ?? 0);
 
                 // determine which replacements are blank strings before deleting replacements
                 const blankStringReplacements = component.replacements!.map(
@@ -322,21 +331,29 @@ export class CompositeReplacementUpdater {
 
                 const newNComponents = change.nComponents;
 
-                await addReplacementsToResolver({
-                    core: this.core,
-                    serializedReplacements,
-                    component,
-                    updateOldReplacementsStart,
-                    updateOldReplacementsEnd,
-                    blankStringReplacements,
-                });
-
-                // expand `this.core._components` to length `newNComponents` so that the component indices will not be reused
+                // expand `this.core._components` to length `newNComponents` so that the component indices will not be reused.
+                // Moved ahead of the guard below, rather than after registering
+                // with the resolver as it used to be: the indices are already
+                // handed out, and now that a failure registering them is caught
+                // rather than fatal, a later change would otherwise hand out the
+                // same ones again.
                 if (newNComponents > this.core._components.length) {
                     this.core._components[newNComponents - 1] = undefined;
                 }
 
+                // Registering the new replacements with the resolver is inside
+                // the guard along with creating them: a failure in either half
+                // is the composite's to report, not the document's to die of.
                 try {
+                    await addReplacementsToResolver({
+                        core: this.core,
+                        serializedReplacements,
+                        component,
+                        updateOldReplacementsStart,
+                        updateOldReplacementsEnd,
+                        blankStringReplacements,
+                    });
+
                     const createResult = await createIsolatedComponents({
                         core: this.core,
                         serializedComponents: serializedReplacements,
@@ -351,6 +368,7 @@ export class CompositeReplacementUpdater {
                     newComponents = await this.setErrorReplacements({
                         composite: component,
                         message: e.message,
+                        source: e,
                     });
                 }
 
@@ -578,6 +596,17 @@ export class CompositeReplacementUpdater {
                 }
 
                 await this.processChildChangesAndRecurseToShadows(component);
+            } else if (change.changeType === "rearrangeReplacements") {
+                // the components we need already exist: put them in their new
+                // order rather than deleting and recreating them
+
+                await this.rearrangeReplacements({
+                    component,
+                    change,
+                    componentChanges,
+                });
+
+                await this.processChildChangesAndRecurseToShadows(component);
             }
         }
 
@@ -591,27 +620,65 @@ export class CompositeReplacementUpdater {
         return results;
     }
 
-    async setErrorReplacements({
+    /**
+     * Report `message` against `composite` and stop the composite being
+     * updated again.
+     *
+     * This is the half of `setErrorReplacements` that does not touch the
+     * composite's replacements, for the caller that has nowhere to put an
+     * `_error` component: a composite that fails partway through *changing*
+     * its replacements already has some, and the machinery that would splice
+     * new ones in is the machinery that just failed. Reporting and standing
+     * still leaves the reader the page and the message.
+     */
+    markCompositeInError({
         composite,
         message,
+        source,
     }: {
         composite: ComponentInstance;
         message: string;
+        source?: unknown;
     }) {
-        // display error for replacements and set composite to error state
-
         this.core.addDiagnostic({
             type: "error",
             message,
+            ...diagnosticCodeFrom(source),
             position: composite.position,
             sourceDoc: composite.sourceDoc,
         });
+
+        composite.isInErrorState = true;
+    }
+
+    async setErrorReplacements({
+        composite,
+        message,
+        source,
+    }: {
+        composite: ComponentInstance;
+        message: string;
+        /**
+         * The caught value the message came from, when there is one. Every
+         * caller passes `e.message`, so this is what carries the code across
+         * when the thrower named one — the same forwarding the `catch` blocks
+         * in `convertNormalizedDast` do (#1518).
+         */
+        source?: unknown;
+    }) {
+        // display error for replacements and set composite to error state
+
+        this.markCompositeInError({ composite, message, source });
+
         let errorReplacements = [
             {
                 type: "serialized",
                 componentType: "_error",
                 componentIdx: this.core._components.length,
-                state: { message },
+                // The same code the record above forwards. Coding one and not
+                // the other would leave the error on screen in English while
+                // the diagnostics panel showed it translated.
+                state: errorComponentState(message, source),
                 position: composite.position,
                 sourceDoc: composite.sourceDoc,
                 children: [],
@@ -620,8 +687,6 @@ export class CompositeReplacementUpdater {
         ];
 
         this.core._components[this.core._components.length] = undefined;
-
-        composite.isInErrorState = true;
 
         let createResult = await createIsolatedComponents({
             core: this.core,
@@ -928,64 +993,79 @@ export class CompositeReplacementUpdater {
                     composite: shadowingComponent,
                 });
 
-                await addReplacementsToResolver({
-                    core: this.core,
-                    serializedReplacements: newSerializedReplacements,
-                    component: shadowingComponent,
-                    updateOldReplacementsStart,
-                    updateOldReplacementsEnd,
-                    blankStringReplacements,
-                });
-
-                // expand `this.core._components` to length `newNComponents` so that the component indices will not be reused
+                // expand `this.core._components` to length `newNComponents` so that the component indices will not be reused.
+                // Ahead of the guard below, for the same reason as the
+                // non-shadow path above.
                 if (newNComponents > this.core._components.length) {
                     this.core._components[newNComponents - 1] = undefined;
                 }
 
-                newSerializedReplacements = postProcessCopy({
-                    serializedComponents: newSerializedReplacements,
-                    componentIdx: shadowingComponent.shadows.compositeIdx,
-                });
+                // Everything that prepares the shadow's replacements --
+                // registering their names and the copy post-processing -- is
+                // the shadowing composite's to report if it fails, the same as
+                // creating them below. The failure is held until the parameter
+                // stack is pushed so that both take the same path.
+                let registrationFailure: any = null;
+                try {
+                    await addReplacementsToResolver({
+                        core: this.core,
+                        serializedReplacements: newSerializedReplacements,
+                        component: shadowingComponent,
+                        updateOldReplacementsStart,
+                        updateOldReplacementsEnd,
+                        blankStringReplacements,
+                    });
 
-                // TODO: is isResponse the only attribute to convert?
-                if (shadowingComponent.attributes.isResponse) {
-                    let compositeAttributesObj = preprocessAttributesObject(
-                        shadowingComponent.constructor.createAttributesObject(),
-                    );
+                    newSerializedReplacements = postProcessCopy({
+                        serializedComponents: newSerializedReplacements,
+                        componentIdx: shadowingComponent.shadows.compositeIdx,
+                    });
 
-                    for (let repl of newSerializedReplacements) {
-                        if (typeof repl !== "object") {
-                            continue;
-                        }
-
-                        // add attributes
-                        if (!repl.attributes) {
-                            repl.attributes = {};
-                        }
-                        let nComponents = this.core._components.length;
-                        const res = convertUnresolvedAttributesForComponentType(
-                            {
-                                attributes: {
-                                    isResponse:
-                                        shadowingComponent.attributes
-                                            .isResponse,
-                                },
-                                componentType: repl.componentType,
-                                componentInfoObjects:
-                                    this.core.componentInfoObjects,
-                                compositeAttributesObj,
-                                nComponents,
-                            },
+                    // TODO: is isResponse the only attribute to convert?
+                    if (shadowingComponent.attributes.isResponse) {
+                        let compositeAttributesObj = preprocessAttributesObject(
+                            shadowingComponent.constructor.createAttributesObject(),
                         );
 
-                        const attributesFromComposite = res.attributes;
-                        nComponents = res.nComponents;
-                        if (nComponents > this.core._components.length) {
-                            this.core._components[nComponents - 1] = undefined;
-                        }
+                        for (let repl of newSerializedReplacements) {
+                            if (typeof repl !== "object") {
+                                continue;
+                            }
 
-                        Object.assign(repl.attributes, attributesFromComposite);
+                            // add attributes
+                            if (!repl.attributes) {
+                                repl.attributes = {};
+                            }
+                            let nComponents = this.core._components.length;
+                            const res =
+                                convertUnresolvedAttributesForComponentType({
+                                    attributes: {
+                                        isResponse:
+                                            shadowingComponent.attributes
+                                                .isResponse,
+                                    },
+                                    componentType: repl.componentType,
+                                    componentInfoObjects:
+                                        this.core.componentInfoObjects,
+                                    compositeAttributesObj,
+                                    nComponents,
+                                });
+
+                            const attributesFromComposite = res.attributes;
+                            nComponents = res.nComponents;
+                            if (nComponents > this.core._components.length) {
+                                this.core._components[nComponents - 1] =
+                                    undefined;
+                            }
+
+                            Object.assign(
+                                repl.attributes,
+                                attributesFromComposite,
+                            );
+                        }
                     }
+                } catch (e: any) {
+                    registrationFailure = e;
                 }
 
                 // console.log(
@@ -1002,21 +1082,31 @@ export class CompositeReplacementUpdater {
                     false,
                 );
 
-                try {
-                    let createResult = await createIsolatedComponents({
-                        core: this.core,
-                        serializedComponents: newSerializedReplacements,
-                        ancestors: shadowingComponent.ancestors,
-                        componentsReplacementOf: shadowingComponent,
-                    });
-                    newComponents = createResult.components;
-                } catch (e: any) {
-                    console.error(e);
-                    // throw e;
+                if (registrationFailure) {
+                    console.error(registrationFailure);
                     newComponents = await this.setErrorReplacements({
                         composite: shadowingComponent,
-                        message: e.message,
+                        message: registrationFailure.message,
+                        source: registrationFailure,
                     });
+                } else {
+                    try {
+                        let createResult = await createIsolatedComponents({
+                            core: this.core,
+                            serializedComponents: newSerializedReplacements,
+                            ancestors: shadowingComponent.ancestors,
+                            componentsReplacementOf: shadowingComponent,
+                        });
+                        newComponents = createResult.components;
+                    } catch (e: any) {
+                        console.error(e);
+                        // throw e;
+                        newComponents = await this.setErrorReplacements({
+                            composite: shadowingComponent,
+                            message: e.message,
+                            source: e,
+                        });
+                    }
                 }
 
                 this.core.parameterStack.pop();
@@ -1076,6 +1166,198 @@ export class CompositeReplacementUpdater {
         this.core.updateInfo.compositesBeingExpanded.splice(targetInd, 1);
 
         return newComponentsForShadows;
+    }
+
+    /**
+     * Put a composite's existing replacements into a new order.
+     *
+     * `change.arrangement` lists, for each position the composite will now
+     * have, which of its current active replacements belongs there. A
+     * composite whose output is a reordering of what it already produced —
+     * `<sort>` after its input changes order — can say so with this rather
+     * than serializing fresh components and having the core delete the old
+     * ones: the replacements survive, so a dependency that resolved to one of
+     * them still points at the same component, and the core has nothing to
+     * delete or create.
+     *
+     * That is not the same as nothing downstream being rebuilt. A composite
+     * that copies the output — `<p>$sorted</p>`, or `$sorted[2]` — still
+     * builds replacements of its own, and those are rebuilt as the order
+     * changes, though fewer of them than before.
+     *
+     * The arrangement is required to be a permutation of *all* the active
+     * replacements. Dropping or adding entries is a separate matter — it
+     * interacts with the withheld set, which is a count from the end of the
+     * array and therefore cannot express an arbitrary subset (see #1947) —
+     * and a composite that needs it recreates its replacements as before.
+     *
+     * Withheld replacements sit past the active ones and are left where they
+     * are: a caller rearranging what is visible has said nothing about them.
+     *
+     * Shadows hold their own replacement arrays, built one-for-one from this
+     * composite's, so each of them is rearranged the same way, in the manner
+     * of `adjustReplacementsToWithhold`.
+     */
+    async rearrangeReplacements({
+        component,
+        change,
+        componentChanges,
+    }: {
+        component: ComponentInstance;
+        change: ComponentChange;
+        componentChanges: ComponentChange[];
+    }) {
+        const arrangement: number[] = change.arrangement;
+
+        const replacements = component.replacements!;
+        const numActive =
+            replacements.length - (component.replacementsToWithhold ?? 0);
+
+        if (arrangement.length !== numActive) {
+            throw Error(
+                `Invalid replacement change: an arrangement of ${arrangement.length} does not match the ${numActive} active replacements of component ${component.componentIdx}.`,
+            );
+        }
+
+        const seen = new Set<number>();
+        for (const ind of arrangement) {
+            if (
+                !Number.isInteger(ind) ||
+                ind < 0 ||
+                ind >= numActive ||
+                seen.has(ind)
+            ) {
+                throw Error(
+                    `Invalid replacement change: arrangement for component ${component.componentIdx} is not a permutation of its active replacements.`,
+                );
+            }
+            seen.add(ind);
+        }
+
+        const active = replacements.slice(0, numActive);
+
+        component.replacements = [
+            ...arrangement.map((ind) => active[ind]),
+            ...replacements.slice(numActive),
+        ];
+
+        componentChanges.push({
+            changeType: "rearrangedReplacements",
+            composite: component,
+            topLevel: true,
+            arrangement,
+        });
+
+        await this.refreshIndexResolutionsForReplacements(component);
+
+        await this.core.dependencies.addBlockersFromChangedReplacements(
+            component,
+        );
+
+        for (const shadowingComponent of iterateExpandableShadows(component)) {
+            if (!shadowingComponent.isExpanded) {
+                // A shadow that has not been expanded has no `replacements`
+                // array to rearrange, and `expandShadowingComposite` builds
+                // them off this composite's — in their new order — when it
+                // does expand. Same guard as `adjustReplacementsToWithhold`.
+                continue;
+            }
+
+            await this.rearrangeReplacements({
+                component: shadowingComponent,
+                change,
+                componentChanges,
+            });
+        }
+    }
+
+    /**
+     * Tell the resolver which components an index into `component` now lands
+     * on, after its active replacements have changed position.
+     *
+     * This is the part of `adjustReplacementsToWithhold` that reports the
+     * ordered active replacements, with none of its withholding arithmetic:
+     * the set of active replacements is read off the component as it stands.
+     *
+     * One divergence from that sibling is deliberate. There, the resolver is
+     * updated only when the index resolves through *another* composite; here
+     * it is updated either way, and only the extra blocker is conditional.
+     * A `<sort>` is its own index parent in every case observed, so adding
+     * the same skip leaves `$sorted[2]` resolved to whichever component held
+     * position 2 before the reorder — a stale resolution, not a stale value:
+     * the component it names still reports its own current value.
+     */
+    async refreshIndexResolutionsForReplacements(component: ComponentInstance) {
+        if (!this.core.replaceIndexResolutionsInResolver) {
+            return;
+        }
+
+        const replacements = component.replacements!;
+        const numActive =
+            replacements.length - (component.replacementsToWithhold ?? 0);
+
+        // Telling the resolver where an index now lands is guarded the way
+        // every other place a composite registers replacements is: a failure
+        // here is the composite's to report rather than the document's to die
+        // of. `addBlockersFromChangedReplacements` stays outside the guard,
+        // as it does in `adjustReplacementsToWithhold`, because the throw it
+        // can reach is how a circular reference is reported today.
+        let indexParentComposite: any = null;
+
+        try {
+            const blankStringReplacements = replacements.map(
+                (repl: any) => typeof repl === "string" && repl.trim() === "",
+            );
+
+            const { indexResolution } =
+                await determineParentAndIndexResolutionForResolver({
+                    core: this.core,
+                    component,
+                    updateOldReplacementsStart: 0,
+                    updateOldReplacementsEnd: numActive,
+                    blankStringReplacements,
+                });
+
+            const indexParent =
+                indexResolution.ReplaceAll?.parent ??
+                indexResolution.ReplaceRange?.parent ??
+                null;
+
+            if (indexParent !== null) {
+                const newContentForIndex = replacements
+                    .slice(0, numActive)
+                    .map((repl: any) =>
+                        typeof repl === "string" ? repl : repl.componentIdx,
+                    );
+
+                this.core.replaceIndexResolutionsInResolver(
+                    { content: newContentForIndex },
+                    indexResolution,
+                );
+
+                refreshRootNames(this.core);
+
+                // A reference resolved through another composite has to be
+                // reconsidered as well; one resolved through this composite is
+                // covered by the blockers its own caller adds.
+                if (indexParent !== component.componentIdx) {
+                    indexParentComposite = this.core._components[indexParent];
+                }
+            }
+        } catch (e: any) {
+            console.error(e);
+            this.markCompositeInError({
+                composite: component,
+                message: e.message,
+                source: e,
+            });
+        }
+
+        if (indexParentComposite) {
+            await this.core.dependencies.addBlockersFromChangedReplacements(
+                indexParentComposite,
+            );
+        }
     }
 
     async adjustReplacementsToWithhold({
@@ -1150,61 +1432,87 @@ export class CompositeReplacementUpdater {
         }
 
         if (adjustResolver) {
-            const blankStringReplacements = component.replacements!.map(
-                (repl: any) => typeof repl === "string" && repl.trim() === "",
-            );
+            // Telling the resolver which replacements are withheld is the
+            // fourth place a composite registers replacements, and it is
+            // guarded like the other three: a failure here is the composite's
+            // to report rather than the document's to die of.
+            //
+            // `addBlockersFromChangedReplacements` is deliberately *outside*
+            // the guard. It reaches `checkForCircularResolveBlocker`, whose
+            // throw is how a circular reference is reported today (#387) and
+            // is what several documents rely on to fail to build at all.
+            // Catching that here would turn a reported cycle into a document
+            // that carries on resolving one.
+            let indexParentComposite: any = null;
 
-            const { indexResolution } =
-                await determineParentAndIndexResolutionForResolver({
-                    core: this.core,
-                    component,
-                    updateOldReplacementsStart: 0,
-                    updateOldReplacementsEnd:
-                        component.replacements!.length -
-                        (component.replacementsToWithhold ?? 0),
-                    blankStringReplacements,
-                });
+            try {
+                const blankStringReplacements = component.replacements!.map(
+                    (repl: any) =>
+                        typeof repl === "string" && repl.trim() === "",
+                );
 
-            let indexParent =
-                indexResolution.ReplaceAll?.parent ??
-                indexResolution.ReplaceRange?.parent ??
-                null;
+                const { indexResolution } =
+                    await determineParentAndIndexResolutionForResolver({
+                        core: this.core,
+                        component,
+                        updateOldReplacementsStart: 0,
+                        updateOldReplacementsEnd:
+                            component.replacements!.length -
+                            (component.replacementsToWithhold ?? 0),
+                        blankStringReplacements,
+                    });
 
-            if (
-                indexParent !== null &&
-                indexParent !== component.componentIdx
-            ) {
-                const indexParentComposite = this.core._components[indexParent];
+                let indexParent =
+                    indexResolution.ReplaceAll?.parent ??
+                    indexResolution.ReplaceRange?.parent ??
+                    null;
 
-                if (indexParentComposite) {
-                    if (this.core.replaceIndexResolutionsInResolver) {
-                        const newContentForIndex = component
-                            .replacements!.slice(
-                                0,
-                                component.replacements!.length -
-                                    change.replacementsToWithhold,
-                            )
-                            .map((repl: any) => {
-                                if (typeof repl === "string") {
-                                    return repl;
-                                } else {
-                                    return repl.componentIdx;
-                                }
-                            });
+                if (
+                    indexParent !== null &&
+                    indexParent !== component.componentIdx
+                ) {
+                    const candidate = this.core._components[indexParent];
 
-                        this.core.replaceIndexResolutionsInResolver(
-                            { content: newContentForIndex },
-                            indexResolution,
-                        );
+                    if (candidate) {
+                        if (this.core.replaceIndexResolutionsInResolver) {
+                            const newContentForIndex = component
+                                .replacements!.slice(
+                                    0,
+                                    component.replacements!.length -
+                                        change.replacementsToWithhold,
+                                )
+                                .map((repl: any) => {
+                                    if (typeof repl === "string") {
+                                        return repl;
+                                    } else {
+                                        return repl.componentIdx;
+                                    }
+                                });
 
-                        this.core.rootNames =
-                            this.core.calculateRootNames?.().names;
+                            this.core.replaceIndexResolutionsInResolver(
+                                { content: newContentForIndex },
+                                indexResolution,
+                            );
 
-                        await this.core.dependencies.addBlockersFromChangedReplacements(
-                            indexParentComposite,
-                        );
+                            refreshRootNames(this.core);
+
+                            indexParentComposite = candidate;
+                        }
                     }
                 }
+            } catch (e: any) {
+                console.error(e);
+                this.markCompositeInError({
+                    composite: component,
+                    message: e.message,
+                    source: e,
+                });
+            }
+
+            if (indexParentComposite) {
+                await this.core.dependencies.addBlockersFromChangedReplacements(
+                    indexParentComposite,
+                );
             }
         }
 
@@ -1214,6 +1522,17 @@ export class CompositeReplacementUpdater {
         );
 
         for (const shadowingComponent of iterateExpandableShadows(component)) {
+            if (!shadowingComponent.isExpanded) {
+                // A shadow that has not been expanded has no `replacements`
+                // array to adjust, and `expandShadowingComposite` copies
+                // `replacementsToWithhold` off the composite it shadows when it
+                // does expand. This is the guard
+                // `deleteReplacementsFromShadowsThenComposite` and
+                // `createShadowedReplacements` already apply to their own
+                // shadow walks.
+                continue;
+            }
+
             await this.adjustReplacementsToWithhold({
                 component: shadowingComponent,
                 change,

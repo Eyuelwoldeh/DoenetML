@@ -623,7 +623,7 @@ describe("UpdateValue tag tests @group1", async () => {
         let stateVariables = await core.returnAllStateVariables(false, true);
         expect(
             stateVariables[await resolvePathToNodeIdx("p1")].stateValues.text,
-        ).eq("Number 1 and point ( 3, 2 ).");
+        ).eq("Number 1 and point (3, 2).");
         expect(
             stateVariables[await resolvePathToNodeIdx("p2")].stateValues.text,
         ).eq("Text hello and line 0 = x - y + 1.");
@@ -636,7 +636,7 @@ describe("UpdateValue tag tests @group1", async () => {
         stateVariables = await core.returnAllStateVariables(false, true);
         expect(
             stateVariables[await resolvePathToNodeIdx("p1")].stateValues.text,
-        ).eq("Number 3 and point ( 3, 2 ).");
+        ).eq("Number 3 and point (3, 2).");
         expect(
             stateVariables[await resolvePathToNodeIdx("p2")].stateValues.text,
         ).eq("Text hello and line 0 = x - y + 1.");
@@ -649,7 +649,7 @@ describe("UpdateValue tag tests @group1", async () => {
         stateVariables = await core.returnAllStateVariables(false, true);
         expect(
             stateVariables[await resolvePathToNodeIdx("p1")].stateValues.text,
-        ).eq("Number 3 and point ( 3, 5 ).");
+        ).eq("Number 3 and point (3, 5).");
         expect(
             stateVariables[await resolvePathToNodeIdx("p2")].stateValues.text,
         ).eq("Text hello and line 0 = x - y + 1.");
@@ -662,7 +662,7 @@ describe("UpdateValue tag tests @group1", async () => {
         stateVariables = await core.returnAllStateVariables(false, true);
         expect(
             stateVariables[await resolvePathToNodeIdx("p1")].stateValues.text,
-        ).eq("Number 3 and point ( 3, 5 ).");
+        ).eq("Number 3 and point (3, 5).");
         expect(
             stateVariables[await resolvePathToNodeIdx("p2")].stateValues.text,
         ).eq("Text bye and line 0 = x - y + 1.");
@@ -675,7 +675,7 @@ describe("UpdateValue tag tests @group1", async () => {
         stateVariables = await core.returnAllStateVariables(false, true);
         expect(
             stateVariables[await resolvePathToNodeIdx("p1")].stateValues.text,
-        ).eq("Number 3 and point ( 3, 5 ).");
+        ).eq("Number 3 and point (3, 5).");
         expect(
             stateVariables[await resolvePathToNodeIdx("p2")].stateValues.text,
         ).eq("Text bye and line 0 = x - 2.");
@@ -3266,6 +3266,57 @@ describe("UpdateValue tag tests @group1", async () => {
         expect(
             stateVariables[await resolvePathToNodeIdx("t")].stateValues.text,
         ).eq("");
+    });
+
+    it("update a property that holds a whole list of coordinates", async () => {
+        let { core, resolvePathToNodeIdx } = await createTestCore({
+            doenetML: `
+    <point name="P">(1,2)</point>
+    <circle name="c" center="(3,4)" />
+    <point name="Q">9</point>
+    <updateValue name="uvXs" target="$P.xs" newValue="(5,6)" />
+    <updateValue name="uvCenter" target="$c.center" newValue="(7,8)" />
+    <updateValue name="uvOneDim" target="$Q.xs" newValue="10" />
+    `,
+        });
+
+        async function check_coords(
+            xs: number[],
+            center: number[],
+            oneDimXs: number[],
+        ) {
+            const stateVariables = await core.returnAllStateVariables(
+                false,
+                true,
+            );
+            expect(
+                stateVariables[
+                    await resolvePathToNodeIdx("P")
+                ].stateValues.xs.map((v) => v.tree),
+            ).eqls(xs);
+            expect(
+                stateVariables[
+                    await resolvePathToNodeIdx("c")
+                ].stateValues.center.map((v) => v.tree),
+            ).eqls(center);
+            expect(
+                stateVariables[
+                    await resolvePathToNodeIdx("Q")
+                ].stateValues.xs.map((v) => v.tree),
+            ).eqls(oneDimXs);
+        }
+
+        await check_coords([1, 2], [3, 4], [9]);
+
+        for (const name of ["uvXs", "uvCenter", "uvOneDim"]) {
+            await updateValue({
+                componentIdx: await resolvePathToNodeIdx(name),
+                core,
+            });
+        }
+
+        // a one-entry coordinate property takes the new value whole
+        await check_coords([5, 6], [7, 8], [10]);
     });
 
     it("updateValue warnings with invalid targets", async () => {

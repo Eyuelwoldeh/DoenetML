@@ -1,12 +1,15 @@
 import type Core from "../Core";
+import { reportInternalError } from "../utils/internalErrors";
 import type { ComponentInstance } from "../types/componentInstance";
 import type { ComponentIdx } from "@doenet/utils";
-import me from "math-expressions";
+import me, { getComponent } from "math-expressions";
 import { processNewDefiningChildren } from "./ComponentLifecycle";
 import { expandAllComposites } from "./CompositeExpander";
+import { ensureStateVariableMaterialized } from "./StateVariableInitializer";
 import {
     preprocessMathInverseDefinition,
     removeFunctionsMathExpressionClass,
+    isUnspecifiedComponentValue,
 } from "../utils/math";
 
 /**
@@ -34,11 +37,11 @@ type NewStateVariableValues = Record<string, Record<string, any>>;
  *    composites whose replacements need recomputing after a value moved
  *
  * Writes directly to `comp.essentialState[*]`, `compStateObj.usedDefault`
- * / `usedDefaultByArrayKey`, `parent.definingChildren[*]`, and
- * `updateInfo.stateVariableUpdatesForMissingComponents`. Reads (but does
- * not own) `cumulativeStateVariableChanges` (written by `UpdateExecutor`
- * and `DeletionEngine`) and `essentialValuesSavedInDefinition` (written
- * by `StateVariableEvaluator`). Holds a back-reference to Core for the
+ * / `usedDefaultByArrayKey`, and `parent.definingChildren[*]`. Reads (but
+ * does not own) `cumulativeStateVariableChanges` (written by
+ * `UpdateExecutor` and `DeletionEngine`) and
+ * `essentialValuesSavedInDefinition` (written by
+ * `StateVariableEvaluator`). Holds a back-reference to Core for the
  * rest of the hot state and the other extracted managers.
  *
  * Note: this is the essential-write engine. The save-to-localStorage /
@@ -214,9 +217,9 @@ export class EssentialValueWriter {
      * intermediate inverse-definition results.
      *
      * For each component:
-     *   - Skips and stashes onto `updateInfo.stateVariableUpdatesForMissingComponents`
-     *     when the component does not exist yet (it will be re-applied
-     *     once the component is created via `checkForDependenciesOnNewComponent`).
+     *   - Reports a broken invariant and skips it when the component is not
+     *     in the tree. Every index in the batch was read off a live
+     *     component, so there should be no such thing.
      *   - For each variable, calls `processNewStateVariableValueForVariable`,
      *     which dispatches into the array / scalar / essential / primitive-child
      *     branches and may recurse into shadowing variables.
@@ -244,21 +247,26 @@ export class EssentialValueWriter {
             let comp = this.core._components[cIdx];
 
             if (comp === undefined) {
-                // console.warn(`can't update state variables of component ${cIdx}, as it doesn't exist.`);
-                // nFailures += 1;
-
-                let updatesForComp =
-                    this.core.updateInfo
-                        .stateVariableUpdatesForMissingComponents[cIdx];
-                if (updatesForComp === undefined) {
-                    updatesForComp =
-                        this.core.updateInfo.stateVariableUpdatesForMissingComponents[
-                            cIdx
-                        ] = {};
-                }
-
-                Object.assign(updatesForComp, newStateVariableValues[cIdx]);
-
+                // This used to file the write onto
+                // `updateInfo.stateVariableUpdatesForMissingComponents` against
+                // `cIdx`, to be replayed when the component appeared. Nothing
+                // replays it: that map is drained by `stateId`
+                // (`checkForStateVariablesUpdatesForNewComponent`), and the two
+                // key spaces only ever coincided while `stateId` fell back to
+                // the component index, which it no longer does for anything.
+                //
+                // Nor is there a component for it to be replayed onto. Every
+                // index in `newStateVariableValues` was read off a live
+                // component -- the inverse-definition recursion walks
+                // dependencies, `shadowedBy` and parents, all of them live
+                // objects -- so "the component does not exist yet", which the
+                // old comment claimed, is not a state this bag can be in.
+                // Reaching here means something else is wrong, and it is worth
+                // hearing about rather than quietly filing under a key no one
+                // reads.
+                reportInternalError(
+                    `can't update state variables of component ${cIdx}, as it doesn't exist.`,
+                );
                 continue;
             }
 
@@ -266,6 +274,17 @@ export class EssentialValueWriter {
 
             for (let vName in newComponentStateVariables) {
                 let compStateObj = comp.state[vName];
+                if (compStateObj) {
+                    // the writes below read materialized-only fields
+                    // (`essentialVarName` overrides from shadow plans,
+                    // array machinery like `setArrayValue` /
+                    // `arraySizeStateVariable`)
+                    await ensureStateVariableMaterialized({
+                        core: this.core,
+                        component: comp,
+                        stateVariable: vName,
+                    });
+                }
                 if (compStateObj === undefined) {
                     let match = vName.match(/^__def_primitive_(\d+)$/);
 
@@ -306,22 +325,16 @@ export class EssentialValueWriter {
                         }
                     }
 
-                    this.core.addDiagnostic({
-                        type: "info",
-                        message: `can't update state variable ${vName} of component ${cIdx}, as it doesn't exist.`,
-                        position: this.core._components[cIdx].position,
-                        sourceDoc: this.core._components[cIdx].sourceDoc,
-                    });
+                    reportInternalError(
+                        `can't update state variable ${vName} of component ${cIdx}, as it doesn't exist.`,
+                    );
                     continue;
                 }
 
                 if (!compStateObj.hasEssential) {
-                    this.core.addDiagnostic({
-                        type: "info",
-                        message: `can't update state variable ${vName} of component ${cIdx}, as it does not have an essential state variable.`,
-                        position: this.core._components[cIdx].position,
-                        sourceDoc: this.core._components[cIdx].sourceDoc,
-                    });
+                    reportInternalError(
+                        `can't update state variable ${vName} of component ${cIdx}, as it does not have an essential state variable.`,
+                    );
                     continue;
                 }
 
@@ -486,6 +499,14 @@ export class EssentialValueWriter {
 
         let stateVarObj = component.state[stateVariable];
 
+        // materialize before reading the definition group and the inverse
+        // definition: pending shadow modifications can change both
+        await ensureStateVariableMaterialized({
+            core: this.core,
+            component,
+            stateVariable,
+        });
+
         let additionalStateVariablesDefined =
             stateVarObj.additionalStateVariablesDefined;
 
@@ -537,57 +558,66 @@ export class EssentialValueWriter {
             let arrayStateVariable = stateVarObj.arrayStateVariable;
             stateVariableForWorkspace = arrayStateVariable;
 
+            let arrayKeys: string[] = inverseDefinitionArgs.arrayKeys;
             let desiredValuesForArray: Record<string, any> = {};
-            if (inverseDefinitionArgs.arrayKeys.length === 1) {
+            if (arrayKeys.length === 1) {
                 if ("value" in instruction) {
-                    desiredValuesForArray[inverseDefinitionArgs.arrayKeys[0]] =
-                        instruction.value;
+                    desiredValuesForArray[arrayKeys[0]] = instruction.value;
                 } else if ("valueOfStateVariable" in instruction) {
-                    desiredValuesForArray[inverseDefinitionArgs.arrayKeys[0]] =
+                    desiredValuesForArray[arrayKeys[0]] =
                         await this._resolveValueOfStateVariable(
                             instruction,
                             component,
                         );
                 }
-            } else {
-                for (let [
-                    ind,
-                    arrayKey,
-                ] of inverseDefinitionArgs.arrayKeys.entries()) {
-                    if (Array.isArray(instruction.value)) {
-                        desiredValuesForArray[arrayKey] =
-                            instruction.value[ind];
-                    } else if (instruction.value instanceof me.class) {
-                        try {
-                            desiredValuesForArray[arrayKey] =
-                                instruction.value.get_component(ind);
-                        } catch (e) {
-                            // `get_component(ind)` throws when `ind` is out of
-                            // range for this math expression; treat it as "no
-                            // desired value for this arrayKey" and leave the
-                            // slot unset. Any other exception shape would also
-                            // be swallowed here — narrow if a concrete error
-                            // type from math-expressions becomes available.
-                        }
-                    }
+            } else if (Array.isArray(instruction.value)) {
+                for (let [ind, arrayKey] of arrayKeys.entries()) {
+                    desiredValuesForArray[arrayKey] = instruction.value[ind];
                 }
+            } else if (instruction.value instanceof me.class) {
+                desiredValuesForArray = spreadMathOverArrayKeys(
+                    instruction.value,
+                    arrayKeys,
+                );
             }
             inverseDefinitionArgs.desiredStateVariableValues = {
                 [arrayStateVariable]: desiredValuesForArray,
             };
-        } else {
-            if ("value" in instruction) {
-                inverseDefinitionArgs.desiredStateVariableValues = {
-                    [stateVariable]: instruction.value,
-                };
-            } else if ("valueOfStateVariable" in instruction) {
-                inverseDefinitionArgs.desiredStateVariableValues = {
-                    [stateVariable]: await this._resolveValueOfStateVariable(
-                        instruction,
-                        component,
+        } else if (
+            "value" in instruction ||
+            "valueOfStateVariable" in instruction
+        ) {
+            let desiredValue =
+                "value" in instruction
+                    ? instruction.value
+                    : await this._resolveValueOfStateVariable(
+                          instruction,
+                          component,
+                      );
+
+            // An instruction targeting a whole array — e.g.
+            // `<updateValue target="$v.tail" newValue="(7,8)" />` — carries one
+            // math expression for the entire array, while the inverse
+            // definition expects a value per array key. A one-dimensional
+            // array maps the two unambiguously (component `ind` of the
+            // expression belongs to array key `ind`), so spread the expression
+            // over the keys; a multidimensional array is passed through whole.
+            if (
+                stateVarObj.isArray &&
+                stateVarObj.numDimensions === 1 &&
+                desiredValue instanceof me.class
+            ) {
+                desiredValue = spreadMathOverArrayKeys(
+                    desiredValue,
+                    stateVarObj.getAllArrayKeys(
+                        inverseDefinitionArgs.arraySize,
                     ),
-                };
+                );
             }
+
+            inverseDefinitionArgs.desiredStateVariableValues = {
+                [stateVariable]: desiredValue,
+            };
         }
 
         let stateVariableWorkspace =
@@ -628,12 +658,9 @@ export class EssentialValueWriter {
                         varName2,
                     )
                 ) {
-                    this.core.addDiagnostic({
-                        type: "info",
-                        message: `Can't invert ${varName2} at the same time as ${stateVariable}, as not an additional state variable defined`,
-                        position: component.position,
-                        sourceDoc: component.sourceDoc,
-                    });
+                    reportInternalError(
+                        `Can't invert ${varName2} at the same time as ${stateVariable}, as not an additional state variable defined`,
+                    );
                     continue;
                 }
                 // Note: don't check if varName2 is an array
@@ -644,12 +671,9 @@ export class EssentialValueWriter {
         }
 
         if (!stateVarObj.inverseDefinition) {
-            this.core.addDiagnostic({
-                type: "info",
-                message: `Cannot change state variable ${stateVariable} of ${component.componentIdx} as it doesn't have an inverse definition`,
-                position: component.position,
-                sourceDoc: component.sourceDoc,
-            });
+            reportInternalError(
+                `Cannot change state variable ${stateVariable} of ${component.componentIdx} as it doesn't have an inverse definition`,
+            );
             return;
         }
 
@@ -658,12 +682,9 @@ export class EssentialValueWriter {
             !stateVarObj.ignoreFixed &&
             (await component.stateValues.fixed)
         ) {
-            this.core.addDiagnostic({
-                type: "info",
-                message: `Changing ${stateVariable} of ${component.componentIdx} did not succeed because fixed is true.`,
-                position: component.position,
-                sourceDoc: component.sourceDoc,
-            });
+            reportInternalError(
+                `Changing ${stateVariable} of ${component.componentIdx} did not succeed because fixed is true.`,
+            );
             return;
         }
 
@@ -672,27 +693,19 @@ export class EssentialValueWriter {
             stateVarObj.isLocation &&
             (await component.stateValues.fixLocation)
         ) {
-            this.core.addDiagnostic({
-                type: "info",
-                message: `Changing ${stateVariable} of ${component.componentIdx} did not succeed because fixLocation is true.`,
-                position: component.position,
-                sourceDoc: component.sourceDoc,
-            });
+            reportInternalError(
+                `Changing ${stateVariable} of ${component.componentIdx} did not succeed because fixLocation is true.`,
+            );
             return;
         }
 
-        if (
-            !(
-                initialChange ||
-                (await component.stateValues.modifyIndirectly) !== false
-            )
-        ) {
-            this.core.addDiagnostic({
-                type: "info",
-                message: `Changing ${stateVariable} of ${component.componentIdx} did not succeed because modifyIndirectly is false.`,
-                position: component.position,
-                sourceDoc: component.sourceDoc,
-            });
+        if (!(
+            initialChange ||
+            (await component.stateValues.modifyIndirectly) !== false
+        )) {
+            reportInternalError(
+                `Changing ${stateVariable} of ${component.componentIdx} did not succeed because modifyIndirectly is false.`,
+            );
             return;
         }
 
@@ -786,12 +799,10 @@ export class EssentialValueWriter {
                         }
 
                         // haven't implemented combining when have additional dependency values
-                        if (
-                            !(
-                                newInstruction.additionalDependencyValues ||
-                                depStateVarObj.basedOnArrayKeyStateVariables
-                            )
-                        ) {
+                        if (!(
+                            newInstruction.additionalDependencyValues ||
+                            depStateVarObj.basedOnArrayKeyStateVariables
+                        )) {
                             foundArrayInstruction = true;
 
                             if (!arrayInstructionInProgress) {
@@ -1015,12 +1026,9 @@ export class EssentialValueWriter {
                             !stateVarObj.ignoreFixed &&
                             (await baseComponent.stateValues.fixed)
                         ) {
-                            this.core.addDiagnostic({
-                                type: "info",
-                                message: `Changing ${stateVariable} of ${baseComponent.componentIdx} did not succeed because fixed is true.`,
-                                position: baseComponent.position,
-                                sourceDoc: baseComponent.sourceDoc,
-                            });
+                            reportInternalError(
+                                `Changing ${stateVariable} of ${baseComponent.componentIdx} did not succeed because fixed is true.`,
+                            );
                             return;
                         }
 
@@ -1030,12 +1038,9 @@ export class EssentialValueWriter {
                             !stateVarObj.isLocation &&
                             (await baseComponent.stateValues.fixLocation)
                         ) {
-                            this.core.addDiagnostic({
-                                type: "info",
-                                message: `Changing ${stateVariable} of ${baseComponent.componentIdx} did not succeed because fixLocation is true.`,
-                                position: baseComponent.position,
-                                sourceDoc: baseComponent.sourceDoc,
-                            });
+                            reportInternalError(
+                                `Changing ${stateVariable} of ${baseComponent.componentIdx} did not succeed because fixLocation is true.`,
+                            );
                             return;
                         }
                     }
@@ -1236,25 +1241,16 @@ export class EssentialValueWriter {
                                 this.core.dependencies.downstreamDependencies[
                                     component.componentIdx
                                 ][stateVariable][dependencyName2];
-                            if (
-                                !(
-                                    [
-                                        "stateVariable",
-                                        "parentStateVariable",
-                                    ].includes(dep2.dependencyType) &&
-                                    dep2.downstreamComponentIndices.length === 1
-                                )
-                            ) {
-                                this.core.addDiagnostic({
-                                    type: "info",
-                                    message: `Can't simultaneously set additional dependency value ${dependencyName2} if it isn't a state variable`,
-                                    position:
-                                        this.core._components[dComponentIdx]
-                                            .position,
-                                    sourceDoc:
-                                        this.core._components[dComponentIdx]
-                                            .sourceDoc,
-                                });
+                            if (!(
+                                [
+                                    "stateVariable",
+                                    "parentStateVariable",
+                                ].includes(dep2.dependencyType) &&
+                                dep2.downstreamComponentIndices.length === 1
+                            )) {
+                                reportInternalError(
+                                    `Can't simultaneously set additional dependency value ${dependencyName2} if it isn't a state variable`,
+                                );
                                 continue;
                             }
 
@@ -1268,16 +1264,9 @@ export class EssentialValueWriter {
                                     varName2,
                                 )
                             ) {
-                                this.core.addDiagnostic({
-                                    type: "info",
-                                    message: `Can't simultaneously set additional dependency value ${dependencyName2} if it doesn't correspond to additional state variable defined of ${dependencyName}'s state variable`,
-                                    position:
-                                        this.core._components[dComponentIdx]
-                                            .position,
-                                    sourceDoc:
-                                        this.core._components[dComponentIdx]
-                                            .sourceDoc,
-                                });
+                                reportInternalError(
+                                    `Can't simultaneously set additional dependency value ${dependencyName2} if it doesn't correspond to additional state variable defined of ${dependencyName}'s state variable`,
+                                );
                                 continue;
                             }
                             if (!inst.additionalStateVariableValues) {
@@ -1495,6 +1484,46 @@ export class EssentialValueWriter {
             newStateVariableValues,
         });
     }
+}
+
+/**
+ * Distribute the math expression `value` over `arrayKeys`, producing the
+ * array-key-keyed object an array state variable's inverse definition expects.
+ *
+ * A single key takes the expression whole, so that a size-one array accepts
+ * the same value its lone entry would; otherwise each key gets the
+ * corresponding component of the expression.
+ */
+function spreadMathOverArrayKeys(
+    value: any,
+    arrayKeys: string[],
+): Record<string, any> {
+    if (arrayKeys.length === 1) {
+        return { [arrayKeys[0]]: value };
+    }
+
+    const desiredValuesForArray: Record<string, any> = {};
+    for (let [ind, arrayKey] of arrayKeys.entries()) {
+        // `getComponent` yields `undefined` when the expression has no such
+        // component — it is shorter than the array, is not a container at all,
+        // or is not an expression at all — and we leave the slot unset so the
+        // inverse definition keeps the current value for that key.
+        //
+        // This used to be a try/catch around `value.get_component(ind)`, reading
+        // the throw as "no component". `me` still throws for both of those
+        // cases, so the seam's `getComponent` is that try/catch, written once
+        // and expressed as a value instead of as control flow.
+        //
+        // An `UNSPECIFIED_COMPONENT` marker is skipped for the same reason: it
+        // is a component the producing inverse definition deliberately left
+        // alone, and it reaches here as a symbol only because a hole cannot
+        // survive the engine's JSON round trip.
+        const component = getComponent(value, ind);
+        if (!isUnspecifiedComponentValue(component)) {
+            desiredValuesForArray[arrayKey] = component;
+        }
+    }
+    return desiredValuesForArray;
 }
 
 /**

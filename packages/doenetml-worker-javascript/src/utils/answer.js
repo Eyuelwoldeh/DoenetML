@@ -2,6 +2,118 @@ import { serializedComponentsReplacer } from "@doenet/utils";
 import sha1 from "crypto-js/sha1";
 import Base64 from "crypto-js/enc-base64";
 import stringify from "json-stringify-deterministic";
+import { codedDiagnostic } from "./diagnostics";
+import { returnLocalizedDefaultStateVariableDefinition } from "./contentLocale";
+import { BLANK_PLACEHOLDER } from "./embeddedMathInputs";
+import { evaluateToNumber } from "./math";
+
+function returnScoredContainerAncestorDependency(...variableNames) {
+    return {
+        dependencyType: "ancestor",
+        variableNames,
+    };
+}
+
+/**
+ * Whether a math expression's tree carries nothing the reader typed.
+ *
+ * A whole expression that is the placeholder U+FF3F — what math-expressions
+ * uses for a missing subexpression, and what an untouched math-flavored input
+ * submits — is blank. One that is merely *partly* blank, `x + \uFF3F`, is
+ * something the reader typed and is not.
+ *
+ * A `<matrixInput>` is the case that needs unwrapping: untouched, it submits a
+ * matrix of placeholders rather than a bare one, and neither the dimensions
+ * around them nor the tuples holding the rows are a response.
+ *
+ * @param {unknown} tree - a math-expression `tree`, or a subtree of one
+ * @returns {boolean}
+ */
+function mathTreeIsBlank(tree) {
+    if (tree === BLANK_PLACEHOLDER) {
+        return true;
+    }
+
+    // ["matrix", ["tuple", nRows, nColumns], ["tuple", ...rows]], each row
+    // itself a tuple of entries.
+    if (Array.isArray(tree) && tree[0] === "matrix") {
+        return matrixEntriesAreBlank(tree[2]);
+    }
+
+    return false;
+}
+
+/**
+ * Whether every entry of a matrix's rows tuple — or of one such row — is the
+ * blank placeholder. Anything that is not the tuple structure a matrix is built
+ * from is not something this can call blank.
+ *
+ * @param {unknown} tuple - the rows of a matrix tree, or one of those rows
+ * @returns {boolean}
+ */
+function matrixEntriesAreBlank(tuple) {
+    return (
+        Array.isArray(tuple) &&
+        tuple[0] === "tuple" &&
+        tuple
+            .slice(1)
+            .every(
+                (entry) =>
+                    entry === BLANK_PLACEHOLDER || matrixEntriesAreBlank(entry),
+            )
+    );
+}
+
+/**
+ * Whether a single submitted response value carries nothing the reader typed.
+ *
+ * Pressing submit on an untouched input still records a response, so "was
+ * something submitted?" and "did the reader respond?" are different questions.
+ * The empty value differs by input: the math-flavored inputs submit a
+ * math-expression built from the blank placeholder, a `<textInput>` an empty
+ * string, and a `<choiceInput>` with nothing selected no response value at all.
+ *
+ * A `<booleanInput>` is the exception with no blank state of its own: untouched
+ * it submits `false`, which is indistinguishable from the reader deliberately
+ * leaving the box unchecked, so it counts as a response either way.
+ *
+ * @param {unknown} response - one entry of `submittedResponses`
+ * @returns {boolean}
+ */
+function responseIsBlank(response) {
+    if (response === null || response === undefined) {
+        return true;
+    }
+    if (typeof response === "string") {
+        return response.trim() === "";
+    }
+    if (typeof response === "number") {
+        return Number.isNaN(response);
+    }
+    if (Array.isArray(response)) {
+        return response.every(responseIsBlank);
+    }
+    if (typeof response === "object" && "tree" in response) {
+        return mathTreeIsBlank(response.tree);
+    }
+    return false;
+}
+
+/**
+ * Whether a submission carried nothing the reader entered, either because there
+ * were no response values at all or because every one of them is blank.
+ *
+ * Filling one input of several is entering something, so a single non-blank
+ * value is enough. Note that an author can add values of their own to the
+ * responses with `<considerAsResponses>` or `isResponse`; those count here like
+ * any other, having been declared responses.
+ *
+ * @param {unknown[]} submittedResponses - the answer's `submittedResponses`
+ * @returns {boolean}
+ */
+function submittedResponsesAreBlank(submittedResponses) {
+    return submittedResponses.every(responseIsBlank);
+}
 
 export function returnStandardAnswerAttributes() {
     return {
@@ -53,15 +165,13 @@ export function returnStandardAnswerAttributes() {
             createComponentOfType: "boolean",
             createStateVariable: "colorCorrectnessPreliminary",
             defaultValue: true,
-            public: true,
             groupName: "answer-grading",
             // The runtime stores the raw attribute value under
             // `colorCorrectnessPreliminary` so a derived `colorCorrectness`
-            // state def can combine it with the ancestor's setting. Authors
-            // should see only the derived `colorCorrectness` property, so
-            // hide the plumbing-named state var from the schema while
-            // keeping the attribute itself author-facing. See #1089.
-            stateVarExcludeFromSchema: true,
+            // state def can combine it with the ancestor's setting. That raw
+            // variable is plumbing, so it is not public: the attribute stays
+            // author-facing, and `$a.colorCorrectnessPreliminary` is not a
+            // reference anyone can write. See #1089.
             description:
                 "Whether to color-code the response based on its correctness.",
         },
@@ -78,10 +188,13 @@ export function returnStandardAnswerAttributes() {
 
         submitLabel: {
             createComponentOfType: "text",
-            createStateVariable: "submitLabel",
+            createStateVariable: "submitLabelPreLocalize",
+            // The default is English here only so that authors see the words
+            // in the schema; `returnSubmitLabelStateVariableDefinitions`
+            // ignores this value when the attribute is unspecified and takes
+            // the label from the document's own language instead. An authored
+            // value is never translated — see the note there.
             defaultValue: "Check Work",
-            public: true,
-            forRenderer: true,
             groupName: "answer-grading",
             description:
                 "Label for the submit button when correctness is shown.",
@@ -89,10 +202,9 @@ export function returnStandardAnswerAttributes() {
 
         submitLabelNoCorrectness: {
             createComponentOfType: "text",
-            createStateVariable: "submitLabelNoCorrectness",
+            createStateVariable: "submitLabelNoCorrectnessPreLocalize",
+            // See the note on `submitLabel`.
             defaultValue: "Submit Response",
-            public: true,
-            forRenderer: true,
             groupName: "answer-grading",
             description:
                 "Label for the submit button when correctness is not shown.",
@@ -120,12 +232,65 @@ export function returnStandardAnswerAttributes() {
     };
 }
 
+/**
+ * `submitLabel` and `submitLabelNoCorrectness`, with their defaults in the
+ * document's language.
+ *
+ * Only the *default* is translated; see
+ * `returnLocalizedDefaultStateVariableDefinition`, which every
+ * author-overridable label in the worker resolves through.
+ *
+ * Shared by `<answer>` and by every container with a section-wide check-work
+ * button, which declare the same two attributes from different tables
+ * (`returnStandardAnswerAttributes` and `returnScoredSectionAttributes`) but
+ * resolve them identically.
+ *
+ * @param button How the schema should name the button these label — a section
+ *   labels a section-wide one, an `<answer>` its own.
+ * @param ownLocale Read the component's *own* `locale` as well as the
+ *   enclosing document's. Only `<document>` has one; see
+ *   `returnContentLocaleDependencies`.
+ */
+export function returnSubmitLabelStateVariableDefinitions({
+    ownLocale = false,
+    button = "the submit button",
+} = {}) {
+    return {
+        submitLabel: returnLocalizedDefaultStateVariableDefinition({
+            name: "submitLabel",
+            translatedDefault: (t) => t("answer-submit-label"),
+            description: `Label for ${button} when correctness is shown.`,
+            ownLocale,
+        }),
+        submitLabelNoCorrectness: returnLocalizedDefaultStateVariableDefinition(
+            {
+                name: "submitLabelNoCorrectness",
+                translatedDefault: (t) =>
+                    t("answer-submit-label-no-correctness"),
+                description: `Label for ${button} when correctness is not shown.`,
+                ownLocale,
+            },
+        ),
+    };
+}
+
 // Note: depends on `creditAchievedIfSubmit` state variable
 // and having the original `disabled` attribute be renamed to `disabledOriginal`.
 export function returnStandardAnswerStateVariableDefinition() {
     const stateVariableDefinitions = {};
 
+    Object.assign(
+        stateVariableDefinitions,
+        returnSubmitLabelStateVariableDefinitions(),
+    );
+
     stateVariableDefinitions.showCorrectness = {
+        description:
+            "Whether correctness is shown for the submitted response, after combining the attribute with hand-grading, any enclosing section's setting, and the activity-wide flag.",
+        public: true,
+        shadowingInstructions: {
+            createComponentOfType: "boolean",
+        },
         forRenderer: true,
         returnDependencies: () => ({
             showCorrectnessPreliminary: {
@@ -164,6 +329,12 @@ export function returnStandardAnswerStateVariableDefinition() {
     };
 
     stateVariableDefinitions.colorCorrectness = {
+        description:
+            "Whether the response is color-coded by correctness, after combining the attribute with any enclosing section's setting and with whether correctness is shown at all.",
+        public: true,
+        shadowingInstructions: {
+            createComponentOfType: "boolean",
+        },
         forRenderer: true,
         returnDependencies: () => ({
             colorCorrectnessPreliminary: {
@@ -283,6 +454,67 @@ export function returnStandardAnswerStateVariableDefinition() {
         },
     };
 
+    stateVariableDefinitions.creditAchievedForProgress = {
+        description:
+            "The credit this answer contributes when deciding whether the content around it has been completed, as a `<cascade>` does. Equal to `creditAchieved`, except that a hand-graded answer counts as fully correct once a non-blank response has been submitted.",
+        stateVariablesDeterminingDependencies: ["handGraded"],
+        returnDependencies({ stateValues }) {
+            const dependencies = {
+                handGraded: {
+                    dependencyType: "stateVariable",
+                    variableName: "handGraded",
+                },
+            };
+
+            if (stateValues.handGraded) {
+                // The submitted responses are worth resolving only for a
+                // hand-graded answer. Every enclosing section aggregates this
+                // variable to color its heading, so an unconditional dependency
+                // would pull the whole response array of every answer in the
+                // document into the initial render.
+                dependencies.responseHasBeenSubmitted = {
+                    dependencyType: "stateVariable",
+                    variableName: "responseHasBeenSubmitted",
+                };
+                dependencies.submittedResponses = {
+                    dependencyType: "stateVariable",
+                    variableName: "submittedResponses",
+                };
+            } else {
+                dependencies.creditAchieved = {
+                    dependencyType: "stateVariable",
+                    variableName: "creditAchieved",
+                };
+            }
+
+            return dependencies;
+        },
+        definition({ dependencyValues }) {
+            if (!dependencyValues.handGraded) {
+                return {
+                    setValue: {
+                        creditAchievedForProgress:
+                            dependencyValues.creditAchieved,
+                    },
+                };
+            }
+
+            // A hand-graded answer keeps `creditAchieved` at 0 until an
+            // instructor grades it, which is well after the reader is done
+            // with it. Progress therefore asks the only question that can be
+            // answered here: did the reader actually respond?
+            const responded =
+                dependencyValues.responseHasBeenSubmitted &&
+                !submittedResponsesAreBlank(
+                    dependencyValues.submittedResponses,
+                );
+
+            return {
+                setValue: { creditAchievedForProgress: responded ? 1 : 0 },
+            };
+        },
+    };
+
     stateVariableDefinitions.autoSubmit = {
         returnDependencies: () => ({
             autoSubmit: {
@@ -331,11 +563,12 @@ export function returnStandardAnswerStateVariableDefinition() {
                         (x) => x.substring(0, 17) === "submittedResponse",
                     )
                 ) {
-                    diagnostics.push({
-                        message:
-                            "An award for this answer is based on the answer tag's own submitted response, which will lead to unexpected behavior.",
-                        type: "warning",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0069",
+                        }),
+                    );
                 }
             }
 
@@ -515,14 +748,53 @@ export function returnStandardAnswerStateVariableDefinition() {
                 dependencyType: "stateVariable",
                 variableName: "maxNumAttempts",
             },
+            ancestorSuppressingAnswerSubmitButtons:
+                returnScoredContainerAncestorDependency(
+                    "suppressAnswerSubmitButtons",
+                    "numAttemptsLeft",
+                ),
+            // Used to target the ignored-`maxNumAttempts` warning at the
+            // attribute itself rather than the whole `<answer>`.
+            maxNumAttemptsAttr: {
+                dependencyType: "attributeComponent",
+                attributeName: "maxNumAttempts",
+            },
         }),
-        definition({ dependencyValues }) {
+        definition({ dependencyValues, usedDefault }) {
+            let sendDiagnostics = [];
+
+            let insideSectionWideCheckWork =
+                dependencyValues.ancestorSuppressingAnswerSubmitButtons
+                    ?.stateValues.suppressAnswerSubmitButtons;
+
+            if (!usedDefault.maxNumAttempts && insideSectionWideCheckWork) {
+                sendDiagnostics.push(
+                    codedDiagnostic({
+                        type: "warning",
+                        code: "doenet-w0070",
+                        position: dependencyValues.maxNumAttemptsAttr?.position,
+                    }),
+                );
+            }
+
+            // Inside a section-wide check work, the answer's own
+            // `maxNumAttempts` is ignored: the enclosing container controls the
+            // number of attempts. Report that container's remaining attempts so
+            // the public `numAttemptsLeft` is accurate. This matches how a
+            // `maxNumAttempts` on a nested `sectionWideCheckWork` container is
+            // ignored.
+            const numAttemptsLeft = insideSectionWideCheckWork
+                ? dependencyValues.ancestorSuppressingAnswerSubmitButtons
+                      .stateValues.numAttemptsLeft
+                : Math.max(
+                      0,
+                      dependencyValues.maxNumAttempts -
+                          dependencyValues.numSubmissions,
+                  );
+
             return {
-                setValue: {
-                    numAttemptsLeft:
-                        dependencyValues.maxNumAttempts -
-                        dependencyValues.numSubmissions,
-                },
+                setValue: { numAttemptsLeft },
+                sendDiagnostics,
             };
         },
     };
@@ -630,6 +902,82 @@ export function returnStandardAnswerStateVariableDefinition() {
     return stateVariableDefinitions;
 }
 
+/**
+ * The attribute and state variable for the `credit` of an `<award>` or a
+ * `<choice>`.
+ *
+ * The attribute is stored in `creditPrelim`; the public `credit` is that value
+ * clamped to [0, 1], with a non-finite value counting as 0. So `$aw.credit`
+ * reports the credit the component can actually grant, and every reader of
+ * `credit` gets the capped value.
+ *
+ * @param {object} args
+ * @param {number} args.defaultValue - the credit when the attribute is omitted
+ * @param {string} args.componentDescription - what the credit is granted for,
+ *   completing "Fraction of credit (0 to 1) granted when ..."
+ */
+export function returnCreditAttributeAndStateVariableDefinition({
+    defaultValue,
+    componentDescription,
+}) {
+    const description = `Fraction of credit (0 to 1) granted when ${componentDescription}. A value above 1 counts as 1, and a negative or non-numeric value as 0.`;
+
+    const attribute = {
+        createComponentOfType: "number",
+        createStateVariable: "creditPrelim",
+        defaultValue,
+        attributesForCreatedComponent: { convertBoolean: "true" },
+        description,
+    };
+
+    const stateVariableDefinition = {
+        public: true,
+        shadowingInstructions: {
+            createComponentOfType: "number",
+        },
+        description,
+        returnDependencies: () => ({
+            creditPrelim: {
+                dependencyType: "stateVariable",
+                variableName: "creditPrelim",
+            },
+        }),
+        definition({ dependencyValues }) {
+            const credit = dependencyValues.creditPrelim;
+            return {
+                setValue: {
+                    credit: Number.isFinite(credit)
+                        ? Math.max(0, Math.min(1, credit))
+                        : 0,
+                },
+            };
+        },
+        inverseDefinition({ desiredStateVariableValues }) {
+            // With no `credit` attribute, `creditPrelim` is stored as given,
+            // so convert to a number here: a math value (the default `type`
+            // of `<updateValue>`), a boolean (true is full credit, as with
+            // `credit="true"`) or a text value would otherwise read as 0.
+            let desiredValue = desiredStateVariableValues.credit;
+            if (typeof desiredValue?.evaluate_to_constant === "function") {
+                desiredValue = evaluateToNumber(desiredValue);
+            } else {
+                desiredValue = Number(desiredValue);
+            }
+            return {
+                success: true,
+                instructions: [
+                    {
+                        setDependency: "creditPrelim",
+                        desiredValue,
+                    },
+                ],
+            };
+        },
+    };
+
+    return { attribute, stateVariableDefinition };
+}
+
 export function returnSimplifyExpandOnCompareWarning() {
     const stateVariableDefinitions = {};
 
@@ -662,14 +1010,13 @@ export function returnSimplifyExpandOnCompareWarning() {
                 }
 
                 if (attributesSpecified.length > 0) {
-                    sendDiagnostics.push({
-                        message: `The ${attributesSpecified.join(
-                            " and ",
-                        )} attribute${
-                            attributesSpecified.length > 1 ? "s" : ""
-                        } will have no effect without symbolicEquality set.`,
-                        type: "warning",
-                    });
+                    sendDiagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0071",
+                            args: { attributes: attributesSpecified },
+                        }),
+                    );
                 }
             }
 

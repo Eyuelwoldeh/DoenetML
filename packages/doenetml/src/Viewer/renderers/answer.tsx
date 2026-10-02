@@ -7,10 +7,13 @@ import { AnswerResponseButton } from "./utils/AnswerResponseButton";
 import {
     calculateValidationState,
     createCheckWorkComponent,
+    wantsFullCheckWorkButton,
 } from "./utils/checkWork";
 import { useSubmitActionWithDelay } from "./utils/useSubmitActionWithDelay";
-import { MathJax } from "better-react-mathjax";
+import { DynamicMath } from "./utils/DynamicMath";
 import { DescriptionPopover } from "./utils/Description";
+import { AnswerLabelContext, useRenderedLabel } from "./utils/inputLabel";
+import { useContentT } from "../../utils/i18n";
 
 interface AnswerSVs {
     [key: string]: any;
@@ -24,6 +27,7 @@ interface AnswerSVs {
     haveBlockInputChild: boolean;
     inputChildIndices: any;
     descriptionChildInd: any;
+    labelChildInd: number;
 }
 
 export default React.memo(function Answer(props: UseDoenetRendererProps) {
@@ -38,6 +42,11 @@ export default React.memo(function Answer(props: UseDoenetRendererProps) {
         flags,
         callAction,
     } = useDoenetRenderer<AnswerSVs>(props);
+    const renderedLabel = useRenderedLabel({ SVs, children });
+
+    // The check-work button follows the document's language, not the
+    // reader's — see `useContentT`.
+    const tContent = useContentT();
 
     const { showAnswerResponseButton, answerResponseCounts } =
         useContext(DocContext) || {};
@@ -58,12 +67,15 @@ export default React.memo(function Answer(props: UseDoenetRendererProps) {
 
     let label: React.ReactNode = SVs.label;
     if (SVs.labelHasLatex) {
-        label = (
-            <MathJax hideUntilTypeset={"first"} inline dynamic>
-                {label}
-            </MathJax>
-        );
+        label = <DynamicMath latex={SVs.label} />;
     }
+    if (renderedLabel && SVs.label) {
+        label = renderedLabel;
+    }
+    // The label, when not shown with the check work component, for an input
+    // created from sugar, which takes its label from the answer.
+    let labelForInput: React.ReactNode =
+        SVs.labelChildInd !== -1 ? children[SVs.labelChildInd] : null;
 
     const inputChildrenToRender = SVs.inputChildIndices.map(
         (ind: number) => children[ind],
@@ -103,8 +115,12 @@ export default React.memo(function Answer(props: UseDoenetRendererProps) {
         id,
         validationState,
         submitActionWithPending,
-        SVs.forceFullCheckWorkButton || !SVs.forceSmallCheckWorkButton,
+        // An `<answer>` renders its own button only when it has no input
+        // field to hang one off, so it stands on a line of its own: the full
+        // labelled button is the default.
+        wantsFullCheckWorkButton(SVs, true),
         isPending,
+        tContent,
     );
 
     if (checkWorkComponent) {
@@ -121,6 +137,7 @@ export default React.memo(function Answer(props: UseDoenetRendererProps) {
         }
 
         if (label) {
+            labelForInput = null;
             // if label was not moved via sugar to an input child,
             // then add the label to the check work component
             checkWorkComponent = (
@@ -136,7 +153,7 @@ export default React.memo(function Answer(props: UseDoenetRendererProps) {
                         display: "inline",
                     }}
                 >
-                    <span style={{ marginRight: "4px" }}>{label}</span>
+                    <span style={{ marginInlineEnd: "4px" }}>{label}</span>
                     {checkWorkComponent}
                 </label>
             );
@@ -161,7 +178,9 @@ export default React.memo(function Answer(props: UseDoenetRendererProps) {
                 alignItems: "start",
             }}
         >
-            {inputChildrenToRender}
+            <AnswerLabelContext.Provider value={labelForInput}>
+                {inputChildrenToRender}
+            </AnswerLabelContext.Provider>
             {checkWorkComponent}
             {answerResponseButton}
             {description}

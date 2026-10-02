@@ -302,6 +302,8 @@ export async function deleteComponents({
 
         // delete from cumulativeStateVariableChanges
         delete core.cumulativeStateVariableChanges[component.stateId];
+        core.readerTouchedStateIds.delete(component.stateId);
+        core.definitionSetStateIds.delete(component.stateId);
 
         // don't use recursive form since all children should already be included
         deregisterComponent({ core, component, recursive: false });
@@ -324,9 +326,11 @@ export async function deleteComponents({
 /**
  * Recursively populate `componentsToDelete` with the transitive
  * deletion set rooted at `components`: each component's
- * `allChildren`, attribute components/references, the source of any
- * adapter, and (when `deleteUpstreamDependencies`) shadows, the
- * adapter the component itself produced, and any replacements.
+ * `allChildren`, attribute components/references, any copies created
+ * to resolve reference-path indices (`refResolution.originalPath`),
+ * the source of any adapter, and (when `deleteUpstreamDependencies`)
+ * shadows, the adapter the component itself produced, and any
+ * replacements.
  */
 export function determineComponentsToDelete({
     core,
@@ -365,6 +369,24 @@ export function determineComponentsToDelete({
                 let references = component.attributes[attrName].references;
                 if (references) {
                     componentsToRecurse.push(...references);
+                }
+            }
+        }
+
+        // recurse on components created for reference-path indices,
+        // e.g. the copy resolving `$oldIndex` in `$p[$oldIndex]`. These live
+        // in the component's `refResolution` rather than in its children or
+        // attributes, so they would otherwise leak when the component is
+        // deleted (and their reserved component indices could then collide
+        // with those of a recreated replacement).
+        if (component.refResolution?.originalPath) {
+            for (let pathPart of component.refResolution.originalPath) {
+                for (let indexPiece of pathPart.index) {
+                    for (let valueComp of indexPiece.value) {
+                        if (typeof valueComp === "object") {
+                            componentsToRecurse.push(valueComp);
+                        }
+                    }
                 }
             }
         }

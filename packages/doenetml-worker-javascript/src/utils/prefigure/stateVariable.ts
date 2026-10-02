@@ -1,6 +1,7 @@
 import { createPrefigureXML } from "./graph";
 import { sortDescendantsByOrder } from "./common";
 import type { Descendant, GraphDependencyValues } from "./types";
+import { codedDiagnostic } from "../diagnostics";
 
 interface DescendantDependency {
     dependencyType: "descendant";
@@ -227,6 +228,10 @@ function prefigureBaseDependencies() {
             dependencyType: "stateVariable",
             variableName: "aspectRatio",
         },
+        grid: {
+            dependencyType: "stateVariable",
+            variableName: "grid",
+        },
         displayXAxis: {
             dependencyType: "stateVariable",
             variableName: "displayXAxis",
@@ -258,6 +263,11 @@ function prefigureBaseDependencies() {
         yLabelPosition: {
             dependencyType: "stateVariable",
             variableName: "yLabelPosition",
+        },
+        document: {
+            dependencyType: "ancestor",
+            componentType: "document",
+            variableNames: ["theme"],
         },
     };
 }
@@ -442,8 +452,7 @@ function collectConfiguredDescendants(
         ...GRAPHICAL_DESCENDANT_CONFIGS,
     ]) {
         for (const descendant of (dependencyValues[config.key] as
-            | Descendant[]
-            | undefined) ?? []) {
+            Descendant[] | undefined) ?? []) {
             if (!Number.isFinite(descendant.componentIdx)) {
                 continue;
             }
@@ -524,11 +533,12 @@ function returnGraphPrefigureXMLStateVariableDefinition() {
                     dependencyValues.annotationsChildren &&
                     dependencyValues.annotationsChildren.length > 0
                 ) {
-                    diagnostics.push({
-                        type: "info",
-                        message:
-                            "`<graph>`: annotations will not be rendered when not using the PreFigure renderer.",
-                    });
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "info",
+                            code: "doenet-i0019",
+                        }),
+                    );
                 }
                 return {
                     setValue: { prefigureXML: null },
@@ -576,6 +586,8 @@ function returnGraphPrefigureXMLStateVariableDefinition() {
                 graphComponentIdx: componentIdx,
                 functionToCurveComponentIdx:
                     dependencyValues.functionToCurveComponentIdx ?? {},
+                darkMode:
+                    dependencyValues.document?.stateValues?.theme === "dark",
             });
 
             if (
@@ -587,12 +599,13 @@ function returnGraphPrefigureXMLStateVariableDefinition() {
                         dependencyValues.annotationsChildren.length - 2
                     ];
 
-                diagnostics.push({
-                    type: "info",
-                    message:
-                        "Multiple `<annotations>` children found in `<graph>`; all but the last one are ignored.",
-                    position: secondToLastAnnotationsChild?.position,
-                });
+                diagnostics.push(
+                    codedDiagnostic({
+                        type: "info",
+                        code: "doenet-i0020",
+                        position: secondToLastAnnotationsChild?.position,
+                    }),
+                );
             }
 
             return {

@@ -1,0 +1,124 @@
+import type { StylePalette } from "./types";
+
+/**
+ * Paul Tol's "bright" qualitative palette (https://personal.sron.nl/~pault/),
+ * a well-researched colorblind-friendly scheme.
+ *
+ * Light-mode anchors are the canonical colors wherever they meet Doenet's
+ * contrast thresholds on white (3:1 as a graphic, 4.5:1 as text) and are
+ * darkened chromaticity-preserving where they do not, with further-darkened
+ * text variants where a graphic anchor sits below 4.5:1. Dark mode pins the
+ * canonical colors wherever they clear the thresholds on the dark canvas.
+ * Verified with a Machado-model CVD simulation + CIEDE2000 analysis; marker
+ * shapes and line styles vary across styles so distinctions never rest on
+ * color alone.
+ */
+export const tolBrightPalette: StylePalette = {
+    name: "tolBright",
+    description:
+        "Colorblind-friendly bright blues, reds, greens, and purples from Paul Tol's bright palette, with varied marker shapes and line styles.",
+    styles: {
+        1: {
+            lineColor: "#4477aa",
+            markerColor: "#4477aa",
+            fillColor: "#4477aa",
+            highContrastColor: "#4477aa",
+            lineColorDarkMode: "#4477aa",
+            markerColorDarkMode: "#4477aa",
+            fillColorDarkMode: "#4477aa",
+            lineWidth: 4,
+            markerStyle: "circle",
+        },
+        2: {
+            lineColor: "#ee6677",
+            markerColor: "#ee6677",
+            fillColor: "#ee6677",
+            textColor: "#bf515e",
+            highContrastColor: "#bf515e",
+            lineColorDarkMode: "#ee6677",
+            markerColorDarkMode: "#ee6677",
+            fillColorDarkMode: "#ee6677",
+            textColorDarkMode: "#ee6677",
+            lineWidth: 2,
+            markerStyle: "square",
+        },
+        3: {
+            lineColor: "#228833",
+            markerColor: "#228833",
+            fillColor: "#228833",
+            textColor: "#228833",
+            highContrastColor: "#228833",
+            lineColorDarkMode: "#228833",
+            markerColorDarkMode: "#228833",
+            fillColorDarkMode: "#228833",
+            textColorDarkMode: "#3d8e47",
+            lineWidth: 3,
+            markerStyle: "triangle",
+        },
+        4: {
+            lineColor: "#a29534",
+            markerColor: "#a29534",
+            fillColor: "#a29534",
+            textColor: "#817628",
+            highContrastColor: "#817628",
+            lineColorWord: "olive",
+            markerColorWord: "olive",
+            fillColorWord: "olive",
+            textColorWord: "olive",
+            highContrastColorWord: "olive",
+            lineColorDarkMode: "#ccbb44",
+            markerColorDarkMode: "#ccbb44",
+            fillColorDarkMode: "#ccbb44",
+            textColorDarkMode: "#ccbb44",
+            lineWidth: 2,
+            markerStyle: "diamond",
+        },
+        5: {
+            lineColor: "#4d9db8",
+            markerColor: "#4d9db8",
+            fillColor: "#4d9db8",
+            textColor: "#3c7d94",
+            highContrastColor: "#3c7d94",
+            textColorWord: "cyan",
+            highContrastColorWord: "cyan",
+            lineColorDarkMode: "#66ccee",
+            markerColorDarkMode: "#66ccee",
+            fillColorDarkMode: "#66ccee",
+            textColorDarkMode: "#66ccee",
+            lineColorWordDarkMode: "cyan",
+            markerColorWordDarkMode: "cyan",
+            fillColorWordDarkMode: "cyan",
+            textColorWordDarkMode: "cyan",
+            highContrastColorWordDarkMode: "cyan",
+            lineWidth: 2,
+            markerStyle: "triangleDown",
+        },
+        6: {
+            lineColor: "#aa3377",
+            markerColor: "#aa3377",
+            fillColor: "#aa3377",
+            textColor: "#aa3377",
+            highContrastColor: "#aa3377",
+            lineColorDarkMode: "#aa3377",
+            markerColorDarkMode: "#aa3377",
+            fillColorDarkMode: "#aa3377",
+            textColorDarkMode: "#b5648c",
+            lineWidth: 2,
+            markerStyle: "triangleLeft",
+        },
+        7: {
+            lineColor: "#939393",
+            markerColor: "#939393",
+            fillColor: "#939393",
+            textColor: "#757575",
+            highContrastColor: "#757575",
+            lineColorDarkMode: "#bbbbbb",
+            markerColorDarkMode: "#bbbbbb",
+            fillColorDarkMode: "#bbbbbb",
+            textColorDarkMode: "#bbbbbb",
+            lineWidth: 3,
+            lineStyle: "dashed",
+            markerStyle: "triangleRight",
+        },
+    },
+};

@@ -11,6 +11,137 @@ import {
     returnScoredSectionStateVariableDefinition,
     submitAllAnswers,
 } from "../../utils/scoredSection";
+import {
+    addChildrenToDynamicChild,
+    deleteChildrenFromDynamicChild,
+} from "../../utils/dynamicChildren";
+import {
+    CANVAS_DARK_MODE_COLOR,
+    CANVAS_LIGHT_MODE_COLOR,
+    sectionTitleStateKeys,
+    titleStateKeyFromCredit,
+    shouldEmitSectionTitleColorDiagnostic,
+    addSectionTitleColorContrastDiagnostic,
+    returnSectionTitleStateColorAttributes,
+    returnSectionTitleStateColorStateVariableDefinitions,
+} from "../../utils/sectionTitleColors";
+import { codedDiagnostic } from "../../utils/diagnostics";
+import {
+    contentTranslator,
+    returnContentLocaleDependencies,
+} from "../../utils/contentLocale";
+import { composeTitlePrefix, sectionNameWord } from "../../utils/sectionWords";
+import { returnCascadeStepStateVariableDefinitions } from "../../utils/cascadeStep";
+import {
+    DIVISION_SEQUENCE,
+    LIST_CONTAINER_TYPES,
+    LIST_ITEM_SEQUENCE,
+    returnSequenceNumbersOfChildrenDefinition,
+    sequenceNumberDependencies,
+    sequenceNumberFromParent,
+} from "../../utils/sequenceNumbering";
+import {
+    childRendersSomething,
+    listItemChildVisibilityDependency,
+    listItemNumberAlignmentForLead,
+} from "../../utils/listItemChild";
+
+/**
+ * The one `allChildren` child dependency every section state variable that works
+ * in child *positions* must use: `childIndicesToRender` and `childrenToHide`
+ * (both through `returnSectionChildDependencies()`), `firstVisibleChild`, and
+ * `startsWithIntroduction`.
+ *
+ * It deliberately uses `includeAllChildren` rather than a list of child groups.
+ * `childIndicesToRender` is consumed as positions in `activeChildren` (see
+ * `returnActiveChildrenIndicesToRender`), and `includeAllChildren` is the only
+ * form whose indices are by construction those positions. Enumerating child
+ * groups instead drops whatever is left off the list, shifting every later
+ * position down: rendered children fall off the end of the section, and the
+ * variables that look positions up in this array read the wrong entry or run off
+ * the end of it. Sharing this definition is what keeps one call site from
+ * narrowing it alone. Narrowing `firstVisibleChild`'s to `childGroups:
+ * ["anything"]` runs off the end, and `sectioning.test.ts`'s
+ * hidden-leading-composite case then fails to load its document at all
+ * (`Cannot read properties of undefined (reading 'componentIdx')`).
+ *
+ * `extraFields` is for a variable that needs state values off the children as
+ * well; only `firstVisibleChild` does, for their visibility.
+ */
+function sectionAllChildrenDependency(extraFields = {}) {
+    return {
+        dependencyType: "child",
+        includeAllChildren: true,
+        ...extraFields,
+    };
+}
+
+/**
+ * The `child` dependencies shared by the state variables that split a section's
+ * children into the ones it renders (or hides) and the ones that merely
+ * configure it.
+ *
+ * `configurationChildren` are the children that configure the section — its
+ * styles, its answer feedback, its variants, and its `<setup>` definitions —
+ * rather than render inside it. None of these component types has a
+ * `rendererType`. They keep their slot in `allChildren` so the positions stay
+ * aligned, and `nonConfigurationChildEntries()` filters them back out.
+ *
+ * Neither of these state variables asks a child whether it is hidden, and
+ * neither may: asking reaches the child's `hide` attribute, an author may point
+ * `hide` at another component's `hidden` (`hide="$b.hidden"` is ordinary
+ * DoenetML), and `hidden` reads its parent's `childrenToHide`. `childrenToHide`
+ * would then depend on the value it feeds and the document would not load at all
+ * — see the test in `sectioning.test.ts`. `firstVisibleChild` is the one section
+ * variable that needs a child's visibility, and it keeps that request to itself.
+ */
+function returnSectionChildDependencies() {
+    return {
+        allChildren: sectionAllChildrenDependency(),
+        configurationChildren: {
+            dependencyType: "child",
+            childGroups: [
+                "styleDefinitions",
+                "stylePalettes",
+                "feedbackDefinitions",
+                "setups",
+                "variantControls",
+            ],
+        },
+    };
+}
+
+/**
+ * The `[position, child]` entries of a section's children that are not
+ * configuration children, where `position` is the child's index in
+ * `activeChildren`. Takes the `dependencyValues` produced by
+ * `returnSectionChildDependencies()`.
+ *
+ * Configuration children are neither rendered nor hidden. Leaving them out of
+ * `childIndicesToRender` costs nothing, and shifts nothing: a child with no
+ * `rendererType` is dropped again when the renderer's child list is built, so
+ * it never occupied a position in that list to begin with. Leaving them out of
+ * `childrenToHide` is what keeps a section's styles, feedback, variants, and
+ * `<setup>` definitions usable while its content is hidden: `hidden` is
+ * inherited by every descendant, and a hidden child is dropped from its
+ * parent's `text`, so hiding a `<setup>` used to hollow out the text of what it
+ * defined for as long as the section stayed unrevealed.
+ *
+ * Their positions are still consumed from `allChildren`, so the positions of
+ * the children around them stay aligned with `activeChildren`. String children
+ * have no `componentIdx`, so they are never dropped.
+ */
+function nonConfigurationChildEntries(dependencyValues) {
+    const configurationChildIndices = new Set(
+        dependencyValues.configurationChildren.map(
+            (child) => child.componentIdx,
+        ),
+    );
+
+    return [...dependencyValues.allChildren.entries()].filter(
+        ([, child]) => !configurationChildIndices.has(child.componentIdx),
+    );
+}
 
 export class SectioningComponent extends BlockComponent {
     constructor(args) {
@@ -21,6 +152,8 @@ export class SectioningComponent extends BlockComponent {
             revealSection: this.revealSection.bind(this),
             closeSection: this.closeSection.bind(this),
             recordVisibilityChange: this.recordVisibilityChange.bind(this),
+            addChildren: this.addChildren.bind(this),
+            deleteChildren: this.deleteChildren.bind(this),
         });
     }
 
@@ -32,6 +165,12 @@ export class SectioningComponent extends BlockComponent {
     static includeBlankStringChildren = true;
 
     static createsVariants = true;
+
+    // Whether the author may replace this block's auto-generated word with
+    // `renameTo`. A division that names itself from the catalog does not — see
+    // `SectioningComponentNumberWithSiblings` — while a container that groups
+    // divisions, such as `<problems>`, does.
+    static allowRenameTo = true;
 
     static createAttributesObject() {
         let attributes = super.createAttributesObject();
@@ -101,40 +240,38 @@ export class SectioningComponent extends BlockComponent {
             description: "Whether to render this section's children as a list.",
         };
 
+        attributes.collapsible = {
+            createComponentOfType: "boolean",
+            createStateVariable: "collapsible",
+            defaultValue: false,
+            public: true,
+            forRenderer: true,
+            description: "Whether the section can be collapsed and expanded.",
+        };
+
+        attributes.startOpen = {
+            createComponentOfType: "boolean",
+            createStateVariable: "startOpen",
+            defaultValue: true,
+            description:
+                "Whether the collapsible section starts in the open state.",
+        };
+
         attributes.level = {
             createComponentOfType: "integer",
             description:
                 "The heading level for this section (overrides the default level inferred from nesting).",
         };
 
-        attributes.renameTo = {
-            createComponentOfType: "text",
-            description:
-                'Override the auto-generated section name (e.g. rename "Section" to a custom label).',
-        };
+        if (this.allowRenameTo) {
+            attributes.renameTo = {
+                createComponentOfType: "text",
+                description:
+                    'Override the auto-generated section name (e.g. rename "Section" to a custom label).',
+            };
+        }
 
-        attributes.completedColor = {
-            createComponentOfType: "text",
-            createStateVariable: "completedColor",
-            defaultValue: "var(--lightGreen)",
-            description:
-                "Color used to indicate this section has been completed.",
-        };
-
-        attributes.inProgressColor = {
-            createComponentOfType: "text",
-            createStateVariable: "inProgressColor",
-            defaultValue: "var(--mainGray)",
-            description: "Color used to indicate this section is in progress.",
-        };
-
-        attributes.notStartedColor = {
-            createComponentOfType: "text",
-            createStateVariable: "notStartedColor",
-            defaultValue: "var(--mainGray)",
-            description:
-                "Color used to indicate this section has not been started.",
-        };
+        Object.assign(attributes, returnSectionTitleStateColorAttributes());
 
         return attributes;
     }
@@ -156,6 +293,10 @@ export class SectioningComponent extends BlockComponent {
             {
                 group: "styleDefinitions",
                 componentTypes: ["styleDefinition"],
+            },
+            {
+                group: "stylePalettes",
+                componentTypes: ["stylePalette"],
             },
             {
                 group: "feedbackDefinitions",
@@ -244,8 +385,31 @@ export class SectioningComponent extends BlockComponent {
             },
         };
 
+        // How this section numbers the children that are its list items,
+        // counting through any `<cascade>` among them. (It numbers the
+        // divisions among its children as every block does; see
+        // `BlockComponent` and `utils/sequenceNumbering.js`.)
+        stateVariableDefinitions.listItemNumbersOfChildren =
+            returnSequenceNumbersOfChildrenDefinition(LIST_ITEM_SEQUENCE);
+
+        // The numbering of a container: a sectioning component that shows no
+        // number of its own, such as the wrapper a copy from an external URI
+        // arrives in. It takes none either, so it leaves no gap in
+        // the sequence that numbers figures and tables: a figure that is the
+        // first numbered thing in a document is Figure 1 however many wrappers
+        // enclose it. The enclosing section's enumeration passes through in
+        // place of a number of its own, so that a division written inside such
+        // a wrapper with `includeParentNumber` is prefixed with the number of
+        // the section its author sees around the wrapper. The divisions inside
+        // it are numbered among the divisions beside it (see
+        // `returnSequencePassThroughDefinitions`, which `<externalContent>` and
+        // `<standinForFutureLayoutTag>` add). The exception is a wrapper that a
+        // list-producing parent numbers as one of its items.
+        //
+        // A division that does carry a number overrides this:
+        // `SectioningComponentNumberWithSiblings` numbers among its sibling
+        // divisions, and `UnnumberedSectioningComponent` has no number at all.
         stateVariableDefinitions.enumeration = {
-            stateVariablesDeterminingDependencies: ["isListItem"],
             additionalStateVariablesDefined: [
                 {
                     variableName: "sectionNumber",
@@ -257,46 +421,44 @@ export class SectioningComponent extends BlockComponent {
                     forRenderer: true,
                 },
             ],
-            mustEvaluate: true, // must evaluate to make sure all counters are accounted for
-            returnDependencies: ({ stateValues }) => {
-                let dependencies = {
-                    isListItem: {
-                        dependencyType: "stateVariable",
-                        variableName: "isListItem",
-                    },
-                };
-
-                if (stateValues.isListItem) {
-                    dependencies.countAmongSiblings = {
-                        dependencyType: "countAmongSiblings",
-                        componentType: "_sectioningComponent",
-                        includeInheritedComponentTypes: true,
-                    };
-                } else {
-                    dependencies.sectioningCounter = {
-                        dependencyType: "counter",
-                        counterName: "sectioning",
-                    };
-                }
-
-                return dependencies;
-            },
-            definition({ dependencyValues }) {
+            stateVariablesDeterminingDependencies: ["isListItem"],
+            returnDependencies: ({ stateValues }) => ({
+                isListItem: {
+                    dependencyType: "stateVariable",
+                    variableName: "isListItem",
+                },
+                ...(stateValues.isListItem
+                    ? sequenceNumberDependencies(LIST_ITEM_SEQUENCE)
+                    : {}),
+                sectionAncestor: {
+                    dependencyType: "ancestor",
+                    componentType: "_sectioningComponent",
+                    variableNames: ["enumeration"],
+                },
+            }),
+            definition({ dependencyValues, componentIdx }) {
                 if (dependencyValues.isListItem) {
-                    let sectionNumber = dependencyValues.countAmongSiblings;
-                    let enumeration = [sectionNumber];
-                    return { setValue: { enumeration, sectionNumber } };
-                } else {
-                    let sectionNumber = String(
-                        dependencyValues.sectioningCounter,
-                    );
+                    const listItemNumber = sequenceNumberFromParent({
+                        sequence: LIST_ITEM_SEQUENCE,
+                        dependencyValues,
+                        componentIdx,
+                    });
                     return {
                         setValue: {
-                            enumeration: [sectionNumber],
-                            sectionNumber,
+                            enumeration: [listItemNumber],
+                            sectionNumber: String(listItemNumber),
                         },
                     };
                 }
+
+                return {
+                    setValue: {
+                        enumeration:
+                            dependencyValues.sectionAncestor?.stateValues
+                                .enumeration ?? [],
+                        sectionNumber: null,
+                    },
+                };
             },
         };
 
@@ -307,18 +469,28 @@ export class SectioningComponent extends BlockComponent {
                     attributeName: "renameTo",
                     variableNames: ["value"],
                 },
+                ...returnContentLocaleDependencies(),
             }),
             definition: ({ dependencyValues }) => {
                 if (dependencyValues.renameToAttr) {
+                    // The author named this block themselves. Their word
+                    // passes through in every language.
                     return {
                         setValue: {
                             sectionName:
                                 dependencyValues.renameToAttr.stateValues.value,
                         },
                     };
-                } else {
-                    return { setValue: { sectionName: componentClass.name } };
                 }
+                return {
+                    setValue: {
+                        sectionName: sectionNameWord(
+                            contentTranslator(dependencyValues),
+                            componentClass.componentType,
+                            componentClass.name,
+                        ),
+                    },
+                };
             },
         };
 
@@ -344,41 +516,56 @@ export class SectioningComponent extends BlockComponent {
             },
         };
 
-        stateVariableDefinitions.hideChildren = {
+        Object.assign(
+            stateVariableDefinitions,
+            returnCascadeStepStateVariableDefinitions(),
+        );
+
+        /**
+         * Whether this section would show a `<cascadeMessage>` of its own if the
+         * `<cascade>` holding it back gave it the turn — which, for a section, is
+         * simply whether it has one: a held-back section whose turn it is shows
+         * all of its message children. A nested `<cascade>` answers the same
+         * question differently (`Cascade.js`), because a cascade shows one
+         * message of its own at most and only in a gap between its steps, and so
+         * can have message children and still have nothing to say.
+         *
+         * A `<cascade>` reads this off each of its steps to decide which single
+         * message to show: a step's own message is more specific than one of the
+         * cascade's, so a step that has one takes precedence (see
+         * `sectionToShowCascadeMessage` in `Cascade.js`). It deliberately asks
+         * nothing about visibility — the cascade's answer is what *determines*
+         * this section's message visibility, so reading `hideChildren` or
+         * `childrenToHide` here would close a cycle.
+         *
+         * Unlike the section variables that work in child *positions*, this one
+         * only counts, so it can ask for the `cascadeMessages` child group
+         * directly instead of filtering all of the children.
+         */
+        stateVariableDefinitions.hasCascadeMessageToShow = {
             returnDependencies: () => ({
-                parentChildrenToHideChildren: {
-                    dependencyType: "parentStateVariable",
-                    variableName: "childrenToHideChildren",
+                cascadeMessageChildren: {
+                    dependencyType: "child",
+                    childGroups: ["cascadeMessages"],
                 },
             }),
-            definition({ dependencyValues, componentIdx }) {
-                let hideChildren = Boolean(
-                    dependencyValues.parentChildrenToHideChildren?.includes(
-                        componentIdx,
-                    ),
-                );
-
-                return { setValue: { hideChildren } };
+            definition({ dependencyValues }) {
+                return {
+                    setValue: {
+                        hasCascadeMessageToShow:
+                            dependencyValues.cascadeMessageChildren.length > 0,
+                    },
+                };
             },
         };
 
         stateVariableDefinitions.childIndicesToRender = {
-            additionalStateVariablesDefined: ["firstVisibleChild"],
             returnDependencies: () => ({
                 titleChildren: {
                     dependencyType: "child",
                     childGroups: ["titles"],
                 },
-                allChildren: {
-                    dependencyType: "child",
-                    childGroups: [
-                        "anything",
-                        "variantControls",
-                        "titles",
-                        "setups",
-                        "cascadeMessages",
-                    ],
-                },
+                ...returnSectionChildDependencies(),
                 titleChildName: {
                     dependencyType: "stateVariable",
                     variableName: "titleChildName",
@@ -394,18 +581,14 @@ export class SectioningComponent extends BlockComponent {
             }),
             definition({ dependencyValues, componentInfoObjects }) {
                 const childIndicesToRender = [];
-                // Tracks first non-hidden rendered child (including non-blank strings)
-                // so list-item sections can delegate alignment behavior to that child.
-                let firstVisibleChild = null;
 
                 let allTitleChildNames = dependencyValues.titleChildren.map(
                     (x) => x.componentIdx,
                 );
 
-                for (let [
-                    ind,
-                    child,
-                ] of dependencyValues.allChildren.entries()) {
+                for (let [ind, child] of nonConfigurationChildEntries(
+                    dependencyValues,
+                )) {
                     // If `hideChildren` is set, string children should also be hidden.
                     // However, string children cannot be hidden via the `childrenToHide`
                     // state variable as it is based on component indices.
@@ -417,62 +600,149 @@ export class SectioningComponent extends BlockComponent {
                         continue;
                     }
 
-                    if (dependencyValues.asList) {
-                        // if asList, then only include titleChild, sections, introduction, and conclusion
-                        if (
-                            child.componentIdx ===
-                                dependencyValues.titleChildName ||
-                            componentInfoObjects.isInheritedComponentType({
-                                inheritedComponentType: child.componentType,
-                                baseComponentType: "_sectioningComponent",
-                            }) ||
-                            ["introduction", "conclusion"].includes(
-                                child.componentType,
-                            )
-                        ) {
-                            childIndicesToRender.push(ind);
-                            if (
-                                firstVisibleChild === null &&
-                                !dependencyValues.hideChildren
-                            ) {
-                                firstVisibleChild = child;
-                            }
-                        }
-                    } else if (
-                        typeof child !== "object" ||
-                        !allTitleChildNames.includes(child.componentIdx) ||
-                        child.componentIdx === dependencyValues.titleChildName
-                    ) {
-                        childIndicesToRender.push(ind);
-                        if (
-                            firstVisibleChild === null &&
-                            !dependencyValues.hideChildren &&
-                            (typeof child === "object" || child.trim() !== "")
-                        ) {
-                            firstVisibleChild = child;
-                        }
+                    const renderChild = dependencyValues.asList
+                        ? // if asList, then only include titleChild, sections,
+                          // cascades, pages, introduction, and conclusion. A
+                          // cascade or a page is not a section, but the sections
+                          // it holds are this list's items all the same (it
+                          // passes `asList` down).
+                          child.componentIdx ===
+                              dependencyValues.titleChildName ||
+                          LIST_CONTAINER_TYPES.some((baseComponentType) =>
+                              componentInfoObjects.isInheritedComponentType({
+                                  inheritedComponentType: child.componentType,
+                                  baseComponentType,
+                              }),
+                          ) ||
+                          ["introduction", "conclusion"].includes(
+                              child.componentType,
+                          )
+                        : // otherwise, include everything but the title children
+                          // that lost out to `titleChildName`
+                          typeof child !== "object" ||
+                          !allTitleChildNames.includes(child.componentIdx) ||
+                          child.componentIdx ===
+                              dependencyValues.titleChildName;
+
+                    if (!renderChild) {
+                        continue;
                     }
+
+                    childIndicesToRender.push(ind);
                 }
 
                 return {
-                    setValue: { childIndicesToRender, firstVisibleChild },
+                    setValue: { childIndicesToRender },
                 };
             },
             markStale: () => ({ updateRenderedChildren: true }),
         };
 
+        /**
+         * The child this section lines its number up with and suppresses the top
+         * margin of, or `null` if there is none. A child that draws nothing must
+         * never be picked: doing so strands the child that does draw first, which
+         * then keeps its top margin and never reports the alignment the number is
+         * placed by. Two ways a child fails to be drawn, both checked here:
+         *
+         *   - Its kind renders nothing, or it hid *itself* with `hide` —
+         *     `childRendersSomething()`.
+         *   - This section hides it: `childrenToHide`. In a step an enclosing
+         *     `<cascade>` is holding back, that is every component child but the
+         *     title — and but the `<cascadeMessage>` as well in the one step the
+         *     cascade nominates, since the message's rule is inverted: it is
+         *     shown precisely while its step is the nominated one, and hidden in
+         *     every other section, held back or not. Without this test a leading
+         *     `<cascadeMessage>` would lead an item it is invisible in.
+         *
+         * So the step showing a message is not empty, and that message is its
+         * lead: asking `hideChildren` as well called such a step empty and left
+         * the message leading nothing, keeping the top margin that put it a line
+         * below the item's number (#1680). A held-back step that really shows
+         * nothing — one with no message, or one further down the cascade than the
+         * next — still lands on `null` without asking it: `childrenToHide` holds
+         * its component children and `childIndicesToRender` drops its strings, so
+         * this one follows a `<cascade>` holding a step back, nominating it, or
+         * letting it go all the same.
+         *
+         * A child hidden from *above* — this section, or a container around it —
+         * is a deliberate non-case: nothing in it is on screen to realign, and
+         * the lead it shows once revealed must not depend on having been hidden.
+         * See `listItemChildVisibilityDependency()`.
+         *
+         * `null` also whenever this section does not delegate alignment at all,
+         * which is what the `nonBoxedListItemWithoutTitle` gate buys. Every
+         * consumer requires that flag already — `childrenToRenderInlineForListItem`,
+         * `firstVisibleChildAdjustedForListItem` and `useListItemGridLayout`
+         * directly, `firstChildListItemAlignment` through the second of those — so
+         * the gate changes no output. What it saves is every section that is not a
+         * bare untitled list item — a `<document>`, a `<section>`, a `<problem>`
+         * outside a `<problems>`, a titled, boxed or collapsible one inside it —
+         * asking each of its children for a visibility variable it would never
+         * read. Measured over 120 such sections, six `hide` toggles cost 471 ms
+         * without the gate and 316 ms with it, against 328 ms on `main`.
+         *
+         * Being its own state variable rather than a second output of
+         * `childIndicesToRender` is what makes that gate possible —
+         * `childIndicesToRender` is needed in every section — and it keeps the
+         * visibility request off a variable `childrenToHide` can reach, which is
+         * what would cycle (see `returnSectionChildDependencies()`), and off one
+         * carrying `markStale: updateRenderedChildren`, which would rebuild a
+         * section's whole rendered-child list every time a child's `hide` changed.
+         */
+        stateVariableDefinitions.firstVisibleChild = {
+            stateVariablesDeterminingDependencies: [
+                "nonBoxedListItemWithoutTitle",
+            ],
+            returnDependencies: ({ stateValues }) => {
+                if (!stateValues.nonBoxedListItemWithoutTitle) {
+                    return {};
+                }
+                return {
+                    // Indexed below by the positions in `childIndicesToRender`,
+                    // so it must be the shared definition — see
+                    // `sectionAllChildrenDependency()`.
+                    allChildren: sectionAllChildrenDependency(
+                        listItemChildVisibilityDependency(),
+                    ),
+                    childIndicesToRender: {
+                        dependencyType: "stateVariable",
+                        variableName: "childIndicesToRender",
+                    },
+                    childrenToHide: {
+                        dependencyType: "stateVariable",
+                        variableName: "childrenToHide",
+                    },
+                };
+            },
+            definition({ dependencyValues, componentInfoObjects }) {
+                let firstVisibleChild = null;
+
+                // No `childIndicesToRender` means the gate above returned no
+                // dependencies at all: this section delegates nothing, so it has
+                // no lead.
+                if (dependencyValues.childIndicesToRender) {
+                    for (const ind of dependencyValues.childIndicesToRender) {
+                        const child = dependencyValues.allChildren[ind];
+                        if (
+                            !dependencyValues.childrenToHide.includes(
+                                child.componentIdx,
+                            ) &&
+                            childRendersSomething(child, componentInfoObjects)
+                        ) {
+                            firstVisibleChild = child;
+                            break;
+                        }
+                    }
+                }
+
+                return { setValue: { firstVisibleChild } };
+            },
+        };
+
         stateVariableDefinitions.childrenToHide = {
             returnDependencies: () => ({
-                allChildren: {
-                    dependencyType: "child",
-                    childGroups: [
-                        "anything",
-                        "variantControls",
-                        "titles",
-                        "setups",
-                        "cascadeMessages",
-                    ],
-                },
+                ...returnSectionChildDependencies(),
                 titleChildName: {
                     dependencyType: "stateVariable",
                     variableName: "titleChildName",
@@ -481,26 +751,32 @@ export class SectioningComponent extends BlockComponent {
                     dependencyType: "stateVariable",
                     variableName: "hideChildren",
                 },
+                showCascadeMessage: {
+                    dependencyType: "stateVariable",
+                    variableName: "showCascadeMessage",
+                },
             }),
             definition({ dependencyValues }) {
                 const childrenToHide = [];
 
-                for (let child of dependencyValues.allChildren) {
+                for (let [, child] of nonConfigurationChildEntries(
+                    dependencyValues,
+                )) {
                     if (child.componentType === "cascadeMessage") {
-                        // For <cascadeMessage>, the logic is inverted.
-                        // It is hidden when `hideChildren` is `false`!
-                        if (
-                            !dependencyValues.hideChildren &&
-                            typeof child === "object"
-                        ) {
+                        // For <cascadeMessage>, the logic is inverted: it is
+                        // shown while the rest of the section is hidden. Being
+                        // held back is necessary but not sufficient — only the
+                        // one step the cascade nominates shows its message, so
+                        // that a cascade shows one message at a time.
+                        // (No `typeof child === "object"` test needed: a string
+                        // child has no `componentType`.)
+                        if (!dependencyValues.showCascadeMessage) {
                             childrenToHide.push(child.componentIdx);
                         }
                     } else if (
                         dependencyValues.hideChildren &&
                         typeof child === "object" &&
-                        child.componentIdx !==
-                            dependencyValues.titleChildName &&
-                        child.componentType !== "cascadeMessage"
+                        child.componentIdx !== dependencyValues.titleChildName
                     ) {
                         childrenToHide.push(child.componentIdx);
                     }
@@ -585,9 +861,14 @@ export class SectioningComponent extends BlockComponent {
             }),
             definition({ dependencyValues }) {
                 // Alignment adjustments only apply when the first visible child
-                // is a component object (not plain text).
+                // is a component object (not plain text) — and `typeof null ===
+                // "object"`, so a section with no visible child at all needs the
+                // explicit null test. Nothing on screen depends on it today: the
+                // renderer reads this flag only where `useListItemGridLayout` is
+                // set, which is already false when there is no lead.
                 const firstVisibleChildAdjustedForListItem = Boolean(
                     dependencyValues.nonBoxedListItemWithoutTitle &&
+                    dependencyValues.firstVisibleChild != null &&
                     typeof dependencyValues.firstVisibleChild === "object",
                 );
 
@@ -596,6 +877,36 @@ export class SectioningComponent extends BlockComponent {
                         firstVisibleChildAdjustedForListItem,
                     },
                 };
+            },
+        };
+
+        // Whether the renderer should lay out this list item with the
+        // hanging-number grid (a fixed number column + a content column). This
+        // is what keeps the section number's horizontal position independent of
+        // the content's width/wrapping and of whether the first child is a
+        // string or a component. Unlike `firstVisibleChildAdjustedForListItem`
+        // (which stays component-only because it drives first-child top-margin
+        // suppression), this applies to any non-empty untitled/unboxed list
+        // item, including string-first ones.
+        stateVariableDefinitions.useListItemGridLayout = {
+            forRenderer: true,
+            returnDependencies: () => ({
+                nonBoxedListItemWithoutTitle: {
+                    dependencyType: "stateVariable",
+                    variableName: "nonBoxedListItemWithoutTitle",
+                },
+                firstVisibleChild: {
+                    dependencyType: "stateVariable",
+                    variableName: "firstVisibleChild",
+                },
+            }),
+            definition({ dependencyValues }) {
+                const useListItemGridLayout = Boolean(
+                    dependencyValues.nonBoxedListItemWithoutTitle &&
+                    dependencyValues.firstVisibleChild != null,
+                );
+
+                return { setValue: { useListItemGridLayout } };
             },
         };
 
@@ -623,23 +934,16 @@ export class SectioningComponent extends BlockComponent {
                 return dependencies;
             },
             definition({ dependencyValues }) {
-                // Baseline is a safe fallback if the first child does not expose
-                // an explicit list-item alignment signal.
-                let firstChildListItemAlignment = "none";
-
-                if (dependencyValues.firstVisibleChildAdjustedForListItem) {
-                    const alignmentFromFirstChild =
-                        dependencyValues.firstVisibleChildListItemInlineAlignment;
-
-                    if (
-                        alignmentFromFirstChild === "baseline" ||
-                        alignmentFromFirstChild === "flex-start"
-                    ) {
-                        firstChildListItemAlignment = alignmentFromFirstChild;
-                    } else {
-                        firstChildListItemAlignment = "baseline";
-                    }
-                }
+                // `"none"` when this section lines its number up with no child at
+                // all — it delegates nothing, or nothing of it renders. Otherwise
+                // the shared mapping, so that an `<li>` leading with the same
+                // component places its number the same way.
+                const firstChildListItemAlignment =
+                    dependencyValues.firstVisibleChildAdjustedForListItem
+                        ? listItemNumberAlignmentForLead(
+                              dependencyValues.firstVisibleChildListItemInlineAlignment,
+                          )
+                        : "none";
 
                 return { setValue: { firstChildListItemAlignment } };
             },
@@ -656,16 +960,12 @@ export class SectioningComponent extends BlockComponent {
             ],
             forRenderer: true,
             returnDependencies: () => ({
-                allChildren: {
-                    dependencyType: "child",
-                    childGroups: [
-                        "anything",
-                        "variantControls",
-                        "titles",
-                        "setups",
-                        "cascadeMessages",
-                    ],
-                },
+                // `childIndicesToRender` is looked up in this list below, so it
+                // must be the same complete child list that produced those
+                // positions — see `sectionAllChildrenDependency()`. The
+                // configuration children are already excluded from
+                // `childIndicesToRender`, so they need not be identified here.
+                allChildren: sectionAllChildrenDependency(),
                 asList: {
                     dependencyType: "stateVariable",
                     variableName: "asList",
@@ -758,9 +1058,9 @@ export class SectioningComponent extends BlockComponent {
                     dependencyType: "stateVariable",
                     variableName: "noAutoTitle",
                 },
+                ...returnContentLocaleDependencies(),
             }),
             definition({ dependencyValues }) {
-                let titlePrefix = "";
                 let title = "";
 
                 const haveTitleChild = dependencyValues.titleChild.length > 0;
@@ -778,28 +1078,18 @@ export class SectioningComponent extends BlockComponent {
                         dependencyValues.includeAutoNameIfNoTitle &&
                         !dependencyValues.noAutoTitle);
 
-                if (includeAutoNumber) {
-                    if (includeAutoName) {
-                        titlePrefix = dependencyValues.sectionName + " ";
-                    }
-                    titlePrefix += dependencyValues.sectionNumber;
-                } else {
-                    if (includeAutoName) {
-                        titlePrefix = dependencyValues.sectionName;
-                    }
-                }
+                const titlePrefix = composeTitlePrefix({
+                    t: contentTranslator(dependencyValues),
+                    includeAutoName,
+                    includeAutoNumber,
+                    haveTitleChild,
+                    sectionName: dependencyValues.sectionName,
+                    sectionNumber: dependencyValues.sectionNumber,
+                });
 
                 if (!haveTitleChild) {
                     title = titlePrefix;
                 } else {
-                    if (titlePrefix) {
-                        if (dependencyValues.includeAutoName) {
-                            titlePrefix += ": ";
-                        } else {
-                            titlePrefix += ". ";
-                        }
-                    }
-
                     title =
                         dependencyValues.titleChild[
                             dependencyValues.titleChild.length - 1
@@ -810,77 +1100,123 @@ export class SectioningComponent extends BlockComponent {
             },
         };
 
+        Object.assign(
+            stateVariableDefinitions,
+            returnSectionTitleStateColorStateVariableDefinitions(),
+        );
+
         stateVariableDefinitions.titleColor = {
             // Note: currently title color is used only when boxed or collapsible
+            additionalStateVariablesDefined: [
+                {
+                    variableName: "titleColorDarkMode",
+                    forRenderer: true,
+                },
+            ],
             forRenderer: true,
             returnDependencies: () => ({
-                completedColor: {
+                sectionTitleStateColors: {
                     dependencyType: "stateVariable",
-                    variableName: "completedColor",
+                    variableName: "sectionTitleStateColors",
                 },
-                inProgressColor: {
+                sectionTitleStateColorsDarkMode: {
                     dependencyType: "stateVariable",
-                    variableName: "inProgressColor",
+                    variableName: "sectionTitleStateColorsDarkMode",
                 },
-                notStartedColor: {
+                sectionTitleStateColorSources: {
                     dependencyType: "stateVariable",
-                    variableName: "notStartedColor",
+                    variableName: "sectionTitleStateColorSources",
                 },
-                parentCompletedColor: {
-                    dependencyType: "parentStateVariable",
-                    variableName: "completedColor",
-                },
-                parentInProgressColor: {
-                    dependencyType: "parentStateVariable",
-                    variableName: "inProgressColor",
-                },
-                parentNotStartedColor: {
-                    dependencyType: "parentStateVariable",
-                    variableName: "notStartedColor",
+                sectionTitleStateColorSourcesDarkMode: {
+                    dependencyType: "stateVariable",
+                    variableName: "sectionTitleStateColorSourcesDarkMode",
                 },
                 creditAchieved: {
                     dependencyType: "stateVariable",
                     variableName: "creditAchieved",
                 },
+                creditAchievedForProgress: {
+                    dependencyType: "stateVariable",
+                    variableName: "creditAchievedForProgress",
+                },
+                completedColorRequiresCredit: {
+                    dependencyType: "stateVariable",
+                    variableName: "completedColorRequiresCredit",
+                },
+                boxed: {
+                    dependencyType: "stateVariable",
+                    variableName: "boxed",
+                },
+                collapsible: {
+                    dependencyType: "stateVariable",
+                    variableName: "collapsible",
+                },
             }),
-            definition({ dependencyValues, usedDefault }) {
-                let titleColor = dependencyValues.notStartedColor;
-                if (dependencyValues.creditAchieved === 1) {
-                    if (!usedDefault.completedColor) {
-                        titleColor = dependencyValues.completedColor;
-                    } else if (
-                        typeof dependencyValues.parentCompletedColor ===
-                        "string"
-                    ) {
-                        titleColor = dependencyValues.parentCompletedColor;
-                    } else {
-                        titleColor = dependencyValues.completedColor;
-                    }
-                } else if (dependencyValues.creditAchieved > 0) {
-                    if (!usedDefault.inProgressColor) {
-                        titleColor = dependencyValues.inProgressColor;
-                    } else if (
-                        typeof dependencyValues.parentInProgressColor ===
-                        "string"
-                    ) {
-                        titleColor = dependencyValues.parentInProgressColor;
-                    } else {
-                        titleColor = dependencyValues.inProgressColor;
-                    }
-                } else {
-                    if (!usedDefault.notStartedColor) {
-                        titleColor = dependencyValues.notStartedColor;
-                    } else if (
-                        typeof dependencyValues.parentNotStartedColor ===
-                        "string"
-                    ) {
-                        titleColor = dependencyValues.parentNotStartedColor;
-                    } else {
-                        titleColor = dependencyValues.notStartedColor;
+            definition({ dependencyValues }) {
+                // The two differ only where a `handGraded` answer is involved;
+                // see `completedColorRequiresCredit` above for which is right
+                // when.
+                const titleStateKey = titleStateKeyFromCredit(
+                    dependencyValues.completedColorRequiresCredit
+                        ? dependencyValues.creditAchieved
+                        : dependencyValues.creditAchievedForProgress,
+                );
+                const titleColor =
+                    dependencyValues.sectionTitleStateColors[titleStateKey];
+                const titleColorDarkMode =
+                    dependencyValues.sectionTitleStateColorsDarkMode[
+                        titleStateKey
+                    ];
+
+                const diagnostics = [];
+                if (dependencyValues.boxed || dependencyValues.collapsible) {
+                    for (const stateKey of sectionTitleStateKeys) {
+                        const lightSource =
+                            dependencyValues.sectionTitleStateColorSources[
+                                stateKey
+                            ];
+                        addSectionTitleColorContrastDiagnostic({
+                            diagnostics,
+                            authorSet: shouldEmitSectionTitleColorDiagnostic({
+                                source: lightSource,
+                            }),
+                            colorValue:
+                                dependencyValues.sectionTitleStateColors[
+                                    stateKey
+                                ],
+                            colorName: lightSource?.colorName ?? stateKey,
+                            textColor: "#000000",
+                            canvasColor: CANVAS_LIGHT_MODE_COLOR,
+                        });
+
+                        const darkSource =
+                            dependencyValues
+                                .sectionTitleStateColorSourcesDarkMode[
+                                stateKey
+                            ];
+                        addSectionTitleColorContrastDiagnostic({
+                            diagnostics,
+                            authorSet: shouldEmitSectionTitleColorDiagnostic({
+                                source: darkSource,
+                            }),
+                            colorValue:
+                                dependencyValues
+                                    .sectionTitleStateColorsDarkMode[stateKey],
+                            colorName: darkSource?.colorName ?? stateKey,
+                            textColor: "#ffffff",
+                            canvasColor: CANVAS_DARK_MODE_COLOR,
+                            mode: "dark",
+                        });
                     }
                 }
 
-                return { setValue: { titleColor } };
+                return {
+                    setValue: {
+                        titleColor,
+                        titleColorDarkMode,
+                    },
+                    sendDiagnostics: diagnostics,
+                };
             },
         };
 
@@ -988,14 +1324,6 @@ export class SectioningComponent extends BlockComponent {
             },
         };
 
-        stateVariableDefinitions.collapsible = {
-            forRenderer: true,
-            returnDependencies: () => ({}),
-            definition() {
-                return { setValue: { collapsible: false } };
-            },
-        };
-
         stateVariableDefinitions.open = {
             description:
                 "Whether this section is currently open (for collapsible sections).",
@@ -1006,11 +1334,25 @@ export class SectioningComponent extends BlockComponent {
             forRenderer: true,
             defaultValue: true,
             hasEssential: true,
-            returnDependencies: () => ({}),
-            definition() {
+            returnDependencies: () => ({
+                collapsible: {
+                    dependencyType: "stateVariable",
+                    variableName: "collapsible",
+                },
+                startOpen: {
+                    dependencyType: "stateVariable",
+                    variableName: "startOpen",
+                },
+            }),
+            definition({ dependencyValues }) {
+                // When not collapsible, always open regardless of any stored
+                // essential value (handles collapsible toggling false at runtime).
+                if (!dependencyValues.collapsible) {
+                    return { setValue: { open: true } };
+                }
                 return {
                     useEssentialOrDefaultValue: {
-                        open: true,
+                        open: { defaultValue: dependencyValues.startOpen },
                     },
                 };
             },
@@ -1066,6 +1408,14 @@ export class SectioningComponent extends BlockComponent {
             sourceInformation,
             skipRendererUpdate,
         });
+    }
+
+    async addChildren(args) {
+        return await addChildrenToDynamicChild(this, args);
+    }
+
+    async deleteChildren(args) {
+        return await deleteChildrenFromDynamicChild(this, args);
     }
 
     async revealSection({
@@ -1179,27 +1529,27 @@ export class SectioningComponent extends BlockComponent {
             if (desiredVariant.index !== undefined) {
                 let desiredVariantIndex = Number(desiredVariant.index);
                 if (!Number.isFinite(desiredVariantIndex)) {
-                    core.addDiagnostic({
-                        type: "info",
-                        message:
-                            "Variant index " +
-                            desiredVariant.index +
-                            " must be a number",
-                        position: serializedComponent.position,
-                        sourceDoc: serializedComponent.sourceDoc,
-                    });
+                    core.addDiagnostic(
+                        codedDiagnostic({
+                            type: "info",
+                            code: "doenet-i0010",
+                            args: { index: String(desiredVariant.index) },
+                            position: serializedComponent.position,
+                            sourceDoc: serializedComponent.sourceDoc,
+                        }),
+                    );
                     variantIndex = 1;
                 } else {
                     if (!Number.isInteger(desiredVariantIndex)) {
-                        core.addDiagnostic({
-                            type: "info",
-                            message:
-                                "Variant index " +
-                                desiredVariant.index +
-                                " must be an integer",
-                            position: serializedComponent.position,
-                            sourceDoc: serializedComponent.sourceDoc,
-                        });
+                        core.addDiagnostic(
+                            codedDiagnostic({
+                                type: "info",
+                                code: "doenet-i0011",
+                                args: { index: String(desiredVariant.index) },
+                                position: serializedComponent.position,
+                                sourceDoc: serializedComponent.sourceDoc,
+                            }),
+                        );
                         desiredVariantIndex = Math.round(desiredVariantIndex);
                     }
                     let indexFrom0 = (desiredVariantIndex - 1) % numVariants;
@@ -1330,10 +1680,12 @@ export class SectioningComponent extends BlockComponent {
 export class SectioningComponentNumberWithSiblings extends SectioningComponent {
     static componentType = "_sectioningComponentNumberWithSiblings";
 
+    // A division names itself from the catalog in the document's language, so
+    // its word is not the author's to replace.
+    static allowRenameTo = false;
+
     static createAttributesObject() {
         let attributes = super.createAttributesObject();
-
-        delete attributes.renameTo;
 
         attributes.includeParentNumber = {
             createComponentOfType: "boolean",
@@ -1362,12 +1714,8 @@ export class SectioningComponentNumberWithSiblings extends SectioningComponent {
                     forRenderer: true,
                 },
             ],
-            returnDependencies: () => ({
-                countAmongSiblings: {
-                    dependencyType: "countAmongSiblings",
-                    componentType: "_sectioningComponentNumberWithSiblings",
-                    includeInheritedComponentTypes: true,
-                },
+            stateVariablesDeterminingDependencies: ["isListItem"],
+            returnDependencies: ({ stateValues }) => ({
                 sectionAncestor: {
                     dependencyType: "ancestor",
                     componentType: "_sectioningComponent",
@@ -1381,17 +1729,23 @@ export class SectioningComponentNumberWithSiblings extends SectioningComponent {
                     dependencyType: "stateVariable",
                     variableName: "isListItem",
                 },
-                countAmongSiblingsForListItem: {
-                    dependencyType: "countAmongSiblings",
-                    componentType: "_sectioningComponent",
-                    includeInheritedComponentTypes: true,
-                },
+                // A list item is numbered in the list and a division among
+                // the divisions, never both.
+                ...sequenceNumberDependencies(
+                    stateValues.isListItem
+                        ? LIST_ITEM_SEQUENCE
+                        : DIVISION_SEQUENCE,
+                ),
             }),
-            definition({ dependencyValues }) {
+            definition({ dependencyValues, componentIdx }) {
                 let enumeration = [];
                 if (dependencyValues.isListItem) {
                     enumeration.push(
-                        dependencyValues.countAmongSiblingsForListItem,
+                        sequenceNumberFromParent({
+                            sequence: LIST_ITEM_SEQUENCE,
+                            dependencyValues,
+                            componentIdx,
+                        }),
                     );
                 } else {
                     if (
@@ -1403,7 +1757,13 @@ export class SectioningComponentNumberWithSiblings extends SectioningComponent {
                                 .enumeration,
                         );
                     }
-                    enumeration.push(dependencyValues.countAmongSiblings);
+                    enumeration.push(
+                        sequenceNumberFromParent({
+                            sequence: DIVISION_SEQUENCE,
+                            dependencyValues,
+                            componentIdx,
+                        }),
+                    );
                 }
 
                 return {

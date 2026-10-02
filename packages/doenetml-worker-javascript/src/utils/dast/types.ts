@@ -328,8 +328,36 @@ export type AttributeDefinition<T> = {
      *
      * Each entry is a `{value, description}` pair. The description is
      * surfaced in editor autocomplete and the context-sensitive help panel.
+     *
+     * On a list-typed attribute (e.g. `createComponentOfType: "textList"`),
+     * `validValues` constrains *each item* of the list rather than the whole
+     * value: every item must be one of the listed values. At runtime, items
+     * that aren't allowed are dropped with a diagnostic (see
+     * `validateAttributeValue`); in the schema the attribute is marked as a
+     * list of keywords so the LSP and docs phrase the constraint per-item.
      */
     validValues?: ValidValueEntry[];
+    /**
+     * Values to *offer* an author, without constraining them — the open-ended
+     * counterpart to `validValues`.
+     *
+     * Same `{value, description}` shape, and reaches the same author-facing
+     * surfaces (autocomplete with per-value tooltips, the context-help panel,
+     * the reference docs). What it does not do is validate: the schema entry
+     * gets `autocompleteValues` but no `values`, so the language server raises
+     * no "must be one of" warning and the runtime coerces nothing. The
+     * attribute keeps its own type rather than being surfaced as a `keyword`.
+     *
+     * Use it where a list is genuinely helpful but genuinely incomplete.
+     * `<document lang>` is the case it exists for: the suggestions are the
+     * locales this repository ships catalogs for, while any BCP-47 tag is
+     * legitimate — an unlisted one still reaches the rendered `lang` attribute,
+     * and a deployment can supply a catalog of its own that no build-time list
+     * could know about.
+     *
+     * Mutually exclusive with `validValues`; declaring both is a build error.
+     */
+    suggestedValues?: ValidValueEntry[];
     /** When the value of this attribute is changed, call the action `triggerActionOnChange`. */
     triggerActionOnChange?: string;
     /** One-sentence description of the attribute, surfaced in editor help and docs. */

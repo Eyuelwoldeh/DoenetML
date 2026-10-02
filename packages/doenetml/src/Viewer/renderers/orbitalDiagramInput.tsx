@@ -4,6 +4,14 @@ import useDoenetRenderer, {
 } from "../useDoenetRenderer";
 import { Button } from "@doenet/ui-components";
 import { useRecordVisibilityChanges } from "../../utils/visibility";
+import { useT } from "../../utils/i18n";
+import { ltrIslandProps } from "./utils/direction";
+
+const ORBITAL_ARROW_STYLE: React.CSSProperties = {
+    fill: "none",
+    stroke: "var(--canvasText)",
+    strokeWidth: "2",
+};
 
 interface OrbitalRowData {
     orbitalText: string;
@@ -19,13 +27,13 @@ interface OrbitalDiagramInputSVs {
     selectedBoxIndex: number;
 }
 
-// border: ${(props) => (props.alert ? '2px solid #C1292E' : '2px solid black')};
-
 export default React.memo(function orbitalDiagramInput(
     props: UseDoenetRendererProps,
 ) {
     let { id, SVs, actions, callAction } =
         useDoenetRenderer<OrbitalDiagramInputSVs>(props);
+
+    const t = useT();
 
     let selectedRowIndex0 = SVs.selectedRowIndex - 1;
     let selectedBoxIndex0 = SVs.selectedBoxIndex - 1;
@@ -136,7 +144,7 @@ export default React.memo(function orbitalDiagramInput(
                                 action: actions.addRow,
                             });
                         }}
-                        value="Add Row"
+                        value={t("orbital-add-row", undefined, "Add Row")}
                     />
                 </div>
                 <div style={{ display: "inline-block", marginRight: "4px" }}>
@@ -147,7 +155,7 @@ export default React.memo(function orbitalDiagramInput(
                                 action: actions.removeRow,
                             });
                         }}
-                        value="Remove Row"
+                        value={t("orbital-remove-row", undefined, "Remove Row")}
                     />
                 </div>
 
@@ -162,7 +170,7 @@ export default React.memo(function orbitalDiagramInput(
                                 action: actions.addBox,
                             });
                         }}
-                        value="Add Box"
+                        value={t("orbital-add-box", undefined, "Add Box")}
                     />
                 </div>
 
@@ -177,7 +185,7 @@ export default React.memo(function orbitalDiagramInput(
                                 action: actions.removeBox,
                             });
                         }}
-                        value="Remove Box"
+                        value={t("orbital-remove-box", undefined, "Remove Box")}
                     />
                 </div>
 
@@ -192,7 +200,11 @@ export default React.memo(function orbitalDiagramInput(
                                 action: actions.addUpArrow,
                             });
                         }}
-                        value="Add Up Arrow"
+                        value={t(
+                            "orbital-add-up-arrow",
+                            undefined,
+                            "Add Up Arrow",
+                        )}
                     />
                 </div>
 
@@ -207,7 +219,11 @@ export default React.memo(function orbitalDiagramInput(
                                 action: actions.addDownArrow,
                             });
                         }}
-                        value="Add Down Arrow"
+                        value={t(
+                            "orbital-add-down-arrow",
+                            undefined,
+                            "Add Down Arrow",
+                        )}
                     />
                 </div>
 
@@ -222,14 +238,22 @@ export default React.memo(function orbitalDiagramInput(
                                 action: actions.removeArrow,
                             });
                         }}
-                        value="Remove Arrow"
+                        value={t(
+                            "orbital-remove-arrow",
+                            undefined,
+                            "Remove Arrow",
+                        )}
                     />
                 </div>
             </div>
         );
     }
     return (
-        <div ref={ref} id={id}>
+        // Notation, like the read-only diagram it edits: the subshell label
+        // sits to the left of its boxes and the boxes fill left to right in
+        // every language, and the rows are plain inline flow that would
+        // otherwise reverse wholesale under `rtl`.
+        <div ref={ref} id={id} {...ltrIslandProps()}>
             {controls}
             {rowsJSX}
         </div>
@@ -263,15 +287,14 @@ const OrbitalRow = React.memo(function OrbitalRow({
         width: "800px",
         height: "44px",
         display: "flex",
-        backgroundColor: "#E2E2E2",
+        backgroundColor: "var(--revealButtonSurface)",
         marginTop: "2px",
         marginBottom: "2px",
         padding: "2px",
-        border: "white solid 2px",
+        border: "var(--canvas) solid 2px",
     };
     if (selectedRow === rowNumber) {
-        rowStyle["border"] = "#1A5A99 solid 2px";
-        // rowStyle['backgroundColor'] = '#1A5A99';
+        rowStyle["border"] = "var(--mainBlue) solid 2px";
     }
 
     //Make boxes
@@ -333,6 +356,9 @@ const OrbitalText = React.memo(function OrbitalText({
     orbitalText: string;
     name: string;
 }) {
+    const t = useT();
+    const row = rowNumber + 1;
+
     return (
         <input
             id={`OrbitalText${rowNumber}${name}`}
@@ -344,7 +370,7 @@ const OrbitalText = React.memo(function OrbitalText({
                 let newValue = e.target.value;
                 updateRowText(newValue);
             }}
-            aria-label={`Label for row ${rowNumber + 1}`}
+            aria-label={t("orbital-row-label", { row }, `Label for row ${row}`)}
         />
     );
 });
@@ -369,7 +395,7 @@ const OrbitalBox = React.memo(function OrbitalBox({
             key={`orbitalboxfirstUp${boxNum}`}
             id={`firstUp${boxNum}`}
             points="6,14 12,6 18,14 12,6 12,35"
-            style={{ fill: "none", stroke: "black", strokeWidth: "2" }}
+            style={ORBITAL_ARROW_STYLE}
         />
     );
     const firstDown = (
@@ -377,7 +403,7 @@ const OrbitalBox = React.memo(function OrbitalBox({
             key={`orbitalboxfirstDown${boxNum}`}
             id={`firstDown${boxNum}`}
             points="6,26 12,34 18,26 12,34 12,5"
-            style={{ fill: "none", stroke: "black", strokeWidth: "2" }}
+            style={ORBITAL_ARROW_STYLE}
         />
     );
     const secondUp = (
@@ -385,7 +411,7 @@ const OrbitalBox = React.memo(function OrbitalBox({
             key={`orbitalboxsecondUp${boxNum}`}
             id={`secondUp${boxNum}`}
             points="22,14 28,6 34,14 28,6 28,35"
-            style={{ fill: "none", stroke: "black", strokeWidth: "2" }}
+            style={ORBITAL_ARROW_STYLE}
         />
     );
     const secondDown = (
@@ -393,7 +419,7 @@ const OrbitalBox = React.memo(function OrbitalBox({
             key={`orbitalboxsecondDown${boxNum}`}
             id={`secondDown${boxNum}`}
             points="22,26 28,34 34,26 28,34 28,5"
-            style={{ fill: "none", stroke: "black", strokeWidth: "2" }}
+            style={ORBITAL_ARROW_STYLE}
         />
     );
     const thirdUp = (
@@ -401,7 +427,7 @@ const OrbitalBox = React.memo(function OrbitalBox({
             key={`orbitalboxthirdUp${boxNum}`}
             id={`thirdUp${boxNum}`}
             points="38,14 44,6 50,14 44,6 44,35"
-            style={{ fill: "none", stroke: "black", strokeWidth: "2" }}
+            style={ORBITAL_ARROW_STYLE}
         />
     );
     const thirdDown = (
@@ -409,7 +435,7 @@ const OrbitalBox = React.memo(function OrbitalBox({
             key={`orbitalboxthirdDown${boxNum}`}
             id={`thirdDown${boxNum}`}
             points="38,26 44,34 50,26 44,34 44,5"
-            style={{ fill: "none", stroke: "black", strokeWidth: "2" }}
+            style={ORBITAL_ARROW_STYLE}
         />
     );
 
@@ -440,10 +466,10 @@ const OrbitalBox = React.memo(function OrbitalBox({
         boxWidth = 56;
     }
 
-    let boxColor = "black";
+    let boxColor = "var(--canvasText)";
     let strokeWidth = "2px";
     if (isSelected) {
-        boxColor = "#1A5A99";
+        boxColor = "var(--mainBlue)";
         strokeWidth = "6px";
     }
 
@@ -468,7 +494,7 @@ const OrbitalBox = React.memo(function OrbitalBox({
                 width={boxWidth}
                 height="40"
                 style={{
-                    fill: "white",
+                    fill: "var(--canvas)",
                     stroke: boxColor,
                     strokeWidth: strokeWidth,
                     fillOpacity: "1",

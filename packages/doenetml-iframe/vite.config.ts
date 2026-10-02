@@ -3,7 +3,11 @@ import dts from "vite-plugin-dts";
 import { viteStaticCopy } from "vite-plugin-static-copy";
 import { createPackageJsonTransformer } from "../../scripts/transform-package-json";
 import { version } from "./package.json";
-import { suppressLogPlugin } from "../../scripts/vite-plugins";
+import {
+    ignoreWireitCachesPlugin,
+    suppressLogPlugin,
+} from "../../scripts/vite-plugins";
+import { serveDoenetmlWorkerPlugin } from "./serve-doenetml-worker-plugin";
 
 /**
  * Bare package names that will not be bundled into the library. These become
@@ -27,6 +31,7 @@ function isExternal(id: string): boolean {
 export default defineConfig({
     base: "./",
     plugins: [
+        ignoreWireitCachesPlugin(),
         dts({ rollupTypes: true }),
         viteStaticCopy({
             targets: [
@@ -42,6 +47,10 @@ export default defineConfig({
             ],
         }),
         suppressLogPlugin(),
+        // Dev-server only: serve the externalized core worker at
+        // `/doenetml-worker/*` so the Blob-URL dev harness in
+        // `src/test-main.tsx` can load it (see the plugin for details).
+        serveDoenetmlWorkerPlugin(),
     ],
     build: {
         minify: false,
@@ -60,6 +69,11 @@ export default defineConfig({
     },
     define: {
         "process.env.NODE_ENV": '"production"',
+        // Load-bearing, not just informational: this is `latestDoenetmlVersion`
+        // in `src/index.tsx`, the `@doenet/standalone@<version>` a host that
+        // names no version gets. A build carrying a stale one would point every
+        // embed at the previous release's bundle. Hence `package.json` among
+        // this build's declared wireit inputs — a version bump has to rebuild.
         IFRAME_VERSION: JSON.stringify(version),
     },
 });

@@ -69,6 +69,504 @@ latest editor buffer:
 > surface a completion signal or error to the caller — failures from the
 > underlying ComLink RPC are logged to the console rather than thrown.
 
+## DoenetViewer
+
+### Prop changes and iframe reloads
+
+Changing props on a mounted `<DoenetViewer>` does **not** reload the iframe:
+the wrapper pushes changes into the already-loaded iframe as messages, and
+the inner viewer applies them with the same semantics as the in-process
+`<DoenetViewer>` from `@doenet/doenetml`. In particular:
+
+| Prop change                                                                | Effect                                                                                                      |
+| -------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `render`, `darkMode`, `styleOverrides`, `uiLocale`, `flags`, `answerResponseCounts`, callbacks, … | applied live, no reload (flipping `render` false→true starts the document in the already-loaded realm)       |
+| `doenetML`, `activityId`, `docId`, `attemptNumber`, `requestedVariantIndex`, `documentLocale`, `localeResources` | the document's core re-initializes **inside the same iframe realm** — the multi-MB bundle is not re-parsed   |
+| `initialState`, `forceDisable` and the other `force*` props, `userId`       | read at (re-)initialization only, exactly like the in-process viewer — change `docId`/`attemptNumber` or remount via `key=` to apply |
+| `standaloneUrl`, `cssUrl`, `doenetmlVersion` (or a version change detected in `doenetML`), `useSharedCoreWorker` | a different bundle/realm is required, so the iframe reloads                                                   |
+
+To force a full remount (fresh realm and worker), change the component's
+React `key`.
+
+### Reader style overrides (`styleOverrides`)
+
+Hosts can let a **reader** remap what each style number looks like — for
+example a color-blind user picking colors they can better tell apart — by
+passing a `styleOverrides` prop (type `ReaderStyleOverrides`, re-exported
+from this package). Overrides win over everything authored in the document
+(`<styleDefinition>` and `<stylePalette>` alike) and update live when the
+prop changes:
+
+```tsx
+<DoenetViewer
+    doenetML={source}
+    styleOverrides={{
+        styles: {
+            1: { lineColor: "#0072b2", markerColor: "#0072b2" },
+            2: { lineColor: "#d55e00", lineWidth: 6 },
+        },
+    }}
+/>
+```
+
+A reader can also switch the whole document to one of the built-in style
+palettes by name (case-insensitive) — for example `grayscale`, four grays
+laddered for maximum luminance separation, for readers who distinguish
+styles by lightness alone, or `okabeIto` for common color vision
+deficiencies:
+
+```tsx
+<DoenetViewer
+    doenetML={source}
+    styleOverrides={{ palette: "grayscale" }}
+/>
+```
+
+A reader-selected palette replaces the document's base styles everywhere:
+authored `<stylePalette>` selections and `<styleDefinition>` customizations
+are discarded (they were tuned against different colors), style numbers
+beyond the reader palette's size wrap around onto it, and any `styles`
+overrides apply on top of the reader's palette. Unregistered palette names
+are ignored, so offer readers the palette list as fixed choices.
+
+Every style-definition key is overridable except the `*Word` descriptors:
+all colors (including the `*DarkMode` variants), opacities, `lineWidth`,
+`lineStyle`, `markerStyle`, `markerSize`, `markerFilled`, and the fill
+settings. Human-readable color/style words are always re-derived from the
+overridden values, so text style descriptions (e.g. "the blue line") stay
+truthful, and a missing dark-mode color is derived from the reader's
+light-mode color with the same accessibility-aware derivation authored
+styles get. Pass `null` (or omit the prop) to clear all overrides.
+
+The same prop exists on `<DoenetEditor>`, where it applies to the editor's
+rendered preview (the code pane and context help keep showing the authored
+values).
+
+#### Listing the available palettes (`onStylePalettes`)
+
+To build a palette picker, a host needs the palettes that the DoenetML
+version **inside the iframe** supports — this wrapper and the standalone
+bundle ship separately, and a host may pin an older `doenetmlVersion`. The
+`onStylePalettes` callback fires once the bundle has booted, with that
+bundle's palettes:
+
+```tsx
+const [palettes, setPalettes] = React.useState(null);
+
+<DoenetViewer
+    doenetML={source}
+    onStylePalettes={setPalettes}
+    styleOverrides={chosenPalette ? { palette: chosenPalette } : undefined}
+/>;
+```
+
+Each entry is `{ name, description, styles }`, where `styles` is keyed by
+style number (contiguous from 1, always at least four) and each style is a
+fully-resolved style definition — `lineColor`, `markerColor`, `fillColor`,
+`textColor` and their `*DarkMode` variants for swatches in either theme,
+plus `lineWidth`, `lineStyle`, `markerStyle`, and `markerSize` for the
+non-color distinctions palettes also carry, and the `*Word` fields (e.g.
+`"blue"`) for labelling swatches accessibly. Feed a chosen `name` back in as
+the `palette` field of `styleOverrides`.
+
+The callback receives `null` when the booted bundle predates palette
+discovery, which is the host's cue to hide the picker. The same prop exists
+on `<DoenetEditor>`.
+
+Function props (callbacks) are forwarded across the iframe boundary via
+Comlink proxies and always follow the latest identity passed — parents may
+pass inline arrow functions freely; identity churn does not re-render the
+inner viewer.
+
+> **Note:** in-place updates require a standalone bundle ≥ 0.7.18. When an
+> older version is pinned (via `doenetmlVersion` or detected from the
+> document's `xmlns`), the wrapper falls back to its historical behavior of
+> reloading the iframe on any prop change.
+
+### Language (`documentLocale` / `uiLocale`)
+
+Doenet keeps the language of the **content** apart from the language of the
+**chrome** (buttons, panel headers, diagnostics), because they genuinely
+differ — a Spanish-speaking student may work a French physics problem.
+
+- `documentLocale` — BCP-47 tag for the content's language (`"es"`,
+  `"es-MX"`). Defaults to `"en"`. An authored `<document lang="es-MX">`
+  overrides it: the author knows what language they wrote in, the host only
+  knows what it would prefer to receive.
+- `uiLocale` — BCP-47 tag for the chrome's language. Defaults to following
+  `documentLocale`, so a fully Spanish activity is fully Spanish without the
+  host configuring anything.
+- `localeResources` — FTL message catalogs keyed by locale, for a host with
+  translations of its own. English is bundled and every translation is fetched
+  from the `locales/` directory published beside the standalone bundle the
+  iframe loads, so a host needing only the shipped translations passes nothing;
+  a catalog supplied here wins over either, which is how a deployment corrects
+  a translation.
+
+The rendered container always carries a `lang` attribute naming the language
+the content was rendered in, so screen readers pronounce it with the right
+voice and rules. When neither route declares one, that language is `en` — the
+language the core computes such an activity's prose in.
+
+Passing `null` (or dropping the prop) clears any of the three, exactly as with
+`styleOverrides`.
+
+### Windowed mounting (`mountPolicy`)
+
+Pages that embed many viewers (assignment pages, textbook chapters) pay
+memory for every mounted iframe, whether or not the student can see it. The
+opt-in `mountPolicy` prop bounds this: windowed viewers **start as
+placeholders and only create their iframe when they come near the viewport**
+(an off-screen viewer never boots at all), simultaneous boots are capped
+page-wide, and at most `maxLiveViewers` viewers stay live. Off-screen
+viewers beyond the budget are **parked** — their state is flushed (via the
+`SPLICE.flushState` machinery) and their iframe is replaced by a placeholder
+of the same height, so the page layout doesn't shift. Scrolling a parked
+viewer back near the viewport restores it, seeded with the flushed state:
+typed work survives the round trip with no user interaction.
+
+```tsx
+<DoenetViewer
+    doenetML={doenetML}
+    flags={{ allowSaveState: true }}
+    mountPolicy={{ mode: "windowed", maxLiveViewers: 3 }}
+/>
+```
+
+- `maxLiveViewers` (default 3) — page-wide budget, shared by every windowed
+  viewer (the smallest value wins when viewers disagree). The budget is
+  soft: currently-visible viewers are never parked, even over budget.
+- `visibleMargin` (default `"1000px"`) — how far outside the viewport a
+  viewer still counts as visible (the `IntersectionObserver` rootMargin).
+- `parkDelayMs` (default 2000) — how long a viewer must stay off-screen
+  before it may be parked (debounce against scroll flicker).
+- `flushTimeoutMs` (default 5000) — how long to wait for the pre-park state
+  flush to be acknowledged before parking anyway.
+- `maxConcurrentBoots` (default 2) — page-wide cap on how many windowed
+  viewers may be booting their iframe realm at once (each boot parses the
+  multi-MB standalone bundle and starts a core worker). Additional viewers
+  wait for a slot, visible-first — this removes the initialization stampede
+  when a page with many activities loads.
+
+**Parking requires a persistence path** so no student work can be lost:
+either `flags.allowSaveState` (the wrapper snapshots the flushed
+`reportScoreAndState` and seeds `initialState` on restore) or
+`flags.allowLocalState` (IndexedDB restores on reboot). Windowed viewers
+with neither flag still mount lazily but, once booted, always stay live
+(a console warning — once per page — points this out). Hosts that consume
+reports through the `reportScoreAndStateCallback` prop are fully supported:
+the wrapper captures the flushed report for its park snapshot before
+forwarding it to the callback.
+
+Parking also requires a standalone bundle new enough to acknowledge the
+flush (v0.7.21+). A viewer pinned to an older `doenetmlVersion` mounts
+lazily and obeys the boot cap, but is never parked. A host-specified
+`standaloneUrl` is assumed modern (hosts shipping a custom URL control both
+sides — note a `-dev.N` prerelease *version string* compares as its base
+release, so dev-channel hosts should pin `standaloneUrl` rather than
+`doenetmlVersion`).
+
+#### `keepLive`: prefetching hosts
+
+A windowed viewer inside a hidden (`display:none`) or far-off-screen
+container never intersects the viewport, so it would stay parked forever.
+A host that knows the viewer is about to be shown — e.g. a paginator
+prefetching the pages adjacent to the current one — sets the dynamic
+`keepLive` prop to treat it as visible: it boots eagerly (still subject to
+`maxConcurrentBoots`, visible-first) and is never parked while the hint is
+set. Clear the hint and the viewer becomes an ordinary windowed citizen
+again (parked when off-screen and over budget).
+
+```tsx
+<DoenetViewer
+    doenetML={doenetML}
+    flags={{ allowSaveState: true }}
+    mountPolicy={{ mode: "windowed", maxLiveViewers: 3 }}
+    keepLive={Math.abs(itemIndex - currentIndex) <= 1}
+/>
+```
+
+Notes:
+
+- Eviction is least-recently-visible first.
+- A boot slot is released when the viewer's document initializes *or* when
+  its core cannot be started at all, so a failed activity does not hold a
+  slot until the wrapper's 90 s boot watchdog expires.
+- While parked, a viewer emits no reports (its state was flushed at park
+  time). A host `SPLICE.flushState` broadcast is answered by the wrapper on
+  the parked viewer's behalf, so pre-navigation flush round-trips don't
+  hang.
+- When `requestedVariantIndex` is not specified, windowed viewers pin a
+  random variant once per mount so a restore cannot reroll the document.
+- Restoring pays a fresh iframe boot (bundle evaluation + core boot, ~1–2 s
+  warm). Pair with `useSharedCoreWorker` to make both live and restored
+  viewers cheaper.
+- `mountPolicy` is read at mount; changing it afterwards is not supported.
+
+### Host message protocol (SPLICE)
+
+The viewer exchanges JSON messages with the host page via `postMessage`.
+Viewer → host messages arrive on **your window** (the iframe posts to
+`window.parent`, which is your page). Host → viewer requests are posted on
+**your own window** too — the wrapper forwards these subjects into the
+iframe: `SPLICE.getState.response`, `SPLICE.requestSolutionView.response`,
+`SPLICE.submitAllAnswers`, and `SPLICE.flushState`. On a page with several
+viewers, every viewer receives a forwarded request; correlate responses by
+`activity_id`/`doc_id`/`message_id`.
+
+The messages are documented in the subsections below:
+
+| Subject                                                    | Direction     | Purpose                                        |
+| ---------------------------------------------------------- | ------------- | ---------------------------------------------- |
+| `SPLICE.reportScoreAndState`                                | viewer → host | periodic score/state saves                     |
+| `SPLICE.getState` / `.response`                             | viewer ⇄ host | load saved state at boot                       |
+| `SPLICE.flushState` / `.response`                           | host ⇄ viewer | on-demand state flush (lossless unmount)       |
+| `SPLICE.submitAllAnswers` / `.response`                     | host ⇄ viewer | submit every answer in the document            |
+| `SPLICE.requestSolutionView` / `.response`                  | viewer ⇄ host | permission gate for viewing solutions          |
+| `SPLICE.sendEvent`                                          | viewer → host | analytics/event stream                         |
+
+### Saving and restoring state (lossless unmount)
+
+The viewer reports the student's serialized document state to the host as
+they work: it posts `SPLICE.reportScoreAndState` messages to the host
+window (the wrapper's iframe posts to `window.parent`, which is your page):
+
+```js
+window.addEventListener("message", (e) => {
+    if (e.data?.subject === "SPLICE.reportScoreAndState") {
+        // e.data.state — serialized document state (opaque; store as-is)
+        // e.data.score, e.data.activity_id, e.data.doc_id
+    }
+});
+```
+
+To restore, remount the viewer with the saved state:
+
+```tsx
+<DoenetViewer
+    doenetML={doenetML}
+    flags={{ allowLoadState: true }}
+    initialState={savedState}
+/>
+```
+
+Each payload records the saved-state format it was written in, so that state
+an upgraded viewer cannot read is discarded rather than applied to components
+it no longer denotes. When that happens the document opens fresh and the
+student is told beside it that their work was saved by an earlier version of
+Doenet; nothing on the host side changes, and the credit already recorded
+for the student is unaffected, because score is reported separately from the
+state. The fresh attempt goes on reporting its own score as usual. Keeping the payload opaque — stored and returned
+exactly as received — is what carries that format marker back.
+
+**The gap — and `SPLICE.flushState`.** Reports are throttled (one per 60
+seconds per viewer), so at any moment the student may have committed work
+that no report has delivered yet. A host that unmounts a viewer based on
+save events alone silently loses that work. Before unmounting, request a
+flush — post on your own window; the wrapper forwards it into the iframe:
+
+```js
+window.postMessage(
+    { subject: "SPLICE.flushState", message_id: "my-id-123" },
+    "*",
+);
+```
+
+The flush settles in-flight updates and pushes any pending state out through
+the **normal `SPLICE.reportScoreAndState` message** (which reaches your page
+as shown above) — so a host that already persists those reports saves the
+just-flushed state with no extra code. (No report is emitted when nothing is
+pending, or when state saving is disabled — there is then nothing to lose.)
+The viewer then replies with a stateless acknowledgement (again on your
+window):
+
+```js
+{
+    subject: "SPLICE.flushState.response",
+    message_id: "my-id-123",   // echoed from the request
+    activity_id, doc_id,       // to correlate on multi-viewer pages
+    success: true,
+    hadState: true,            // false ⇒ nothing beyond initialization
+}
+```
+
+The acknowledgement is the completion signal: once it arrives, every saved
+`reportScoreAndState` is current, so unmounting loses nothing — remounting
+later with `initialState: <the last saved state>` (and
+`flags: { allowLoadState: true }`) restores the document exactly, including
+work an earlier report never delivered. `hadState: false` means the viewer
+held no state beyond what it was initialized with (e.g. its core has not
+booted yet) — equally safe to unmount.
+
+> **Note:** Wrap the round-trip in a retry/timeout — the viewer's listener
+> registers on mount, so a request posted moments after mounting can land
+> before anyone is listening, and flushing is idempotent so re-posting is
+> safe. Every viewer on the page receives a broadcast request and responds
+> (correlate by `activity_id`/`doc_id`/`message_id`).
+
+#### The page going away flushes on its own
+
+A host need not send `flushState` for an ordinary departure. The viewer
+flushes whatever the throttle is holding back when the page hides — on
+`pagehide` and on a `visibilitychange` to `hidden` — so closing the tab,
+typing a new URL, following an external link, or backgrounding a tab on a
+phone no longer strands up to a minute of work. The flushed work arrives on
+your window as an ordinary `SPLICE.reportScoreAndState` message, so a host
+that already persists those saves it with no extra code. Nothing is torn
+down on the way, so a page that comes back — a re-foregrounded tab, a
+back/forward-cache restore — carries on with its state already saved.
+
+> **Important:** for this to survive a real unload, your listener has to
+> persist **synchronously**. The report is handed over by dispatching the
+> message event directly rather than posting it, because a document being
+> unloaded is destroyed before a posted message is ever delivered — but a
+> listener that defers its own write (a `fetch`, a `setTimeout`, an `await`)
+> is destroyed just the same. Write from the listener itself, with
+> `navigator.sendBeacon` or a synchronous store such as `localStorage`.
+>
+> The `reportScoreAndStateCallback` prop does not get this guarantee here:
+> the viewer runs inside the iframe, so calling your callback crosses the
+> frame boundary as a posted message, which an unloading page will not
+> deliver. Listen for `SPLICE.reportScoreAndState` on your window if
+> surviving an unload matters. (Everything else — routine reports, and
+> flushes you requested yourself — reaches the callback as before.)
+
+### Loading saved state at boot (`SPLICE.getState`)
+
+With `flags: { allowLoadState: true }` and no `initialState` prop, the
+viewer asks the host for saved state when it boots:
+
+```js
+{
+    subject: "SPLICE.getState",
+    message_id,
+    cid,                 // content id of the DoenetML source
+    domain_id: "Doenet",
+    activity_id, doc_id, attempt_number, user_id,
+}
+```
+
+The viewer does not block on a reply — it boots fresh immediately and
+**reboots seeded with the state** if a response arrives. If you have saved
+state for this document (an object previously received from
+`reportScoreAndState`, whose `cid` matches the request),
+respond:
+
+```js
+{ subject: "SPLICE.getState.response", message_id, state }
+```
+
+Quote the `message_id`: a response carrying state is only read by the viewer
+whose request it names. Replies reach every viewer in the window, and `cid`
+cannot tell two of them apart — it hashes the DoenetML text alone, so a
+second attempt at the same document, or that document opened twice on a
+page, carries the identical `cid`. An unaddressed answer would be restored
+by all of them.
+
+If there is no saved state, no response is needed. To surface a load
+failure to the student instead, respond with
+`{ subject: "SPLICE.getState.response", error: { code, message } }`,
+either quoting the request's `message_id` or leaving it out — an error is
+the one reply the viewer will take unaddressed, since the worst it costs is
+a notice the next usable answer clears. Prefer quoting it even so: an
+unaddressed error is taken by whichever request is open when it lands, on
+every viewer on the page, including one a rebuild opened after the error was
+sent. A reply quoting a *different* id is ignored, since that id belongs to
+some other request.
+
+The `message` is shown to the student **beside** the document, not in place
+of it: the request stays open until an answer carries usable state, so an
+error can land long after the document is on screen and being worked in, and
+what it reports is that the document started without the student's saved
+work rather than that there is no document. If no core could be started
+either, the viewer says so on its failure pane and adds this message beneath
+it, so the two are not mutually erasing.
+
+Two kinds of error reach the student's screen as nothing at all, and both are
+logged to the console instead:
+
+- An error carrying no string `message`. The viewer has no text of its own
+  worth showing a student here, so send the text you want them to read.
+- An error whose `code` is `unsupported_subject`, `unauthorized`,
+  `wrong_origin` or `bad_request`. Those are an LTI platform's postMessage
+  vocabulary for a message it will not act on, not a host's load failure:
+  Canvas answers *any* message on *any* of its pages, so a Doenet activity
+  embedded in one gets `unsupported_subject` back for every `SPLICE` message
+  it sends. The other three refuse a subject the platform does recognize,
+  and are reserved alongside it. They all mean the page is not a host, which
+  is the same to the viewer as no answer at all. Do not report a genuine
+  load failure with one of these codes — any other code, or none at all,
+  reaches the student as long as it comes with a `message`.
+
+A request has a single answer: the **first** response carrying state this
+viewer can restore from is the one it reboots from, and every response after
+that — errors included — is ignored. A response with no state, state for a
+different `cid`, or state written in a saved-state format this version cannot
+read does not count as that answer, so a listener with nothing usable cannot
+shut out one still in flight. Answer once, out of durable
+storage: a host that replies from an in-memory cache first and from storage
+afterwards keeps the cache's answer.
+
+Passing `initialState` yourself (or `initialState: null` for "start
+fresh") skips this request entirely.
+
+### Submitting all answers (`SPLICE.submitAllAnswers`)
+
+Post `{ subject: "SPLICE.submitAllAnswers" }` and the viewer submits every
+answer in the document, then responds with
+`{ subject: "SPLICE.submitAllAnswers.response", success }`.
+
+> **Note:** this pair carries no correlation id — on a page with several
+> viewers, every viewer submits and responds, and the responses cannot be
+> told apart. Use it with a single viewer per page (its original use case)
+> or treat it as fire-and-forget.
+
+### Solution-view permission (`SPLICE.requestSolutionView`)
+
+With `flags: { solutionDisplayMode: "buttonRequirePermission" }`, a student
+opening a solution triggers a permission request to the host:
+
+```js
+{
+    subject: "SPLICE.requestSolutionView",
+    message_id,
+    activity_id, doc_id, attempt_number, user_id,
+    component_idx,       // the solution component being opened
+}
+```
+
+Decide and respond — note the response echoes the id as **`messageId`**
+(camelCase), unlike the snake_case request field:
+
+```js
+{ subject: "SPLICE.requestSolutionView.response", messageId, allowView: true }
+```
+
+The solution is revealed only when `allowView` is `true`.
+
+### Event stream (`SPLICE.sendEvent`)
+
+With `flags: { allowSaveEvents: true }`, the viewer emits an analytics
+event for student interactions (answers submitted, solutions viewed,
+content experienced, …). Fire-and-forget; no response is expected:
+
+```js
+{
+    subject: "SPLICE.sendEvent",
+    message_id,
+    name,                // mirrors data.verb
+    data: {
+        activityId, cid, docId, attemptNumber, variantIndex,
+        verb,            // e.g. "answered", "experienced"
+        object,          // JSON string: the component acted on
+        result,          // JSON string: the outcome
+        context,         // JSON string: additional context
+        timestamp,       // "YYYY-MM-DD HH:MM:SS"
+        version,
+    },
+}
+```
+
 ## Development
 
 Source code in `src/iframe-viewer-index.ts` and `src/iframe-editor-index.ts`

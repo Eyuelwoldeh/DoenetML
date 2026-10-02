@@ -19,6 +19,16 @@ import {
     stripLatex,
 } from "../utils/math";
 import { returnMathVectorMatrixStateVariableDefinitions } from "../utils/mathVectorMatrixStateVariables";
+import {
+    buildInputResponseEvent,
+    defineSubmitAnswerExternalAction,
+} from "../utils/input";
+import {
+    moveGraphicalObjectWithAnchorAction,
+    returnAnchorAttributes,
+    returnAnchorStateVariableDefinition,
+} from "../utils/graphical";
+import { codedDiagnostic } from "../utils/diagnostics";
 
 export default class MathInput extends Input {
     constructor(args) {
@@ -27,25 +37,10 @@ export default class MathInput extends Input {
         Object.assign(this.actions, {
             updateRawValue: this.updateRawValue.bind(this),
             updateValue: this.updateValue.bind(this),
+            moveInput: this.moveInput.bind(this),
         });
 
-        this.externalActions = {};
-
-        //Complex because the stateValues isn't defined until later
-        Object.defineProperty(this.externalActions, "submitAnswer", {
-            enumerable: true,
-            get: async function () {
-                let answerAncestor = await this.stateValues.answerAncestor;
-                if (answerAncestor !== null) {
-                    return {
-                        componentIdx: answerAncestor.componentIdx,
-                        actionName: "submitAnswer",
-                    };
-                } else {
-                    return;
-                }
-            }.bind(this),
-        });
+        defineSubmitAnswerExternalAction(this);
     }
     static componentType = "mathInput";
 
@@ -54,6 +49,13 @@ export default class MathInput extends Input {
     };
     static variableForImplicitProp = "value";
     static variableForIndexAsProp = "vector";
+
+    // A math input changes width *and* height on nearly every keystroke, while
+    // the caret is inside it, so unlike the other inputs its box cannot simply
+    // be measured once. The renderer re-typesets around it as it grows, keeping
+    // the field itself in place, which is what makes it drawable inside an
+    // expression.
+    static canBeEmbeddedInMath = true;
 
     static processWhenJustUpdatedForNewComponent = true;
 
@@ -197,6 +199,17 @@ export default class MathInput extends Input {
             description: "Whether to display a preview of the parsed math.",
         };
 
+        attributes.draggable = {
+            description: "Whether the input can be dragged on a graph.",
+            createComponentOfType: "boolean",
+            createStateVariable: "draggable",
+            defaultValue: true,
+            public: true,
+            forRenderer: true,
+        };
+
+        Object.assign(attributes, returnAnchorAttributes());
+
         return attributes;
     }
 
@@ -248,6 +261,11 @@ export default class MathInput extends Input {
             }),
         );
 
+        Object.assign(
+            stateVariableDefinitions,
+            returnAnchorStateVariableDefinition(),
+        );
+
         stateVariableDefinitions.effectiveFunctionNames = {
             // Resolved MathQuill `autoOperatorNames` list — defaults
             // merged with `additionalFunctionNames` / `removedFunctionNames`
@@ -296,12 +314,21 @@ export default class MathInput extends Input {
                     });
                 const result = { setValue: { effectiveFunctionNames: names } };
                 const diagnostics = [];
-                const buildMessage = (attr, list) =>
-                    `<mathInput>: ignored invalid function name(s) in ` +
-                    `${attr}: ${list.map((n) => `'${n}'`).join(", ")}. ` +
-                    `Each name's display segment must be at least 2 ` +
-                    `characters (letters or dashes); an optional ` +
-                    "`|<mathspeak alternative>` suffix may follow.";
+                const invalidNames = (attr, list, position) =>
+                    codedDiagnostic({
+                        type: "warning",
+                        code: "doenet-w0082",
+                        args: {
+                            attribute: attr,
+                            // Quoted here and joined at format time, so the
+                            // separator follows the reader's language.
+                            names: {
+                                list: list.map((n) => `'${n}'`),
+                                type: "unit",
+                            },
+                        },
+                        position,
+                    });
                 // One diagnostic per *contributing* attribute. The
                 // helper already enforces precedence (`reset` wins
                 // over `additional`), so when both are authored only
@@ -309,27 +336,23 @@ export default class MathInput extends Input {
                 // inactive in that case, and warning about its
                 // contents would be misleading.
                 if (droppedFromAdditional.length > 0) {
-                    diagnostics.push({
-                        type: "warning",
-                        message: buildMessage(
+                    diagnostics.push(
+                        invalidNames(
                             "additionalFunctionNames",
                             droppedFromAdditional,
-                        ),
-                        position:
                             dependencyValues.additionalFunctionNamesAttr
                                 ?.position,
-                    });
+                        ),
+                    );
                 }
                 if (droppedFromReset.length > 0) {
-                    diagnostics.push({
-                        type: "warning",
-                        message: buildMessage(
+                    diagnostics.push(
+                        invalidNames(
                             "resetFunctionNames",
                             droppedFromReset,
-                        ),
-                        position:
                             dependencyValues.resetFunctionNamesAttr?.position,
-                    });
+                        ),
+                    );
                 }
                 if (diagnostics.length > 0)
                     result.sendDiagnostics = diagnostics;
@@ -370,7 +393,7 @@ export default class MathInput extends Input {
 
         stateVariableDefinitions.valueChanged = {
             description:
-                "Whether the saved value has been changed from its initial state.",
+                "Whether the value has been changed from its initial state.",
             public: true,
             hasEssential: true,
             defaultValue: false,
@@ -397,7 +420,7 @@ export default class MathInput extends Input {
         };
 
         stateVariableDefinitions.value = {
-            description: "The most recently saved math value.",
+            description: "The math value of the input.",
             public: true,
             shadowingInstructions: {
                 createComponentOfType: "math",
@@ -543,7 +566,7 @@ export default class MathInput extends Input {
 
         stateVariableDefinitions.immediateValueChanged = {
             description:
-                "Whether the live value differs from its initial state.",
+                "Whether the value, including in-progress edits, has been changed from its initial state.",
             public: true,
             hasEssential: true,
             defaultValue: false,
@@ -573,7 +596,7 @@ export default class MathInput extends Input {
 
         stateVariableDefinitions.immediateValue = {
             description:
-                "The current math value being entered (live, before saving).",
+                "The math value reflecting the user's in-progress edits.",
             public: true,
             shadowingInstructions: {
                 createComponentOfType: "math",
@@ -768,6 +791,71 @@ export default class MathInput extends Input {
                         text: dependencyValues.valueForDisplay.toString(params),
                     },
                 };
+            },
+        };
+
+        stateVariableDefinitions.latex = {
+            description: "The current input rendered as a LaTeX string.",
+            public: true,
+            shadowingInstructions: {
+                createComponentOfType: "latex",
+            },
+            returnDependencies: () => ({
+                valueForDisplay: {
+                    dependencyType: "stateVariable",
+                    variableName: "valueForDisplay",
+                },
+                padZeros: {
+                    dependencyType: "stateVariable",
+                    variableName: "padZeros",
+                },
+                displayDigits: {
+                    dependencyType: "stateVariable",
+                    variableName: "displayDigits",
+                },
+                displayDecimals: {
+                    dependencyType: "stateVariable",
+                    variableName: "displayDecimals",
+                },
+                avoidScientificNotation: {
+                    dependencyType: "stateVariable",
+                    variableName: "avoidScientificNotation",
+                },
+                hideNaN: {
+                    dependencyType: "stateVariable",
+                    variableName: "hideNaN",
+                },
+            }),
+            definition: function ({ dependencyValues }) {
+                // The committed value, formatted as `.text` is, so this is
+                // stable while the reader types; `rawRendererValue` is the
+                // editing buffer and changes with every keystroke.
+                //
+                // An input written inside an `<m>` contributes this to the
+                // expression's `latex`, which is why an empty one has to come
+                // back empty rather than as a placeholder: `<m>` puts its own
+                // blank there, the one a PreTeXt export turns into a `<fillin>`.
+                let params = buildNumberDisplayParameters({
+                    padZeros: dependencyValues.padZeros,
+                    displayDigits: dependencyValues.displayDigits,
+                    displayDecimals: dependencyValues.displayDecimals,
+                    avoidScientificNotation:
+                        dependencyValues.avoidScientificNotation,
+                });
+                params.showBlanks = false;
+
+                let latex;
+                try {
+                    latex = dependencyValues.valueForDisplay.toLatex(params);
+                } catch (e) {
+                    latex = "";
+                }
+
+                if (dependencyValues.hideNaN && latex === "NaN") {
+                    latex = "";
+                }
+
+                return { setValue: { latex } };
             },
         };
 
@@ -1136,9 +1224,6 @@ export default class MathInput extends Input {
         skipRendererUpdate = false,
     }) {
         if (!(await this.stateValues.disabled)) {
-            // we set transient to true so that each keystroke does not
-            // add a row to the database
-
             return await this.coreFunctions.performUpdate({
                 updateInstructions: [
                     {
@@ -1152,7 +1237,16 @@ export default class MathInput extends Input {
                         componentIdx: this.componentIdx,
                     },
                 ],
-                transient: true,
+                // Deliberately NOT `transient`. That flag means "a step of a
+                // continuous interaction, whose downstream may settle after the
+                // interaction rather than during it", and a keystroke's downstream has
+                // to keep up: an `<answer>`'s check-work button must drop "Incorrect"
+                // on the first character of a correction, and a `$input.immediateValue`
+                // echo would otherwise freeze for the length of a typing burst.
+                // A keystroke was marked transient until Doenet/DoenetML#1990, to keep
+                // it out of the saved state -- but that guard (`if (!transient)` around
+                // saving) went away in Doenet/DoenetML#1035 and saving is debounced
+                // instead, so the flag had no reader left here.
                 actionId,
                 sourceInformation,
                 skipRendererUpdate,
@@ -1217,24 +1311,12 @@ export default class MathInput extends Input {
                     valueOfStateVariable: "valueForDisplay",
                 });
 
-                let event = {
+                let event = await buildInputResponseEvent({
+                    component: this,
                     verb: "answered",
-                    object: {
-                        componentIdx: this.componentIdx,
-                        componentType: this.componentType,
-                    },
-                    result: {
-                        response: immediateValue,
-                        responseText: immediateValue.toString(),
-                    },
-                };
-
-                let answerAncestor = await this.stateValues.answerAncestor;
-                if (answerAncestor) {
-                    event.context = {
-                        answerAncestor: answerAncestor.componentIdx,
-                    };
-                }
+                    response: immediateValue,
+                    responseText: immediateValue.toString(),
+                });
 
                 // TODO: we should should skip renderer updates here,
                 // but doing so triggers a bug in the resolveItem logic
@@ -1257,6 +1339,29 @@ export default class MathInput extends Input {
                 });
             }
         }
+    }
+
+    async moveInput({
+        x,
+        y,
+        z,
+        transient,
+        actionId,
+        sourceInformation = {},
+        skipRendererUpdate = false,
+    }) {
+        return await moveGraphicalObjectWithAnchorAction({
+            x,
+            y,
+            z,
+            transient,
+            actionId,
+            sourceInformation,
+            skipRendererUpdate,
+            componentIdx: this.componentIdx,
+            componentType: this.componentType,
+            coreFunctions: this.coreFunctions,
+        });
     }
 
     static adapters = [
