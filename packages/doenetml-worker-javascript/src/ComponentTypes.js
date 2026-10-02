@@ -101,6 +101,8 @@ import AsList from "./components/AsList";
 import Spreadsheet from "./components/Spreadsheet";
 import DiscreteSimulationResultList from "./components/DiscreteSimulationResultList";
 import DiscreteSimulationResultPolyline from "./components/DiscreteSimulationResultPolyline";
+import ArrayComponent from "./components/ArrayComponent";
+import * as Parsons from "./components/Parsons";
 import Cell from "./components/Cell";
 import Row from "./components/Row";
 import Column from "./components/Column";
@@ -282,6 +284,8 @@ const componentTypeArray = [
     Spreadsheet,
     DiscreteSimulationResultList,
     DiscreteSimulationResultPolyline,
+    ArrayComponent,
+    ...Object.values(Parsons),
     Cell,
     Row,
     Column,

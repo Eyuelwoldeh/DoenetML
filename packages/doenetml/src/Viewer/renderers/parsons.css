@@ -1,0 +1,91 @@
+.parsons {
+    display: grid;
+    /* two equal columns that stack on narrow screens; rows stretch so the
+       solution column is always as tall as the full block list */
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 16px;
+    margin: 12px 0;
+}
+
+.parsons-column-wrapper {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.parsons-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 160px;
+    padding: 8px 8px 48px 8px; /* extra bottom room to drop below the last block */
+    border: 2px dashed var(--mainGray);
+    border-radius: var(--mainBorderRadius);
+    background: var(--canvas);
+}
+
+.parsons-column.parsons-solution {
+    border-style: solid;
+    /* faint indent guides, one per indent level */
+    background-image: repeating-linear-gradient(
+        to right,
+        transparent 0 calc(var(--parsons-indent) - 1px),
+        var(--mainGray) calc(var(--parsons-indent) - 1px) var(--parsons-indent)
+    );
+    background-size: calc(
+            var(--parsons-indent) * (var(--parsons-max-indent) + 1)
+        )
+        100%;
+    background-repeat: no-repeat;
+    background-position: 8px 0;
+}
+
+.parsons-column.parsons-no-indent {
+    background-image: none;
+}
+
+.parsons-heading {
+    font-weight: bold;
+    margin: 0 0 4px 0;
+}
+
+.parsons-block {
+    box-sizing: border-box;
+    padding: 6px 10px;
+    border: 1px solid var(--mainBorder);
+    border-radius: var(--mainBorderRadius);
+    background: var(--canvas);
+    color: var(--canvasText);
+    font-family: monospace;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+}
+
+.parsons-block:focus-visible {
+    outline: 3px solid var(--mainBlue);
+    outline-offset: 2px;
+}
+
+.parsons-block.parsons-dragging {
+    cursor: grabbing;
+    position: relative;
+    z-index: 10;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    opacity: 0.9;
+}
+
+.parsons.parsons-disabled .parsons-block {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.parsons-sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+}

@@ -1,0 +1,599 @@
+import Input from "./abstract/Input";
+import InlineComponent from "./abstract/InlineComponent";
+import Group from "./Group";
+import { textFromChildren } from "../utils/text";
+import { isParsonsSolutionCorrect } from "../utils/parsons";
+
+/**
+ * <parsons> — a Parsons problem: students drag shuffled <block>s into a
+ * solution column in the correct order (and, optionally, indentation).
+ *
+ * Blocks are authored in the correct order. `distractor` blocks must be left
+ * out. Blocks wrapped in <anyOrder> must be contiguous but may be in any order.
+ * Indentation is graded only if some block specifies `indent`.
+ *
+ * Grade with `<answer><award><when>$p.correct</when></award></answer>`.
+ */
+export default class Parsons extends Input {
+    constructor(args) {
+        super(args);
+
+        Object.assign(this.actions, {
+            updateArrangement: this.updateArrangement.bind(this),
+        });
+
+        this.externalActions = {};
+
+        Object.defineProperty(this.externalActions, "submitAnswer", {
+            enumerable: true,
+            get: async function () {
+                let answerAncestor = await this.stateValues.answerAncestor;
+                if (answerAncestor !== null) {
+                    return {
+                        componentIdx: answerAncestor.componentIdx,
+                        actionName: "submitAnswer",
+                    };
+                } else {
+                    return;
+                }
+            }.bind(this),
+        });
+    }
+
+    static componentType = "parsons";
+
+    static componentDocs = {
+        summary:
+            "A Parsons problem: arrange shuffled blocks into the correct order and indentation.",
+    };
+
+    static createAttributesObject() {
+        let attributes = super.createAttributesObject();
+
+        attributes.shuffle = {
+            createComponentOfType: "boolean",
+            createStateVariable: "shuffle",
+            defaultValue: true,
+            public: true,
+            description:
+                "Whether to shuffle the blocks in the starting column (seeded by the document variant).",
+        };
+        attributes.maxIndent = {
+            createComponentOfType: "integer",
+            description:
+                "Maximum indentation level a student can apply. Defaults to one more than the largest authored indent.",
+        };
+
+        return attributes;
+    }
+
+    static returnChildGroups() {
+        return [
+            {
+                group: "labels",
+                componentTypes: ["label"],
+            },
+            {
+                group: "descriptions",
+                componentTypes: ["description"],
+            },
+            {
+                group: "shortDescriptions",
+                componentTypes: ["shortDescription"],
+            },
+            {
+                group: "blocks",
+                componentTypes: ["block"],
+            },
+        ];
+    }
+
+    static returnStateVariableDefinitions() {
+        let stateVariableDefinitions = super.returnStateVariableDefinitions();
+
+        stateVariableDefinitions.blocks = {
+            forRenderer: true,
+            returnDependencies: () => ({
+                blockChildren: {
+                    dependencyType: "child",
+                    childGroups: ["blocks"],
+                    variableNames: [
+                        "indent",
+                        "indentSpecified",
+                        "distractor",
+                        "anyOrderGroup",
+                        "text",
+                    ],
+                },
+            }),
+            definition({ dependencyValues }) {
+                const blocks = dependencyValues.blockChildren.map((child) => ({
+                    indent: child.stateValues.indent,
+                    indentSpecified: child.stateValues.indentSpecified,
+                    distractor: child.stateValues.distractor,
+                    group: child.stateValues.anyOrderGroup,
+                    text: child.stateValues.text,
+                }));
+                return { setValue: { blocks } };
+            },
+        };
+
+        stateVariableDefinitions.numBlocks = {
+            public: true,
+            shadowingInstructions: {
+                createComponentOfType: "integer",
+            },
+            description: "The number of blocks, including distractors.",
+            returnDependencies: () => ({
+                blocks: {
+                    dependencyType: "stateVariable",
+                    variableName: "blocks",
+                },
+            }),
+            definition({ dependencyValues }) {
+                return {
+                    setValue: { numBlocks: dependencyValues.blocks.length },
+                };
+            },
+        };
+
+        stateVariableDefinitions.indentationGraded = {
+            public: true,
+            forRenderer: true,
+            shadowingInstructions: {
+                createComponentOfType: "boolean",
+            },
+            description:
+                "Whether indentation is part of the answer (true if any block specifies `indent`).",
+            returnDependencies: () => ({
+                blocks: {
+                    dependencyType: "stateVariable",
+                    variableName: "blocks",
+                },
+            }),
+            definition({ dependencyValues }) {
+                return {
+                    setValue: {
+                        indentationGraded: dependencyValues.blocks.some(
+                            (block) => block.indentSpecified,
+                        ),
+                    },
+                };
+            },
+        };
+
+        stateVariableDefinitions.maxIndent = {
+            public: true,
+            forRenderer: true,
+            shadowingInstructions: {
+                createComponentOfType: "integer",
+            },
+            description: "Maximum indentation level a student can apply.",
+            returnDependencies: () => ({
+                maxIndentAttr: {
+                    dependencyType: "attributeComponent",
+                    attributeName: "maxIndent",
+                    variableNames: ["value"],
+                },
+                blocks: {
+                    dependencyType: "stateVariable",
+                    variableName: "blocks",
+                },
+            }),
+            definition({ dependencyValues }) {
+                let maxIndent;
+                if (dependencyValues.maxIndentAttr !== null) {
+                    maxIndent =
+                        dependencyValues.maxIndentAttr.stateValues.value;
+                } else {
+                    maxIndent =
+                        Math.max(
+                            0,
+                            ...dependencyValues.blocks.map((b) => b.indent),
+                        ) + 1;
+                }
+                if (!Number.isInteger(maxIndent) || maxIndent < 1) {
+                    maxIndent = 1;
+                }
+                return { setValue: { maxIndent } };
+            },
+        };
+
+        // 1-based block indices in the order they start in the source column.
+        stateVariableDefinitions.initialOrder = {
+            forRenderer: true,
+            returnDependencies: ({ sharedParameters }) => ({
+                numBlocks: {
+                    dependencyType: "stateVariable",
+                    variableName: "numBlocks",
+                },
+                shuffle: {
+                    dependencyType: "stateVariable",
+                    variableName: "shuffle",
+                },
+                variantSeed: {
+                    dependencyType: "value",
+                    value: sharedParameters.variantSeed,
+                },
+                rngClass: {
+                    dependencyType: "value",
+                    value: sharedParameters.rngClass,
+                    doNotProxy: true,
+                },
+            }),
+            definition({ dependencyValues }) {
+                const n = dependencyValues.numBlocks;
+                const initialOrder = [...Array(n).keys()].map((x) => x + 1);
+
+                if (dependencyValues.shuffle) {
+                    const rng = dependencyValues.rngClass(
+                        dependencyValues.variantSeed + "po",
+                    );
+                    // Fisher–Yates, as in choiceInput
+                    for (let i = n - 1; i > 0; i--) {
+                        const j = Math.floor(rng() * (i + 1));
+                        [initialOrder[i], initialOrder[j]] = [
+                            initialOrder[j],
+                            initialOrder[i],
+                        ];
+                    }
+                }
+
+                return { setValue: { initialOrder } };
+            },
+        };
+
+        // Essential (saved) arrangement of the solution column.
+        for (const varName of ["allSolutionOrder", "allSolutionIndents"]) {
+            stateVariableDefinitions[varName] = {
+                forRenderer: true,
+                hasEssential: true,
+                defaultValue: [],
+                returnDependencies: () => ({}),
+                definition: () => ({
+                    useEssentialOrDefaultValue: { [varName]: true },
+                }),
+                inverseDefinition({ desiredStateVariableValues }) {
+                    return {
+                        success: true,
+                        instructions: [
+                            {
+                                setEssentialValue: varName,
+                                value: desiredStateVariableValues[varName],
+                            },
+                        ],
+                    };
+                },
+            };
+        }
+
+        // Public, read-only array views of the arrangement.
+        for (const [varName, allVarName, prefix, description] of [
+            [
+                "solutionOrder",
+                "allSolutionOrder",
+                "solutionIndex",
+                "Indices (1-based) of the blocks in the solution column, top to bottom.",
+            ],
+            [
+                "solutionIndents",
+                "allSolutionIndents",
+                "solutionIndent",
+                "Indentation of each block in the solution column, top to bottom.",
+            ],
+        ]) {
+            stateVariableDefinitions[varName] = {
+                description,
+                public: true,
+                shadowingInstructions: {
+                    createComponentOfType: "number",
+                },
+                isArray: true,
+                entryPrefixes: [prefix],
+                returnArraySizeDependencies: () => ({
+                    [allVarName]: {
+                        dependencyType: "stateVariable",
+                        variableName: allVarName,
+                    },
+                }),
+                returnArraySize({ dependencyValues }) {
+                    return [dependencyValues[allVarName].length];
+                },
+                returnArrayDependenciesByKey() {
+                    return {
+                        globalDependencies: {
+                            [allVarName]: {
+                                dependencyType: "stateVariable",
+                                variableName: allVarName,
+                            },
+                        },
+                    };
+                },
+                arrayDefinitionByKey({ globalDependencyValues }) {
+                    let values = {};
+                    for (let key in globalDependencyValues[allVarName]) {
+                        values[key] = globalDependencyValues[allVarName][key];
+                    }
+                    return { setValue: { [varName]: values } };
+                },
+            };
+        }
+
+        stateVariableDefinitions.correct = {
+            public: true,
+            shadowingInstructions: {
+                createComponentOfType: "boolean",
+            },
+            description:
+                "Whether the solution column holds exactly the correct blocks, in a correct order and indentation.",
+            returnDependencies: () => ({
+                blocks: {
+                    dependencyType: "stateVariable",
+                    variableName: "blocks",
+                },
+                allSolutionOrder: {
+                    dependencyType: "stateVariable",
+                    variableName: "allSolutionOrder",
+                },
+                allSolutionIndents: {
+                    dependencyType: "stateVariable",
+                    variableName: "allSolutionIndents",
+                },
+                indentationGraded: {
+                    dependencyType: "stateVariable",
+                    variableName: "indentationGraded",
+                },
+            }),
+            definition({ dependencyValues }) {
+                return {
+                    setValue: {
+                        correct: isParsonsSolutionCorrect({
+                            blocks: dependencyValues.blocks,
+                            order: dependencyValues.allSolutionOrder,
+                            indents: dependencyValues.allSolutionIndents,
+                            indentationGraded:
+                                dependencyValues.indentationGraded,
+                        }),
+                    },
+                };
+            },
+        };
+
+        stateVariableDefinitions.valueToRecordOnSubmit = {
+            isAlias: true,
+            targetVariableName: "solutionOrder",
+            description:
+                "Indices of the blocks in the solution column (recorded when the answer is submitted).",
+        };
+
+        // Render the blocks (in order), followed by any description.
+        stateVariableDefinitions.childIndicesToRender = {
+            returnDependencies: () => ({
+                allChildren: {
+                    dependencyType: "child",
+                    includeAllChildren: true,
+                },
+            }),
+            definition({ dependencyValues }) {
+                const children = dependencyValues.allChildren;
+                const childIndicesToRender = [...children.keys()].filter(
+                    (i) => children[i].componentType === "block",
+                );
+                const descriptionIdx = children.findLastIndex(
+                    (child) => child.componentType === "description",
+                );
+                if (descriptionIdx !== -1) {
+                    childIndicesToRender.push(descriptionIdx);
+                }
+                return { setValue: { childIndicesToRender } };
+            },
+            markStale: () => ({ updateRenderedChildren: true }),
+        };
+
+        return stateVariableDefinitions;
+    }
+
+    async updateArrangement({
+        order,
+        indents,
+        actionId,
+        sourceInformation = {},
+        skipRendererUpdate = false,
+    }) {
+        if (await this.stateValues.disabled) {
+            return;
+        }
+
+        const numBlocks = await this.stateValues.numBlocks;
+        const valid =
+            Array.isArray(order) &&
+            Array.isArray(indents) &&
+            order.length === indents.length &&
+            new Set(order).size === order.length &&
+            order.every(
+                (i) => Number.isInteger(i) && i >= 1 && i <= numBlocks,
+            ) &&
+            indents.every((x) => Number.isFinite(x));
+        if (!valid) {
+            console.warn("Ignoring invalid arrangement for <parsons>", {
+                order,
+                indents,
+            });
+            return;
+        }
+
+        const maxIndent = await this.stateValues.maxIndent;
+        const clampedIndents = indents.map((x) =>
+            Math.min(Math.max(Math.round(x), 0), maxIndent),
+        );
+
+        let event = {
+            verb: "interacted",
+            object: {
+                componentIdx: this.componentIdx,
+                componentType: this.componentType,
+            },
+            result: { order, indents: clampedIndents },
+        };
+        let answerAncestor = await this.stateValues.answerAncestor;
+        if (answerAncestor) {
+            event.context = { answerAncestor: answerAncestor.componentIdx };
+        }
+
+        await this.coreFunctions.performUpdate({
+            updateInstructions: [
+                {
+                    updateType: "updateValue",
+                    componentIdx: this.componentIdx,
+                    stateVariable: "allSolutionOrder",
+                    value: [...order],
+                },
+                {
+                    updateType: "updateValue",
+                    componentIdx: this.componentIdx,
+                    stateVariable: "allSolutionIndents",
+                    value: clampedIndents,
+                },
+            ],
+            actionId,
+            sourceInformation,
+            skipRendererUpdate: true,
+            event,
+        });
+
+        return await this.coreFunctions.triggerChainedActions({
+            componentIdx: this.componentIdx,
+            actionId,
+            sourceInformation,
+            skipRendererUpdate,
+        });
+    }
+}
+
+/** <block> — one draggable piece of a <parsons> problem. */
+export class Block extends InlineComponent {
+    static componentType = "block";
+
+    static componentDocs = {
+        summary: "A draggable block within a `<parsons>` problem.",
+    };
+    static rendererType = "containerInline";
+    static renderChildren = true;
+
+    static createAttributesObject() {
+        let attributes = super.createAttributesObject();
+        attributes.indent = {
+            createComponentOfType: "integer",
+            createStateVariable: "indent",
+            defaultValue: 0,
+            public: true,
+            description:
+                "Correct indentation level of this block (0 = no indent).",
+        };
+        attributes.distractor = {
+            createComponentOfType: "boolean",
+            createStateVariable: "distractor",
+            defaultValue: false,
+            public: true,
+            description:
+                "Whether this block is a distractor that does not belong in the solution.",
+        };
+        // Set by an enclosing <anyOrder>; not authored directly.
+        attributes.anyOrderGroup = {
+            createPrimitiveOfType: "number",
+            createStateVariable: "anyOrderGroup",
+            defaultValue: null,
+            excludeFromSchema: true,
+        };
+        return attributes;
+    }
+
+    static returnChildGroups() {
+        return [
+            {
+                group: "children",
+                componentTypes: ["_base"],
+            },
+        ];
+    }
+
+    static returnStateVariableDefinitions() {
+        let stateVariableDefinitions = super.returnStateVariableDefinitions();
+
+        stateVariableDefinitions.indentSpecified = {
+            returnDependencies: () => ({
+                indentAttr: {
+                    dependencyType: "attributeComponent",
+                    attributeName: "indent",
+                },
+            }),
+            definition({ dependencyValues }) {
+                return {
+                    setValue: {
+                        indentSpecified: dependencyValues.indentAttr !== null,
+                    },
+                };
+            },
+        };
+
+        stateVariableDefinitions.text = {
+            public: true,
+            shadowingInstructions: {
+                createComponentOfType: "text",
+            },
+            description: "The block's content as a text string.",
+            returnDependencies: () => ({
+                inlineChildren: {
+                    dependencyType: "child",
+                    childGroups: ["children"],
+                    variableNames: ["text"],
+                    variablesOptional: true,
+                },
+            }),
+            definition({ dependencyValues }) {
+                return {
+                    setValue: {
+                        text: textFromChildren(dependencyValues.inlineChildren),
+                    },
+                };
+            },
+        };
+
+        return stateVariableDefinitions;
+    }
+}
+
+/**
+ * <anyOrder> — inside <parsons>, groups blocks that must be contiguous but may
+ * appear in any order. Expands (like <group>) into its blocks, tagging each
+ * with this component's index so <parsons> sees a flat list of blocks.
+ */
+export class AnyOrder extends Group {
+    static componentType = "anyOrder";
+
+    static componentDocs = {
+        summary:
+            "Within a `<parsons>` problem, blocks that must be together but may be in any order.",
+    };
+
+    static async createSerializedReplacements(args) {
+        const result = await super.createSerializedReplacements(args);
+        tagBlocksWithGroup(result.replacements, args.component.componentIdx);
+        return result;
+    }
+}
+
+function tagBlocksWithGroup(replacements, group) {
+    for (const repl of replacements) {
+        if (typeof repl === "object" && repl?.componentType === "block") {
+            repl.attributes = {
+                ...repl.attributes,
+                anyOrderGroup: {
+                    type: "primitive",
+                    name: "anyOrderGroup",
+                    primitive: { type: "number", value: group },
+                },
+            };
+        }
+    }
+}
