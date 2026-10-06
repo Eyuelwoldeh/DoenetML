@@ -372,7 +372,7 @@ describe("Parsons tag tests @group4", async () => {
   <block>a</block>
   <block indent="1">b</block>
 </parsons>
-<parsons name="v"><block>a</block></parsons>`,
+<parsons name="v"><block>a</block><block>b</block></parsons>`,
         });
         const idx = await resolvePathToNodeIdx("h");
         await updateArrangement({
@@ -424,7 +424,7 @@ describe("Parsons tag tests @group4", async () => {
         expect(warnings[0]).contain("indent 3");
 
         warnings = await warningsFor(
-            `<parsons><block>a</block><anyOrder><block>b</block><anyOrder><block>c</block><block>d</block></anyOrder></anyOrder></parsons>`,
+            `<parsons><block>a</block><anyOrder><block>b</block><block>e</block><anyOrder><block>c</block><block>d</block></anyOrder></anyOrder></parsons>`,
         );
         expect(warnings.length).eq(1);
         expect(warnings[0]).contain("cannot be nested");
@@ -438,6 +438,43 @@ describe("Parsons tag tests @group4", async () => {
         );
         expect(warnings.length).eq(1);
         expect(warnings[0]).contain("60 characters");
+
+        warnings = await warningsFor(
+            `<parsons><block>a</block><block>b</block><anyOrder><block>c</block></anyOrder></parsons>`,
+        );
+        expect(warnings.length).eq(1);
+        expect(warnings[0]).contain("needs at least two blocks");
+
+        warnings = await warningsFor(
+            `<parsons><block>a</block><block distractor>b</block></parsons>`,
+        );
+        expect(warnings.length).eq(1);
+        expect(warnings[0]).contain("only one `<block>`");
+
+        warnings = await warningsFor(
+            `<parsons><block>a</block><block></block><block>c</block></parsons>`,
+        );
+        expect(warnings.length).eq(1);
+        expect(warnings[0]).contain("has no content");
+
+        warnings = await warningsFor(
+            `<parsons><block>x = 1</block><block>y = 2</block><block distractor>x = 1</block></parsons>`,
+        );
+        expect(warnings.length).eq(1);
+        expect(warnings[0]).contain("same content (x = 1)");
+
+        // identical blocks side by side in an <anyOrder> are interchangeable
+        warnings = await warningsFor(
+            `<parsons><block>a</block><anyOrder><block>i++</block><block>i++</block></anyOrder></parsons>`,
+        );
+        expect(warnings.length).eq(0);
+
+        // stray content is reported by the general child check
+        warnings = await warningsFor(
+            `<parsons><block>a</block><p>x</p><block>b</block></parsons>`,
+        );
+        expect(warnings.length).eq(1);
+        expect(warnings[0]).contain("Invalid children for `<parsons>`");
 
         // a well-formed problem is silent
         warnings = await warningsFor(selectionSortDoenetML);

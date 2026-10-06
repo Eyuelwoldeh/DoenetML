@@ -589,6 +589,10 @@ export type MessageKey =
     | "parsons-block-outside-parsons"
     | "parsons-horizontal-ignores-indent"
     | "parsons-horizontal-block-too-long"
+    | "parsons-any-order-too-few"
+    | "parsons-single-solution-block"
+    | "parsons-empty-block"
+    | "parsons-duplicate-blocks"
     | "editor-update-viewer"
     | "editor-update-viewer-title"
     | "editor-variant"
@@ -1244,6 +1248,10 @@ export const MESSAGE_KEYS: readonly MessageKey[] = [
     "parsons-block-outside-parsons",
     "parsons-horizontal-ignores-indent",
     "parsons-horizontal-block-too-long",
+    "parsons-any-order-too-few",
+    "parsons-single-solution-block",
+    "parsons-empty-block",
+    "parsons-duplicate-blocks",
     "editor-update-viewer",
     "editor-update-viewer-title",
     "editor-variant",

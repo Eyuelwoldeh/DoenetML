@@ -263,6 +263,10 @@ export const DIAGNOSTIC_CODES = {
     "doenet-w0172": "parsons-block-outside-parsons",
     "doenet-w0173": "parsons-horizontal-ignores-indent",
     "doenet-w0174": "parsons-horizontal-block-too-long",
+    "doenet-w0175": "parsons-any-order-too-few",
+    "doenet-w0176": "parsons-single-solution-block",
+    "doenet-w0177": "parsons-empty-block",
+    "doenet-w0178": "parsons-duplicate-blocks",
 
     "doenet-e0001": "pretzel-circuit-first-problem-distractor",
     "doenet-e0002": "component-type-invalid",

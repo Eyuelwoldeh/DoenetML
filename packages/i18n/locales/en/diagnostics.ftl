@@ -1401,3 +1401,15 @@ parsons-horizontal-ignores-indent =
 # recommended limit.
 parsons-horizontal-block-too-long =
     A `<block>` has { $length } characters. Blocks longer than { $max } characters are hard to arrange when `layout` is `horizontal`; shorten it or use the vertical layout.
+
+parsons-any-order-too-few =
+    An `<anyOrder>` needs at least two blocks that belong in the solution; with fewer it has no effect.
+
+parsons-single-solution-block =
+    This `<parsons>` has only one `<block>` that belongs in the solution, so there is nothing for a student to put in order.
+
+parsons-empty-block = A `<block>` has no content, so a student sees an empty block.
+
+# $text is the shared content of the two blocks, which is never translated.
+parsons-duplicate-blocks =
+    Two blocks have the same content ({ $text }), so a student cannot tell them apart and an answer that looks correct may be marked incorrect. Make them different, or put them next to each other inside an `<anyOrder>`.

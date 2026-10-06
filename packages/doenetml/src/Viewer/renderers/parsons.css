@@ -1,3 +1,10 @@
+.parsons-container {
+    /* Outlines of the places blocks go. #767676 has at least 3:1 contrast
+       (WCAG 1.4.11, non-text contrast) against both the light canvas (4.5:1
+       on white) and the dark one (4.1:1 on #121212). */
+    --parsons-outline: #767676;
+}
+
 .parsons {
     display: grid;
     /* two equal columns that stack on narrow screens; rows stretch so the
@@ -27,7 +34,7 @@
     margin: 0;
     padding: 8px 8px 48px 8px; /* extra bottom room to drop below the last block */
     list-style: none;
-    border: 2px dashed var(--mainGray);
+    border: 2px dashed var(--parsons-outline);
     border-radius: var(--mainBorderRadius);
     background: var(--canvas);
 }
@@ -49,11 +56,12 @@
     border-style: solid;
     /* room to drop a block well below the last one, leaving empty rows */
     padding-bottom: 130px;
-    /* faint indent guides, one per indent level */
+    /* indent guides, one per indent level */
     background-image: repeating-linear-gradient(
         to right,
         transparent 0 calc(var(--parsons-indent) - 1px),
-        var(--mainGray) calc(var(--parsons-indent) - 1px) var(--parsons-indent)
+        var(--parsons-outline) calc(var(--parsons-indent) - 1px)
+            var(--parsons-indent)
     );
     background-size: calc(
             var(--parsons-indent) * (var(--parsons-max-indent) + 1)
@@ -75,14 +83,18 @@
 .parsons-block {
     box-sizing: border-box;
     padding: 6px 10px;
-    border: 1px solid var(--mainBorder);
+    border: 1px solid var(--canvasText);
     border-radius: var(--mainBorderRadius);
     background: var(--canvas);
     color: var(--canvasText);
-    font-family: monospace;
     cursor: grab;
     touch-action: none;
     user-select: none;
+}
+
+/* code is marked up with <c>; its margin is for running text, not a block */
+.parsons-block code {
+    margin: 0 !important;
 }
 
 /* a long block wraps inside the row instead of overflowing it */
@@ -95,27 +107,27 @@
 .parsons-gap {
     box-sizing: border-box;
     min-height: 2em;
-    border: 1px dashed var(--mainGray);
+    border: 1px dashed var(--parsons-outline);
     border-radius: var(--mainBorderRadius);
-    opacity: 0.5;
 }
 
 /* a row of the solution the student left empty, as spacing */
 .parsons-blank {
     box-sizing: border-box;
     height: 36px;
-    border: 1px dashed var(--mainGray);
+    border: 1px dashed var(--parsons-outline);
     border-radius: var(--mainBorderRadius);
-    opacity: 0.5;
     cursor: pointer;
 }
 
 .parsons-blank:hover {
-    opacity: 1;
+    border-style: solid;
 }
 
 .parsons-block:focus-visible {
-    outline: 3px solid var(--mainBlue);
+    /* the text colour contrasts with the canvas in every theme; --mainBlue is
+       only 2.6:1 against the dark canvas */
+    outline: 3px solid var(--canvasText);
     outline-offset: 2px;
 }
 
@@ -137,6 +149,11 @@
     align-items: center;
     gap: 8px;
     margin-bottom: 12px;
+}
+
+/* check-work stays on the left; reset sits at the right edge */
+.parsons-reset {
+    margin-left: auto;
 }
 
 .parsons-sr-only {

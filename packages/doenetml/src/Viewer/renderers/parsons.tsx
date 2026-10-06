@@ -9,6 +9,15 @@ import {
 } from "./utils/checkWork";
 import { useSubmitActionWithDelay } from "./utils/useSubmitActionWithDelay";
 import { useContentT, useT } from "../../utils/i18n";
+import {
+    Arrangement,
+    ParsonsOptions,
+    arrangementAfterKey,
+    placeInSolution,
+    removeFromSolution,
+    removeRow,
+    trimEmptyRows,
+} from "./utils/parsonsArrangement";
 import "./parsons.css";
 
 const INDENT_PX = 32;
@@ -36,8 +45,6 @@ interface ParsonsSVs {
     justSubmitted: boolean;
     forceFullCheckWorkButton: boolean;
 }
-
-type Arrangement = { order: number[]; indents: number[] };
 
 type DragInfo = {
     blockIdx: number;
@@ -139,8 +146,13 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
     const disabled = SVs.disabled;
     const horizontal = SVs.layout === "horizontal";
     const { order, indents } = arrangement;
-    const sourceOrder = SVs.initialOrder.filter((i) => !order.includes(i));
     const maxRows = MAX_ROWS_PER_BLOCK * SVs.blocks.length;
+    const options: ParsonsOptions = {
+        horizontal,
+        indentationGraded: SVs.indentationGraded,
+        maxIndent: SVs.maxIndent,
+        maxRows,
+    };
 
     // `children` has a null placeholder for each unrendered child (e.g.
     // <shortDescription>), so drop those: what remains is the blocks in
@@ -163,70 +175,6 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
                 indents: newArrangement.indents,
             },
         });
-    }
-
-    function clampIndent(indent: number) {
-        if (!SVs.indentationGraded) {
-            return 0;
-        }
-        return Math.min(Math.max(indent, 0), SVs.maxIndent);
-    }
-
-    // The solution is a list of rows: `order[i]` is a block index, or 0 for a
-    // row the student left empty as spacing. Empty rows below the last block
-    // are never kept.
-    function trimEmptyRows(a: Arrangement): Arrangement {
-        let numRows = a.order.length;
-        while (numRows > 0 && a.order[numRows - 1] === 0) {
-            numRows--;
-        }
-        return {
-            order: a.order.slice(0, numRows),
-            indents: a.indents.slice(0, numRows),
-        };
-    }
-
-    function removeRow(a: Arrangement, row: number): Arrangement {
-        return {
-            order: a.order.filter((_, i) => i !== row),
-            indents: a.indents.filter((_, i) => i !== row),
-        };
-    }
-
-    /**
-     * Remove `blockIdx` from the solution (if present), then put it at row
-     * `position` of what remains: in place of the empty row there
-     * (`replaceEmptyRow`), or inserted after `emptyRowsBefore` new empty rows.
-     */
-    function placeInSolution(
-        blockIdx: number,
-        position: number,
-        indent: number,
-        { replaceEmptyRow = false, emptyRowsBefore = 0 } = {},
-    ): Arrangement {
-        const oldPos = order.indexOf(blockIdx);
-        const rest =
-            oldPos === -1
-                ? { order: [...order], indents: [...indents] }
-                : removeRow(arrangement, oldPos);
-        const emptyRows = Array(emptyRowsBefore).fill(0);
-        rest.order.splice(
-            position,
-            replaceEmptyRow ? 1 : 0,
-            ...emptyRows,
-            blockIdx,
-        );
-        rest.indents.splice(
-            position,
-            replaceEmptyRow ? 1 : 0,
-            ...emptyRows,
-            clampIndent(indent),
-        );
-        return trimEmptyRows(rest);
-    }
-
-    function removeFromSolution(blockIdx: number): Arrangement {
-        return trimEmptyRows(removeRow(arrangement, order.indexOf(blockIdx)));
     }
 
     function removeEmptyRow(row: number) {
@@ -384,10 +332,14 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
             const colLeft = colRect.left + COLUMN_PADDING_PX;
             const blockLeft = info.startLeft + (x - info.startX);
             const indent = Math.round((blockLeft - colLeft) / INDENT_PX);
-            const result = placeInSolution(blockIdx, position, indent, {
-                replaceEmptyRow,
-                emptyRowsBefore,
-            });
+            const result = placeInSolution(
+                arrangement,
+                blockIdx,
+                position,
+                indent,
+                options,
+                { replaceEmptyRow, emptyRowsBefore },
+            );
             const row = result.order.indexOf(blockIdx);
             commit(
                 result,
@@ -395,7 +347,7 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
             );
         } else if (contains(sourceColumn.current) && order.includes(blockIdx)) {
             commit(
-                removeFromSolution(blockIdx),
+                removeFromSolution(arrangement, blockIdx),
                 movedToSourceMessage(blockIdx),
             );
         }
@@ -403,6 +355,7 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
 
     // ── Keyboard ────────────────────────────────────────────────────────
 
+    // The rules live in `arrangementAfterKey`; this applies its result.
     function onKeyDown(
         e: React.KeyboardEvent<HTMLLIElement>,
         blockIdx: number,
@@ -410,76 +363,44 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
         if (disabled) {
             return;
         }
-        const pos = order.indexOf(blockIdx);
-        const inSolution = pos !== -1;
-        const vertical = e.key === "ArrowUp" || e.key === "ArrowDown";
-        const sideways = e.key === "ArrowLeft" || e.key === "ArrowRight";
-        let result: Arrangement | null = null;
-        let message = "";
-
-        if (e.key === "Enter" || e.key === " ") {
-            if (inSolution) {
-                result = removeFromSolution(blockIdx);
-                message = movedToSourceMessage(blockIdx);
-            } else {
-                result = placeInSolution(blockIdx, order.length, 0);
-                message = movedToSolutionMessage(blockIdx, order.length, 0);
-            }
-        } else if (vertical || (sideways && horizontal)) {
-            // Reorder: Up/Down always; Left/Right too in a horizontal layout.
-            const step = e.key === "ArrowUp" || e.key === "ArrowLeft" ? -1 : 1;
-            if (inSolution) {
-                // Swap with the neighbouring row (a block or an empty row).
-                // Moving the last block down leaves an empty row above it.
-                const newPos = pos + step;
-                if (newPos >= 0 && newPos < order.length) {
-                    result = placeInSolution(blockIdx, newPos, indents[pos]);
-                } else if (
-                    newPos === order.length &&
-                    !horizontal &&
-                    order.length < maxRows
-                ) {
-                    result = placeInSolution(blockIdx, pos, indents[pos], {
-                        emptyRowsBefore: 1,
-                    });
-                }
-                if (result) {
-                    const row = result.order.indexOf(blockIdx);
-                    message = movedToSolutionMessage(
-                        blockIdx,
-                        row,
-                        result.indents[row],
-                    );
-                }
-            } else {
-                const srcPos = sourceOrder.indexOf(blockIdx) + step;
-                if (srcPos >= 0 && srcPos < sourceOrder.length) {
-                    blockElements.current[sourceOrder[srcPos]]?.focus();
-                }
-                e.preventDefault();
-                return;
-            }
-        } else if (sideways && inSolution && SVs.indentationGraded) {
-            const newIndent = clampIndent(
-                indents[pos] + (e.key === "ArrowLeft" ? -1 : 1),
-            );
-            if (newIndent !== indents[pos]) {
-                result = placeInSolution(blockIdx, pos, newIndent);
-                const block = blockText(blockIdx);
-                message = t(
-                    "parsons-block-indent",
-                    { block, indent: newIndent },
-                    `${block} indent ${newIndent}`,
-                );
-            }
-        } else {
+        const result = arrangementAfterKey({
+            key: e.key,
+            blockIdx,
+            arrangement,
+            initialOrder: SVs.initialOrder,
+            options,
+        });
+        if (!result.handled) {
             return;
         }
-
         e.preventDefault();
-        if (result) {
-            pendingFocus.current = blockIdx;
-            commit(result, message);
+
+        if (result.arrangement) {
+            // The focused block may be about to move to the other list, so
+            // focus is applied after the re-render.
+            pendingFocus.current = result.focus ?? null;
+            const row = result.arrangement.order.indexOf(blockIdx);
+            let message: string;
+            if (result.move === "toSource") {
+                message = movedToSourceMessage(blockIdx);
+            } else if (result.move === "indent") {
+                const block = blockText(blockIdx);
+                const indent = result.arrangement.indents[row];
+                message = t(
+                    "parsons-block-indent",
+                    { block, indent },
+                    `${block} indent ${indent}`,
+                );
+            } else {
+                message = movedToSolutionMessage(
+                    blockIdx,
+                    row,
+                    result.arrangement.indents[row],
+                );
+            }
+            commit(result.arrangement, message);
+        } else if (result.focus !== undefined) {
+            blockElements.current[result.focus]?.focus();
         }
     }
 
@@ -643,13 +564,15 @@ export default React.memo(function Parsons(props: UseDoenetRendererProps) {
                 </div>
             </div>
             <div className="parsons-controls">
-                <Button
-                    id={`${id}_reset`}
-                    onClick={reset}
-                    disabled={disabled || order.length === 0}
-                    value={t("parsons-reset", undefined, "Reset")}
-                />
                 {checkWorkComponent}
+                <span className="parsons-reset">
+                    <Button
+                        id={`${id}_reset`}
+                        onClick={reset}
+                        disabled={disabled || order.length === 0}
+                        value={t("parsons-reset", undefined, "Reset")}
+                    />
+                </span>
             </div>
             <div className="parsons-sr-only" aria-live="polite">
                 {announcement}

@@ -156,6 +156,7 @@ export default class Parsons extends Input {
                         "distractor",
                         "anyOrderGroup",
                         "text",
+                        "hasContent",
                     ],
                 },
             }),
@@ -166,6 +167,7 @@ export default class Parsons extends Input {
                     distractor: child.stateValues.distractor,
                     group: child.stateValues.anyOrderGroup,
                     text: child.stateValues.text,
+                    hasContent: child.stateValues.hasContent,
                 }));
                 const diagnostics = [];
                 if (!blocks.some((block) => !block.distractor)) {
@@ -188,6 +190,79 @@ export default class Parsons extends Input {
                         }),
                     );
                 }
+
+                const solutionBlocks = blocks.filter(
+                    (block) => !block.distractor,
+                );
+                if (solutionBlocks.length === 1) {
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0176",
+                        }),
+                    );
+                }
+
+                // An <anyOrder> holding a distractor is already reported, so
+                // only count the groups made entirely of solution blocks.
+                const groupSizes = new Map();
+                for (const block of blocks) {
+                    if (block.group !== null) {
+                        const size = groupSizes.get(block.group) ?? 0;
+                        groupSizes.set(
+                            block.group,
+                            block.distractor ? NaN : size + 1,
+                        );
+                    }
+                }
+                for (const size of groupSizes.values()) {
+                    if (size < 2) {
+                        diagnostics.push(
+                            codedDiagnostic({
+                                type: "warning",
+                                code: "doenet-w0175",
+                            }),
+                        );
+                    }
+                }
+
+                if (blocks.some((block) => !block.hasContent)) {
+                    diagnostics.push(
+                        codedDiagnostic({
+                            type: "warning",
+                            code: "doenet-w0177",
+                        }),
+                    );
+                }
+
+                // Two blocks a student cannot tell apart, unless they sit
+                // together in one <anyOrder> (where either order is accepted).
+                const reported = new Set();
+                blocks.forEach((block, i) => {
+                    const duplicate = blocks.some(
+                        (other, j) =>
+                            j < i &&
+                            other.text === block.text &&
+                            (other.group === null ||
+                                other.group !== block.group ||
+                                other.distractor ||
+                                block.distractor),
+                    );
+                    if (
+                        duplicate &&
+                        block.hasContent &&
+                        !reported.has(block.text)
+                    ) {
+                        reported.add(block.text);
+                        diagnostics.push(
+                            codedDiagnostic({
+                                type: "warning",
+                                code: "doenet-w0178",
+                                args: { text: block.text },
+                            }),
+                        );
+                    }
+                });
 
                 return { setValue: { blocks }, sendDiagnostics: diagnostics };
             },
@@ -834,6 +909,7 @@ export class Block extends InlineComponent {
             shadowingInstructions: {
                 createComponentOfType: "text",
             },
+            additionalStateVariablesDefined: ["hasContent"],
             description: "The block's content as a text string.",
             returnDependencies: () => ({
                 inlineChildren: {
@@ -847,6 +923,7 @@ export class Block extends InlineComponent {
                 return {
                     setValue: {
                         text: textFromChildren(dependencyValues.inlineChildren),
+                        hasContent: dependencyValues.inlineChildren.length > 0,
                     },
                 };
             },
