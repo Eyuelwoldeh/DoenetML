@@ -1,8 +1,27 @@
 .parsons-container {
-    /* Outlines of the places blocks go. #767676 has at least 3:1 contrast
-       (WCAG 1.4.11, non-text contrast) against both the light canvas (4.5:1
-       on white) and the dark one (4.1:1 on #121212). */
+    /* Outlines of the places blocks go, mixed from the theme's own text and
+       canvas colours so they stay strong in both themes: about 7:1 against
+       white and 8:1 against the dark canvas (WCAG 1.4.11 asks for 3:1).
+       The plain grey is the fallback where color-mix is unsupported; it is
+       4.5:1 on white and 4.1:1 on #121212. */
     --parsons-outline: #767676;
+    --parsons-slot-fill: transparent;
+}
+
+@supports (color: color-mix(in srgb, black, white)) {
+    .parsons-container {
+        --parsons-outline: color-mix(
+            in srgb,
+            var(--canvasText) 65%,
+            var(--canvas)
+        );
+        /* a light tint, so an empty slot reads as a shape, not just a line */
+        --parsons-slot-fill: color-mix(
+            in srgb,
+            var(--canvasText) 10%,
+            var(--canvas)
+        );
+    }
 }
 
 .parsons {
@@ -107,21 +126,24 @@
 .parsons-gap {
     box-sizing: border-box;
     min-height: 2em;
-    border: 1px dashed var(--parsons-outline);
+    border: 2px dashed var(--parsons-outline);
     border-radius: var(--mainBorderRadius);
+    background: var(--parsons-slot-fill);
 }
 
 /* a row of the solution the student left empty, as spacing */
 .parsons-blank {
     box-sizing: border-box;
     height: 36px;
-    border: 1px dashed var(--parsons-outline);
+    border: 2px dashed var(--parsons-outline);
     border-radius: var(--mainBorderRadius);
+    background: var(--parsons-slot-fill);
     cursor: pointer;
 }
 
 .parsons-blank:hover {
     border-style: solid;
+    border-color: var(--canvasText);
 }
 
 .parsons-block:focus-visible {
