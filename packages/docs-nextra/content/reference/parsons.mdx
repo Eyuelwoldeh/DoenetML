@@ -1,0 +1,246 @@
+import { DoenetViewer, DoenetEditor, DoenetExample } from "../../components"
+
+import { ComponentDisplay, AttrPropDisplay } from "../../components"
+
+
+# `<parsons>{:dn}`
+
+<ComponentDisplay name='parsons'/>
+
+`<parsons>{:dn}` is an [Input](../concepts/essentialConcepts#component-types)
+component for Parsons problems. You write the pieces of a solution, such as lines of
+code, steps of a calculation or sentences of a proof, as `<block>{:dn}` children,
+in the correct order. Students see the blocks shuffled in a "Drag from here" column
+and build their answer in a "Your solution" column, either by dragging or with the
+keyboard.
+
+Grade a `<parsons>{:dn}` by placing an [`<answer>{:dn}`](answer1) next to it that awards credit
+when the `correct` property is true. A block can contain any inline content: plain text,
+math in `<m>{:dn}`, or code in `<c>{:dn}`.
+
+### Children
+
+- `<block>{:dn}`: one piece of the solution. Give it `indent` for its correct indentation
+  level, or the `distractor` attribute if it does not belong in the solution at all.
+  A `<block>{:dn}` must be a child of a `<parsons>{:dn}`, or of an `<anyOrder>{:dn}` inside one.
+- `<anyOrder>{:dn}`: blocks that must appear together, but in any order among
+  themselves. It needs at least two blocks that belong in the solution, and cannot be nested.
+- `<shortDescription>{:dn}` or `<label>{:dn}`: describes the problem to screen reader users.
+
+### What students can do
+
+- **Drag** a block into the solution column. Dropping it on an empty row puts it there; dropping it
+  below the last block leaves empty rows above it. Empty rows let students space out their work,
+  are ignored when grading, and can be clicked to remove them.
+- **With the keyboard**, press Enter or Space on a block to move it to the other column.
+  In the solution, the Up and Down arrows move a block, and Left and Right change its
+  indentation. Pressing Down on the last block leaves an empty row above it.
+- **Reset** returns every block to the starting column.
+
+### Warnings for authors
+
+Doenet shows a warning, rather than an error, for a problem that students could not solve
+or could not tell apart. For example: no blocks that belong in the solution, only one,
+an empty block, two blocks with the same content, or an `indent` larger than `maxIndent`.
+
+
+<AttrPropDisplay name='parsons'/>
+
+
+## Examples
+
+### Example: Selection sort pseudocode
+```doenet-editor
+<p>Arrange the blocks into pseudocode for selection sort. Indent the code inside the loop. Not every block is used.</p>
+
+<parsons name="sort">
+  <shortDescription>Selection sort pseudocode</shortDescription>
+  <block indent="0"><c>new_arr gets an empty array</c></block>
+  <block indent="0"><c>for i = 0,...,n-1:</c></block>
+  <block indent="1"><c>min_index gets the index of the minimum value in arr</c></block>
+  <anyOrder>
+    <block indent="1"><c>append arr[min_index] to new_arr</c></block>
+    <block indent="1"><c>remove arr[min_index] from arr</c></block>
+  </anyOrder>
+  <block indent="0"><c>copy the items in new_arr to arr</c></block>
+  <block distractor><c>swap arr[min_index] and arr[i]</c></block>
+</parsons>
+
+<answer name="sortAnswer">
+  <award><when>$sort.correct</when></award>
+</answer>
+```
+
+The blocks are written in their correct order and are shuffled for the student. Because
+the blocks have an `indent`, a correct answer must have the right indentation as well as the
+right order. The two blocks inside `<anyOrder>{:dn}` may be placed in either order, and the
+distractor must be left out. The `<answer>{:dn}` awards credit when `$sort.correct` is true.
+
+---
+
+### Example: Steps of a calculation
+```doenet-editor-horiz
+<p>Put the steps in order to simplify <m>\frac{x^2 \cdot x^5}{x^3}</m>.</p>
+
+<parsons name="steps" horizontalAlign="center">
+  <shortDescription>Steps simplifying an expression with exponents</shortDescription>
+  <block><m>\frac{x^2 \cdot x^5}{x^3}</m></block>
+  <block><m>\frac{x^{2+5}}{x^3}</m></block>
+  <block><m>\frac{x^7}{x^3}</m></block>
+  <block><m>x^4</m></block>
+  <block distractor><m>\frac{x^{10}}{x^3}</m></block>
+</parsons>
+
+<answer>
+  <award><when>$steps.correct</when></award>
+</answer>
+```
+
+Blocks can hold math. No block has an `indent`, so only the order is graded.
+
+---
+
+### Attribute Example: shuffle
+```doenet-editor-horiz
+<parsons name="days" shuffle="false">
+  <shortDescription>Days of the week</shortDescription>
+  <block>Monday</block>
+  <block>Tuesday</block>
+  <block>Wednesday</block>
+</parsons>
+```
+
+By default the blocks start in a random order, which differs between variants of the
+activity. With `shuffle="false"`, they start in the order they are written.
+
+---
+
+### Attribute Example: layout
+```doenet-editor-horiz
+<p>Build the Python expression that gives the larger of <c>a</c> and <c>b</c>.</p>
+
+<parsons name="expression" layout="horizontal">
+  <shortDescription>Pieces of a Python expression</shortDescription>
+  <block><c>a</c></block>
+  <block><c>if a > b</c></block>
+  <block><c>else</c></block>
+  <block><c>b</c></block>
+  <block distractor><c>elif</c></block>
+</parsons>
+```
+
+With `layout="horizontal"`, the two columns are stacked and blocks are placed left to
+right, like words in a sentence. Indentation is not used in this layout, and long blocks
+are hard to arrange, so Doenet warns about a block longer than 40 characters.
+
+---
+
+### Attribute Example: horizontalAlign
+```doenet-editor-horiz
+<parsons name="centered" horizontalAlign="center">
+  <shortDescription>Centered math blocks</shortDescription>
+  <block><m>(x+1)^2</m></block>
+  <block><m>x^2 + 2x + 1</m></block>
+</parsons>
+```
+
+The content of each block is aligned to the `left` (the default), `center` or `right`.
+
+---
+
+### Attribute Example: maxIndent
+```doenet-editor-horiz
+<parsons name="loop" maxIndent="3">
+  <shortDescription>A loop in Python</shortDescription>
+  <block indent="0"><c>for i in range(3):</c></block>
+  <block indent="1"><c>print(i)</c></block>
+</parsons>
+```
+
+Students can indent a block up to `maxIndent` levels. By default this is one more than the
+largest `indent` you wrote, so a student can over-indent by one level. Raise it so that the
+correct indentation is less obvious.
+
+---
+
+### Property Example: correct, solutionOrder
+```doenet-editor-horiz
+<parsons name="count">
+  <shortDescription>Counting to three</shortDescription>
+  <block>one</block>
+  <block>two</block>
+  <block>three</block>
+</parsons>
+
+<p>Blocks in the solution: $count.solutionOrder</p>
+<p>Correct: $count.correct</p>
+```
+
+`solutionOrder` lists the blocks in the solution column from top to bottom, numbered in
+the order they are written. `correct` is true when the solution column holds exactly the
+blocks that belong in the solution, in a correct order (and indentation, if graded).
+
+---
+
+### Property Example: solutionTooShort, solutionTooLong
+```doenet-editor-horiz
+<parsons name="greet">
+  <shortDescription>A Python greeting</shortDescription>
+  <block><c>name = input()</c></block>
+  <block><c>print("Hello, " + name)</c></block>
+  <block distractor><c>print(name)</c></block>
+</parsons>
+
+<answer name="greetAnswer">
+  <award><when>$greet.correct</when></award>
+</answer>
+
+<feedback condition="$greet.solutionTooShort" updateWith="$greetAnswer">
+  <p>Your solution is too short.</p>
+</feedback>
+<feedback condition="$greet.solutionTooLong" updateWith="$greetAnswer">
+  <p>Your solution is too long: not every block is needed.</p>
+</feedback>
+```
+
+`solutionTooShort` and `solutionTooLong` compare the number of blocks in the solution column
+with the number a correct solution needs. Use them with `<feedback>{:dn}` to give length hints.
+With `updateWith`, the feedback changes only when the student submits, and you can leave either
+one out if you do not want it.
+
+---
+
+### Example: `<block>{:dn}` attributes: indent, distractor
+```doenet-editor-horiz
+<parsons name="ifElse">
+  <shortDescription>An if-else statement</shortDescription>
+  <block indent="0"><c>if x > 0:</c></block>
+  <block indent="1"><c>print("positive")</c></block>
+  <block indent="0"><c>else:</c></block>
+  <block indent="1"><c>print("not positive")</c></block>
+  <block distractor><c>elif:</c></block>
+</parsons>
+```
+
+`indent` gives a block's correct indentation level, starting at 0. If any block has an
+`indent`, indentation is graded for all of them. A `distractor` block does not belong in the
+solution; a solution that uses it is not correct.
+
+---
+
+### Example: `<anyOrder>{:dn}`
+```doenet-editor-horiz
+<parsons name="swap">
+  <shortDescription>Swapping two variables</shortDescription>
+  <block><c>temp = a</c></block>
+  <block><c>a = b</c></block>
+  <block><c>b = temp</c></block>
+  <anyOrder>
+    <block><c>print(a)</c></block>
+    <block><c>print(b)</c></block>
+  </anyOrder>
+</parsons>
+```
+
+The two `print` blocks must come together, after the swap, but either can come first.
+A distractor inside `<anyOrder>{:dn}` is treated as an ordinary distractor.

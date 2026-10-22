@@ -59,6 +59,7 @@ export default class Parsons extends Input {
         let attributes = super.createAttributesObject();
 
         attributes.shuffle = {
+            highlighted: true,
             createComponentOfType: "boolean",
             createStateVariable: "shuffle",
             defaultValue: true,
@@ -67,6 +68,7 @@ export default class Parsons extends Input {
                 "Whether to shuffle the blocks in the starting column (seeded by the document variant).",
         };
         attributes.layout = {
+            highlighted: true,
             createComponentOfType: "text",
             createStateVariable: "layout",
             validValues: [
@@ -88,6 +90,7 @@ export default class Parsons extends Input {
             description: "How the blocks are laid out.",
         };
         attributes.horizontalAlign = {
+            highlighted: true,
             createComponentOfType: "text",
             createStateVariable: "horizontalAlign",
             validValues: [
@@ -112,6 +115,7 @@ export default class Parsons extends Input {
             description: "Horizontal alignment of the content of each block.",
         };
         attributes.maxIndent = {
+            highlighted: true,
             createComponentOfType: "integer",
             description:
                 "Maximum indentation level a student can apply. Defaults to one more than the largest authored indent.",
@@ -527,6 +531,7 @@ export default class Parsons extends Input {
             stateVariableDefinitions[varName] = {
                 description,
                 public: true,
+                highlighted: varName === "solutionOrder",
                 shadowingInstructions: {
                     createComponentOfType: "number",
                 },
@@ -624,6 +629,7 @@ export default class Parsons extends Input {
         ]) {
             stateVariableDefinitions[varName] = {
                 public: true,
+                highlighted: true,
                 shadowingInstructions: {
                     createComponentOfType: "boolean",
                 },
@@ -653,6 +659,7 @@ export default class Parsons extends Input {
 
         stateVariableDefinitions.correct = {
             public: true,
+            highlighted: true,
             shadowingInstructions: {
                 createComponentOfType: "boolean",
             },
@@ -819,6 +826,7 @@ export class Block extends InlineComponent {
 
     static componentDocs = {
         summary: "A draggable block within a `<parsons>` problem.",
+        docsSlug: "parsons",
     };
     static rendererType = "containerInline";
     static renderChildren = true;
@@ -826,6 +834,7 @@ export class Block extends InlineComponent {
     static createAttributesObject() {
         let attributes = super.createAttributesObject();
         attributes.indent = {
+            highlighted: true,
             createComponentOfType: "integer",
             createStateVariable: "indent",
             defaultValue: 0,
@@ -834,6 +843,7 @@ export class Block extends InlineComponent {
                 "Correct indentation level of this block (0 = no indent).",
         };
         attributes.distractor = {
+            highlighted: true,
             createComponentOfType: "boolean",
             createStateVariable: "distractor",
             defaultValue: false,
@@ -944,6 +954,7 @@ export class AnyOrder extends Group {
     static componentDocs = {
         summary:
             "Within a `<parsons>` problem, blocks that must be together but may be in any order.",
+        docsSlug: "parsons",
     };
 
     static async createSerializedReplacements(args) {

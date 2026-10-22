@@ -176,6 +176,9 @@
         "sequence",
         "slider",
         "spreadsheet",
+        "parsons",
+        "block",
+        "anyOrder",
         "cell",
         "row",
         "column",
@@ -664,6 +667,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -1294,6 +1306,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -2236,6 +2251,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -2960,6 +2984,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -3870,6 +3903,15 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -4881,6 +4923,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -5888,6 +5939,15 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -6968,6 +7028,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -7838,6 +7907,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -8568,6 +8646,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -9260,6 +9347,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -9956,6 +10052,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -10314,6 +10419,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -10556,6 +10664,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -11149,6 +11260,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -11766,6 +11886,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -12261,6 +12384,9 @@
                     "ref": "booleanInput"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -12634,6 +12760,9 @@
                 },
                 {
                     "ref": "booleanInput"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -13011,6 +13140,9 @@
                     "ref": "booleanInput"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -13386,6 +13518,9 @@
                     "ref": "booleanInput"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -13759,6 +13894,9 @@
                 },
                 {
                     "ref": "booleanInput"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -14305,6 +14443,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -14917,6 +15058,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -15542,6 +15686,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -16254,6 +16401,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -17192,6 +17342,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -18124,6 +18277,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -19060,6 +19216,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -19994,6 +20153,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -20922,6 +21084,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -21830,6 +21995,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -22730,6 +22898,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -23640,6 +23811,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -24548,6 +24722,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -25454,6 +25631,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -26376,6 +26556,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -27312,6 +27495,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -28255,6 +28441,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -29207,6 +29396,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -30150,6 +30342,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -31084,6 +31279,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -32022,6 +32220,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -32956,6 +33157,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -33894,6 +34098,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -34828,6 +35035,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -35774,6 +35984,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -36588,6 +36801,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -37056,6 +37272,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -37528,6 +37747,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -37998,6 +38220,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -38466,6 +38691,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -39362,6 +39590,15 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -40707,6 +40944,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -41934,6 +42180,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -42835,6 +43090,15 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -43740,6 +44004,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -44639,6 +44912,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -45133,6 +45415,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -45823,6 +46108,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -46735,6 +47023,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -47790,6 +48081,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -48843,6 +49137,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -49746,6 +50043,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -50450,6 +50750,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -51052,6 +51361,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -51658,6 +51976,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -52260,6 +52587,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -52866,6 +53202,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -53468,6 +53813,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -54074,6 +54428,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -54676,6 +55039,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -55282,6 +55654,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -55884,6 +56265,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -56490,6 +56880,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -57092,6 +57491,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -58545,6 +58953,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -59101,6 +59512,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -59771,6 +60188,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -60327,6 +60747,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -60997,6 +61423,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -61553,6 +61982,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -62223,6 +62658,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -62779,6 +63217,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -63456,6 +63900,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -64012,6 +64459,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -64682,6 +65135,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -65238,6 +65694,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -65915,6 +66377,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -66471,6 +66936,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -67148,6 +67619,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -67704,6 +68178,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -68381,6 +68861,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -68937,6 +69420,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -69614,6 +70103,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -70170,6 +70662,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -70840,6 +71338,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -71396,6 +71897,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -72066,6 +72573,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -72622,6 +73132,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -73292,6 +73808,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -73848,6 +74367,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -74518,6 +75043,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -75074,6 +75602,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -75744,6 +76278,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -76300,6 +76837,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -76970,6 +77513,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -77526,6 +78072,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -78202,6 +78754,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -78758,6 +79313,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -79427,6 +79988,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -79983,6 +80547,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -80659,6 +81229,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -81215,6 +81788,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -81781,6 +82360,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -82094,6 +82676,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -82910,6 +83495,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -83433,6 +84027,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -84016,6 +84613,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -84647,6 +85247,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -85469,6 +86072,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -86338,6 +86944,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -87518,6 +88127,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -87775,6 +88387,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -88329,6 +88944,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -88879,6 +89497,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -90258,6 +90879,9 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "tabular"
                 },
                 {
@@ -90546,6 +91170,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -91267,6 +91894,15 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -92194,6 +92830,15 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -93205,6 +93850,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -94149,6 +94803,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -95009,6 +95672,15 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -95903,6 +96575,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -96564,6 +97245,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -97045,6 +97729,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -97984,6 +98671,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -98752,6 +99448,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -99209,6 +99914,9 @@
             "children": [
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -99764,6 +100472,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -100381,6 +101095,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -101015,6 +101732,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -101635,6 +102355,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -102277,6 +103006,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -102702,6 +103434,9 @@
                 },
                 {
                     "ref": "booleanInput"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -103219,6 +103954,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -104052,6 +104790,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -104584,6 +105325,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -105015,6 +105759,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -105908,6 +106655,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -106451,6 +107207,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -107477,6 +108236,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -108153,6 +108915,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -108955,6 +109720,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -109406,6 +110174,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -109889,6 +110660,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -110462,6 +111236,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -111080,6 +111857,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -111718,6 +112498,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -112405,6 +113188,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -113058,6 +113844,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -113932,6 +114721,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -114786,6 +115578,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -115601,6 +116396,9 @@
                     "ref": "controlVectors"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -116222,6 +117020,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -116726,6 +117527,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -117544,6 +118348,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -118379,6 +119186,9 @@
                     "ref": "award"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -118422,6 +119232,9 @@
                 },
                 {
                     "ref": "choiceInput"
+                },
+                {
+                    "ref": "parsons"
                 },
                 {
                     "ref": "considerAsResponses"
@@ -119377,6 +120190,9 @@
                 },
                 {
                     "ref": "when"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -120344,6 +121160,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -120915,6 +121734,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -121780,6 +122602,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -122441,6 +123266,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -123083,6 +123911,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -123978,6 +124809,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -124598,6 +125438,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -125270,6 +126113,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -125962,6 +126808,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -126814,6 +127663,9 @@
                     "ref": "annotation"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -126998,6 +127850,9 @@
                 },
                 {
                     "ref": "annotation"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -127568,6 +128423,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -128367,6 +129225,9 @@
                 },
                 {
                     "ref": "piecewiseFunction"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -129275,6 +130136,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -130347,6 +131211,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -131134,6 +132007,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -131595,6 +132471,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -131932,6 +132811,2211 @@
                 }
             ]
         },
+        "parsons": {
+            "type": "element",
+            "name": "parsons",
+            "attributes": {
+                "name": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "hide": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "disabled": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "fixed": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "fixLocation": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "styleNumber": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "isResponse": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "extend": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "copy": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "labelPosition": {
+                    "optional": true,
+                    "type": [
+                        "start",
+                        "end"
+                    ]
+                },
+                "forAnswer": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "labelIsName": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "shuffle": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "layout": {
+                    "optional": true,
+                    "type": [
+                        "vertical",
+                        "horizontal"
+                    ]
+                },
+                "horizontalAlign": {
+                    "optional": true,
+                    "type": [
+                        "left",
+                        "center",
+                        "right"
+                    ]
+                },
+                "maxIndent": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                }
+            },
+            "children": [
+                {
+                    "ref": "xLabel"
+                },
+                {
+                    "ref": "yLabel"
+                },
+                {
+                    "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
+                    "ref": "repeat"
+                },
+                {
+                    "ref": "repeatForSequence"
+                },
+                {
+                    "ref": "conditionalContent"
+                },
+                {
+                    "ref": "select"
+                },
+                {
+                    "ref": "group"
+                },
+                {
+                    "ref": "module"
+                },
+                {
+                    "ref": "setup"
+                },
+                {
+                    "ref": "sort"
+                },
+                {
+                    "ref": "shuffle"
+                },
+                {
+                    "ref": "label"
+                },
+                {
+                    "ref": "description"
+                },
+                {
+                    "ref": "shortDescription"
+                },
+                {
+                    "ref": "block"
+                }
+            ],
+            "textChildrenAllowed": false,
+            "properties": [
+                {
+                    "name": "hide",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether to hide this component from the rendered output.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "styleNumber",
+                    "type": "integer",
+                    "isArray": false,
+                    "description": "The style number used to select this component's visual styling from the available style definitions.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "isResponse",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this component is treated as a response for the purposes of assessment.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "labelPosition",
+                    "type": "text",
+                    "isArray": false,
+                    "description": "Position of the label relative to the input.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "labelIsName",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether to use this component's name as its rendered label.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "shuffle",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether to shuffle the blocks in the starting column (seeded by the document variant).",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "layout",
+                    "type": "text",
+                    "isArray": false,
+                    "description": "How the blocks are laid out.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "horizontalAlign",
+                    "type": "text",
+                    "isArray": false,
+                    "description": "Horizontal alignment of the content of each block.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "hidden",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this component is hidden from the rendered output."
+                },
+                {
+                    "name": "disabled",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this component is disabled and cannot be interacted with."
+                },
+                {
+                    "name": "fixed",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this component's value is fixed and cannot be modified."
+                },
+                {
+                    "name": "fixLocation",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this component's location is fixed (preventing it from being moved while still allowing other modifications)."
+                },
+                {
+                    "name": "doenetML",
+                    "type": "text",
+                    "isArray": false,
+                    "description": "The DoenetML source code that produced this component."
+                },
+                {
+                    "name": "label",
+                    "type": "label",
+                    "isArray": false,
+                    "description": "The label rendered with this component."
+                },
+                {
+                    "name": "shortDescription",
+                    "type": "text",
+                    "isArray": false,
+                    "description": "A short accessibility description of this input; it is visible to screen readers but not rendered visually."
+                },
+                {
+                    "name": "focused",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this input currently has keyboard focus."
+                },
+                {
+                    "name": "numBlocks",
+                    "type": "integer",
+                    "isArray": false,
+                    "description": "The number of blocks, including distractors."
+                },
+                {
+                    "name": "indentationGraded",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether indentation is part of the answer (true if any block specifies `indent` and the layout is vertical)."
+                },
+                {
+                    "name": "maxIndent",
+                    "type": "integer",
+                    "isArray": false,
+                    "description": "Maximum indentation level a student can apply."
+                },
+                {
+                    "name": "solutionOrder",
+                    "type": "number",
+                    "isArray": true,
+                    "description": "Indices (1-based) of the blocks in the solution column, top to bottom.",
+                    "numDimensions": 1,
+                    "indexedArrayDescription": [
+                        {
+                            "isArray": true,
+                            "type": "number",
+                            "numDimensions": 1
+                        }
+                    ]
+                },
+                {
+                    "name": "solutionIndents",
+                    "type": "number",
+                    "isArray": true,
+                    "description": "Indentation of each block in the solution column, top to bottom.",
+                    "numDimensions": 1,
+                    "indexedArrayDescription": [
+                        {
+                            "isArray": true,
+                            "type": "number",
+                            "numDimensions": 1
+                        }
+                    ]
+                },
+                {
+                    "name": "numBlocksNeeded",
+                    "type": "integer",
+                    "isArray": false,
+                    "description": "The number of blocks in a correct solution (blocks that are not distractors)."
+                },
+                {
+                    "name": "numBlocksInSolution",
+                    "type": "integer",
+                    "isArray": false,
+                    "description": "The number of blocks currently in the solution column."
+                },
+                {
+                    "name": "solutionTooShort",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether the solution column holds fewer blocks than a correct solution."
+                },
+                {
+                    "name": "solutionTooLong",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether the solution column holds more blocks than a correct solution."
+                },
+                {
+                    "name": "correct",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether the solution column holds exactly the correct blocks, in a correct order and indentation."
+                },
+                {
+                    "name": "valueToRecordOnSubmit",
+                    "type": "number",
+                    "isArray": true,
+                    "description": "Indices of the blocks in the solution column (recorded when the answer is submitted).",
+                    "numDimensions": 1,
+                    "indexedArrayDescription": [
+                        {
+                            "isArray": true,
+                            "type": "number",
+                            "numDimensions": 1
+                        }
+                    ]
+                }
+            ]
+        },
+        "block": {
+            "type": "element",
+            "name": "block",
+            "attributes": {
+                "name": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "hide": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "disabled": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "fixed": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "fixLocation": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "styleNumber": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "isResponse": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "extend": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "copy": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "indent": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "distractor": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                }
+            },
+            "children": [
+                {
+                    "ref": "title"
+                },
+                {
+                    "ref": "rightHandSide"
+                },
+                {
+                    "ref": "xLabel"
+                },
+                {
+                    "ref": "yLabel"
+                },
+                {
+                    "ref": "statement"
+                },
+                {
+                    "ref": "introduction"
+                },
+                {
+                    "ref": "conclusion"
+                },
+                {
+                    "ref": "br"
+                },
+                {
+                    "ref": "hr"
+                },
+                {
+                    "ref": "m"
+                },
+                {
+                    "ref": "me"
+                },
+                {
+                    "ref": "men"
+                },
+                {
+                    "ref": "md"
+                },
+                {
+                    "ref": "mdn"
+                },
+                {
+                    "ref": "mrow"
+                },
+                {
+                    "ref": "not"
+                },
+                {
+                    "ref": "and"
+                },
+                {
+                    "ref": "or"
+                },
+                {
+                    "ref": "xor"
+                },
+                {
+                    "ref": "iff"
+                },
+                {
+                    "ref": "implies"
+                },
+                {
+                    "ref": "isInteger"
+                },
+                {
+                    "ref": "isNumber"
+                },
+                {
+                    "ref": "isBetween"
+                },
+                {
+                    "ref": "sum"
+                },
+                {
+                    "ref": "product"
+                },
+                {
+                    "ref": "clampNumber"
+                },
+                {
+                    "ref": "wrapNumberPeriodic"
+                },
+                {
+                    "ref": "round"
+                },
+                {
+                    "ref": "setSmallToZero"
+                },
+                {
+                    "ref": "convertSetToList"
+                },
+                {
+                    "ref": "ceil"
+                },
+                {
+                    "ref": "floor"
+                },
+                {
+                    "ref": "abs"
+                },
+                {
+                    "ref": "sign"
+                },
+                {
+                    "ref": "mean"
+                },
+                {
+                    "ref": "median"
+                },
+                {
+                    "ref": "variance"
+                },
+                {
+                    "ref": "standardDeviation"
+                },
+                {
+                    "ref": "count"
+                },
+                {
+                    "ref": "min"
+                },
+                {
+                    "ref": "max"
+                },
+                {
+                    "ref": "mod"
+                },
+                {
+                    "ref": "gcd"
+                },
+                {
+                    "ref": "lcm"
+                },
+                {
+                    "ref": "extractMath"
+                },
+                {
+                    "ref": "cumulativeSum"
+                },
+                {
+                    "ref": "cumulativeProduct"
+                },
+                {
+                    "ref": "cumulativeMin"
+                },
+                {
+                    "ref": "cumulativeMax"
+                },
+                {
+                    "ref": "differences"
+                },
+                {
+                    "ref": "argMin"
+                },
+                {
+                    "ref": "argMax"
+                },
+                {
+                    "ref": "indexOf"
+                },
+                {
+                    "ref": "searchSorted"
+                },
+                {
+                    "ref": "tally"
+                },
+                {
+                    "ref": "binCounts"
+                },
+                {
+                    "ref": "chart"
+                },
+                {
+                    "ref": "clampFunction"
+                },
+                {
+                    "ref": "wrapFunctionPeriodic"
+                },
+                {
+                    "ref": "derivative"
+                },
+                {
+                    "ref": "extractMathOperator"
+                },
+                {
+                    "ref": "em"
+                },
+                {
+                    "ref": "alert"
+                },
+                {
+                    "ref": "delete"
+                },
+                {
+                    "ref": "insert"
+                },
+                {
+                    "ref": "q"
+                },
+                {
+                    "ref": "sq"
+                },
+                {
+                    "ref": "term"
+                },
+                {
+                    "ref": "c"
+                },
+                {
+                    "ref": "tag"
+                },
+                {
+                    "ref": "tage"
+                },
+                {
+                    "ref": "tagc"
+                },
+                {
+                    "ref": "attr"
+                },
+                {
+                    "ref": "ndash"
+                },
+                {
+                    "ref": "mdash"
+                },
+                {
+                    "ref": "nbsp"
+                },
+                {
+                    "ref": "ellipsis"
+                },
+                {
+                    "ref": "lq"
+                },
+                {
+                    "ref": "rq"
+                },
+                {
+                    "ref": "lsq"
+                },
+                {
+                    "ref": "rsq"
+                },
+                {
+                    "ref": "section"
+                },
+                {
+                    "ref": "subsection"
+                },
+                {
+                    "ref": "subsubsection"
+                },
+                {
+                    "ref": "paragraphs"
+                },
+                {
+                    "ref": "aside"
+                },
+                {
+                    "ref": "objectives"
+                },
+                {
+                    "ref": "problem"
+                },
+                {
+                    "ref": "exercise"
+                },
+                {
+                    "ref": "question"
+                },
+                {
+                    "ref": "activity"
+                },
+                {
+                    "ref": "example"
+                },
+                {
+                    "ref": "definition"
+                },
+                {
+                    "ref": "note"
+                },
+                {
+                    "ref": "theorem"
+                },
+                {
+                    "ref": "part"
+                },
+                {
+                    "ref": "task"
+                },
+                {
+                    "ref": "proof"
+                },
+                {
+                    "ref": "problems"
+                },
+                {
+                    "ref": "exercises"
+                },
+                {
+                    "ref": "ol"
+                },
+                {
+                    "ref": "ul"
+                },
+                {
+                    "ref": "odeSystem"
+                },
+                {
+                    "ref": "cobwebPolyline"
+                },
+                {
+                    "ref": "equilibriumPoint"
+                },
+                {
+                    "ref": "equilibriumLine"
+                },
+                {
+                    "ref": "equilibriumCurve"
+                },
+                {
+                    "ref": "atom"
+                },
+                {
+                    "ref": "ion"
+                },
+                {
+                    "ref": "ionicCompound"
+                },
+                {
+                    "ref": "electronConfiguration"
+                },
+                {
+                    "ref": "orbitalDiagram"
+                },
+                {
+                    "ref": "orbitalDiagramInput"
+                },
+                {
+                    "ref": "sideBySide"
+                },
+                {
+                    "ref": "sbsGroup"
+                },
+                {
+                    "ref": "stack"
+                },
+                {
+                    "ref": "div"
+                },
+                {
+                    "ref": "span"
+                },
+                {
+                    "ref": "pre"
+                },
+                {
+                    "ref": "displayDoenetML"
+                },
+                {
+                    "ref": "paginator"
+                },
+                {
+                    "ref": "paginatorControls"
+                },
+                {
+                    "ref": "matrixInput"
+                },
+                {
+                    "ref": "fractionInput"
+                },
+                {
+                    "ref": "solution"
+                },
+                {
+                    "ref": "givenAnswer"
+                },
+                {
+                    "ref": "document"
+                },
+                {
+                    "ref": "text"
+                },
+                {
+                    "ref": "textList"
+                },
+                {
+                    "ref": "p"
+                },
+                {
+                    "ref": "boolean"
+                },
+                {
+                    "ref": "booleanList"
+                },
+                {
+                    "ref": "math"
+                },
+                {
+                    "ref": "mathList"
+                },
+                {
+                    "ref": "tupleList"
+                },
+                {
+                    "ref": "numberList"
+                },
+                {
+                    "ref": "collect"
+                },
+                {
+                    "ref": "ref"
+                },
+                {
+                    "ref": "point"
+                },
+                {
+                    "ref": "coords"
+                },
+                {
+                    "ref": "line"
+                },
+                {
+                    "ref": "lineSegment"
+                },
+                {
+                    "ref": "ray"
+                },
+                {
+                    "ref": "polyline"
+                },
+                {
+                    "ref": "polygon"
+                },
+                {
+                    "ref": "triangle"
+                },
+                {
+                    "ref": "rectangle"
+                },
+                {
+                    "ref": "regularPolygon"
+                },
+                {
+                    "ref": "circle"
+                },
+                {
+                    "ref": "parabola"
+                },
+                {
+                    "ref": "curve"
+                },
+                {
+                    "ref": "bezierControls"
+                },
+                {
+                    "ref": "vector"
+                },
+                {
+                    "ref": "angle"
+                },
+                {
+                    "ref": "answer"
+                },
+                {
+                    "ref": "award"
+                },
+                {
+                    "ref": "mathInput"
+                },
+                {
+                    "ref": "textInput"
+                },
+                {
+                    "ref": "booleanInput"
+                },
+                {
+                    "ref": "choiceInput"
+                },
+                {
+                    "ref": "choice"
+                },
+                {
+                    "ref": "number"
+                },
+                {
+                    "ref": "integer"
+                },
+                {
+                    "ref": "graph"
+                },
+                {
+                    "ref": "annotations"
+                },
+                {
+                    "ref": "annotation"
+                },
+                {
+                    "ref": "function"
+                },
+                {
+                    "ref": "piecewiseFunction"
+                },
+                {
+                    "ref": "interval"
+                },
+                {
+                    "ref": "sequence"
+                },
+                {
+                    "ref": "slider"
+                },
+                {
+                    "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
+                    "ref": "cell"
+                },
+                {
+                    "ref": "row"
+                },
+                {
+                    "ref": "column"
+                },
+                {
+                    "ref": "col"
+                },
+                {
+                    "ref": "cellBlock"
+                },
+                {
+                    "ref": "tabular"
+                },
+                {
+                    "ref": "table"
+                },
+                {
+                    "ref": "figure"
+                },
+                {
+                    "ref": "repeat"
+                },
+                {
+                    "ref": "repeatForSequence"
+                },
+                {
+                    "ref": "pegboard"
+                },
+                {
+                    "ref": "intersection"
+                },
+                {
+                    "ref": "conditionalContent"
+                },
+                {
+                    "ref": "asList"
+                },
+                {
+                    "ref": "variantControl"
+                },
+                {
+                    "ref": "selectFromSequence"
+                },
+                {
+                    "ref": "select"
+                },
+                {
+                    "ref": "group"
+                },
+                {
+                    "ref": "animateFromSequence"
+                },
+                {
+                    "ref": "evaluate"
+                },
+                {
+                    "ref": "selectRandomNumbers"
+                },
+                {
+                    "ref": "sampleRandomNumbers"
+                },
+                {
+                    "ref": "sampleMultivariateRandomNumber"
+                },
+                {
+                    "ref": "selectPrimeNumbers"
+                },
+                {
+                    "ref": "samplePrimeNumbers"
+                },
+                {
+                    "ref": "substitute"
+                },
+                {
+                    "ref": "periodicSet"
+                },
+                {
+                    "ref": "image"
+                },
+                {
+                    "ref": "video"
+                },
+                {
+                    "ref": "hint"
+                },
+                {
+                    "ref": "intComma"
+                },
+                {
+                    "ref": "pluralize"
+                },
+                {
+                    "ref": "feedback"
+                },
+                {
+                    "ref": "lorem"
+                },
+                {
+                    "ref": "updateValue"
+                },
+                {
+                    "ref": "callAction"
+                },
+                {
+                    "ref": "triggerSet"
+                },
+                {
+                    "ref": "functionIterates"
+                },
+                {
+                    "ref": "module"
+                },
+                {
+                    "ref": "moduleAttributes"
+                },
+                {
+                    "ref": "setup"
+                },
+                {
+                    "ref": "footnote"
+                },
+                {
+                    "ref": "caption"
+                },
+                {
+                    "ref": "endpoint"
+                },
+                {
+                    "ref": "sort"
+                },
+                {
+                    "ref": "sortIndices"
+                },
+                {
+                    "ref": "shuffle"
+                },
+                {
+                    "ref": "solveEquations"
+                },
+                {
+                    "ref": "subsetOfRealsInput"
+                },
+                {
+                    "ref": "subsetOfReals"
+                },
+                {
+                    "ref": "split"
+                },
+                {
+                    "ref": "bestFitLine"
+                },
+                {
+                    "ref": "regionBetweenCurveXAxis"
+                },
+                {
+                    "ref": "regionBetweenCurves"
+                },
+                {
+                    "ref": "slopeField"
+                },
+                {
+                    "ref": "vectorField"
+                },
+                {
+                    "ref": "regionHalfPlane"
+                },
+                {
+                    "ref": "codeEditor"
+                },
+                {
+                    "ref": "hasSameFactoring"
+                },
+                {
+                    "ref": "summaryStatistics"
+                },
+                {
+                    "ref": "legend"
+                },
+                {
+                    "ref": "label"
+                },
+                {
+                    "ref": "matchesPattern"
+                },
+                {
+                    "ref": "matrix"
+                },
+                {
+                    "ref": "eigenDecomposition"
+                },
+                {
+                    "ref": "latex"
+                },
+                {
+                    "ref": "blockQuote"
+                },
+                {
+                    "ref": "stickyGroup"
+                },
+                {
+                    "ref": "pretzel"
+                },
+                {
+                    "ref": "cascade"
+                },
+                {
+                    "ref": "page"
+                },
+                {
+                    "ref": "pointList"
+                },
+                {
+                    "ref": "intervalList"
+                },
+                {
+                    "ref": "vectorList"
+                }
+            ],
+            "textChildrenAllowed": true,
+            "properties": [
+                {
+                    "name": "hide",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether to hide this component from the rendered output.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "styleNumber",
+                    "type": "integer",
+                    "isArray": false,
+                    "description": "The style number used to select this component's visual styling from the available style definitions.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "isResponse",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this component is treated as a response for the purposes of assessment.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "indent",
+                    "type": "integer",
+                    "isArray": false,
+                    "description": "Correct indentation level of this block (0 = no indent).",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "distractor",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this block is a distractor that does not belong in the solution.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "hidden",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this component is hidden from the rendered output."
+                },
+                {
+                    "name": "disabled",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this component is disabled and cannot be interacted with."
+                },
+                {
+                    "name": "fixed",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this component's value is fixed and cannot be modified."
+                },
+                {
+                    "name": "fixLocation",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether this component's location is fixed (preventing it from being moved while still allowing other modifications)."
+                },
+                {
+                    "name": "doenetML",
+                    "type": "text",
+                    "isArray": false,
+                    "description": "The DoenetML source code that produced this component."
+                },
+                {
+                    "name": "text",
+                    "type": "text",
+                    "isArray": false,
+                    "description": "The block's content as a text string."
+                }
+            ]
+        },
+        "anyOrder": {
+            "type": "element",
+            "name": "anyOrder",
+            "attributes": {
+                "name": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "hide": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "disabled": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "fixed": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "fixLocation": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "styleNumber": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "isResponse": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "extend": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "copy": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "rendered": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                },
+                "createComponentOfType": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "numComponents": {
+                    "optional": true,
+                    "type": [
+                        "string"
+                    ]
+                },
+                "asList": {
+                    "optional": true,
+                    "type": [
+                        "true",
+                        "false"
+                    ]
+                }
+            },
+            "children": [
+                {
+                    "ref": "title"
+                },
+                {
+                    "ref": "rightHandSide"
+                },
+                {
+                    "ref": "xLabel"
+                },
+                {
+                    "ref": "yLabel"
+                },
+                {
+                    "ref": "statement"
+                },
+                {
+                    "ref": "introduction"
+                },
+                {
+                    "ref": "conclusion"
+                },
+                {
+                    "ref": "br"
+                },
+                {
+                    "ref": "hr"
+                },
+                {
+                    "ref": "m"
+                },
+                {
+                    "ref": "me"
+                },
+                {
+                    "ref": "men"
+                },
+                {
+                    "ref": "md"
+                },
+                {
+                    "ref": "mdn"
+                },
+                {
+                    "ref": "mrow"
+                },
+                {
+                    "ref": "not"
+                },
+                {
+                    "ref": "and"
+                },
+                {
+                    "ref": "or"
+                },
+                {
+                    "ref": "xor"
+                },
+                {
+                    "ref": "iff"
+                },
+                {
+                    "ref": "implies"
+                },
+                {
+                    "ref": "isInteger"
+                },
+                {
+                    "ref": "isNumber"
+                },
+                {
+                    "ref": "isBetween"
+                },
+                {
+                    "ref": "sum"
+                },
+                {
+                    "ref": "product"
+                },
+                {
+                    "ref": "clampNumber"
+                },
+                {
+                    "ref": "wrapNumberPeriodic"
+                },
+                {
+                    "ref": "round"
+                },
+                {
+                    "ref": "setSmallToZero"
+                },
+                {
+                    "ref": "convertSetToList"
+                },
+                {
+                    "ref": "ceil"
+                },
+                {
+                    "ref": "floor"
+                },
+                {
+                    "ref": "abs"
+                },
+                {
+                    "ref": "sign"
+                },
+                {
+                    "ref": "mean"
+                },
+                {
+                    "ref": "median"
+                },
+                {
+                    "ref": "variance"
+                },
+                {
+                    "ref": "standardDeviation"
+                },
+                {
+                    "ref": "count"
+                },
+                {
+                    "ref": "min"
+                },
+                {
+                    "ref": "max"
+                },
+                {
+                    "ref": "mod"
+                },
+                {
+                    "ref": "gcd"
+                },
+                {
+                    "ref": "lcm"
+                },
+                {
+                    "ref": "extractMath"
+                },
+                {
+                    "ref": "cumulativeSum"
+                },
+                {
+                    "ref": "cumulativeProduct"
+                },
+                {
+                    "ref": "cumulativeMin"
+                },
+                {
+                    "ref": "cumulativeMax"
+                },
+                {
+                    "ref": "differences"
+                },
+                {
+                    "ref": "argMin"
+                },
+                {
+                    "ref": "argMax"
+                },
+                {
+                    "ref": "indexOf"
+                },
+                {
+                    "ref": "searchSorted"
+                },
+                {
+                    "ref": "tally"
+                },
+                {
+                    "ref": "binCounts"
+                },
+                {
+                    "ref": "chart"
+                },
+                {
+                    "ref": "clampFunction"
+                },
+                {
+                    "ref": "wrapFunctionPeriodic"
+                },
+                {
+                    "ref": "derivative"
+                },
+                {
+                    "ref": "extractMathOperator"
+                },
+                {
+                    "ref": "em"
+                },
+                {
+                    "ref": "alert"
+                },
+                {
+                    "ref": "delete"
+                },
+                {
+                    "ref": "insert"
+                },
+                {
+                    "ref": "q"
+                },
+                {
+                    "ref": "sq"
+                },
+                {
+                    "ref": "term"
+                },
+                {
+                    "ref": "c"
+                },
+                {
+                    "ref": "tag"
+                },
+                {
+                    "ref": "tage"
+                },
+                {
+                    "ref": "tagc"
+                },
+                {
+                    "ref": "attr"
+                },
+                {
+                    "ref": "ndash"
+                },
+                {
+                    "ref": "mdash"
+                },
+                {
+                    "ref": "nbsp"
+                },
+                {
+                    "ref": "ellipsis"
+                },
+                {
+                    "ref": "lq"
+                },
+                {
+                    "ref": "rq"
+                },
+                {
+                    "ref": "lsq"
+                },
+                {
+                    "ref": "rsq"
+                },
+                {
+                    "ref": "section"
+                },
+                {
+                    "ref": "subsection"
+                },
+                {
+                    "ref": "subsubsection"
+                },
+                {
+                    "ref": "paragraphs"
+                },
+                {
+                    "ref": "aside"
+                },
+                {
+                    "ref": "objectives"
+                },
+                {
+                    "ref": "problem"
+                },
+                {
+                    "ref": "exercise"
+                },
+                {
+                    "ref": "question"
+                },
+                {
+                    "ref": "activity"
+                },
+                {
+                    "ref": "example"
+                },
+                {
+                    "ref": "definition"
+                },
+                {
+                    "ref": "note"
+                },
+                {
+                    "ref": "theorem"
+                },
+                {
+                    "ref": "part"
+                },
+                {
+                    "ref": "task"
+                },
+                {
+                    "ref": "proof"
+                },
+                {
+                    "ref": "problems"
+                },
+                {
+                    "ref": "exercises"
+                },
+                {
+                    "ref": "ol"
+                },
+                {
+                    "ref": "ul"
+                },
+                {
+                    "ref": "odeSystem"
+                },
+                {
+                    "ref": "cobwebPolyline"
+                },
+                {
+                    "ref": "equilibriumPoint"
+                },
+                {
+                    "ref": "equilibriumLine"
+                },
+                {
+                    "ref": "equilibriumCurve"
+                },
+                {
+                    "ref": "atom"
+                },
+                {
+                    "ref": "ion"
+                },
+                {
+                    "ref": "ionicCompound"
+                },
+                {
+                    "ref": "electronConfiguration"
+                },
+                {
+                    "ref": "orbitalDiagram"
+                },
+                {
+                    "ref": "orbitalDiagramInput"
+                },
+                {
+                    "ref": "sideBySide"
+                },
+                {
+                    "ref": "sbsGroup"
+                },
+                {
+                    "ref": "stack"
+                },
+                {
+                    "ref": "div"
+                },
+                {
+                    "ref": "span"
+                },
+                {
+                    "ref": "pre"
+                },
+                {
+                    "ref": "displayDoenetML"
+                },
+                {
+                    "ref": "paginator"
+                },
+                {
+                    "ref": "paginatorControls"
+                },
+                {
+                    "ref": "matrixInput"
+                },
+                {
+                    "ref": "fractionInput"
+                },
+                {
+                    "ref": "solution"
+                },
+                {
+                    "ref": "givenAnswer"
+                },
+                {
+                    "ref": "document"
+                },
+                {
+                    "ref": "text"
+                },
+                {
+                    "ref": "textList"
+                },
+                {
+                    "ref": "p"
+                },
+                {
+                    "ref": "boolean"
+                },
+                {
+                    "ref": "booleanList"
+                },
+                {
+                    "ref": "math"
+                },
+                {
+                    "ref": "mathList"
+                },
+                {
+                    "ref": "tupleList"
+                },
+                {
+                    "ref": "numberList"
+                },
+                {
+                    "ref": "collect"
+                },
+                {
+                    "ref": "ref"
+                },
+                {
+                    "ref": "point"
+                },
+                {
+                    "ref": "coords"
+                },
+                {
+                    "ref": "line"
+                },
+                {
+                    "ref": "lineSegment"
+                },
+                {
+                    "ref": "ray"
+                },
+                {
+                    "ref": "polyline"
+                },
+                {
+                    "ref": "polygon"
+                },
+                {
+                    "ref": "triangle"
+                },
+                {
+                    "ref": "rectangle"
+                },
+                {
+                    "ref": "regularPolygon"
+                },
+                {
+                    "ref": "circle"
+                },
+                {
+                    "ref": "parabola"
+                },
+                {
+                    "ref": "curve"
+                },
+                {
+                    "ref": "bezierControls"
+                },
+                {
+                    "ref": "vector"
+                },
+                {
+                    "ref": "angle"
+                },
+                {
+                    "ref": "answer"
+                },
+                {
+                    "ref": "award"
+                },
+                {
+                    "ref": "mathInput"
+                },
+                {
+                    "ref": "textInput"
+                },
+                {
+                    "ref": "booleanInput"
+                },
+                {
+                    "ref": "choiceInput"
+                },
+                {
+                    "ref": "choice"
+                },
+                {
+                    "ref": "number"
+                },
+                {
+                    "ref": "integer"
+                },
+                {
+                    "ref": "graph"
+                },
+                {
+                    "ref": "annotations"
+                },
+                {
+                    "ref": "annotation"
+                },
+                {
+                    "ref": "function"
+                },
+                {
+                    "ref": "piecewiseFunction"
+                },
+                {
+                    "ref": "interval"
+                },
+                {
+                    "ref": "sequence"
+                },
+                {
+                    "ref": "slider"
+                },
+                {
+                    "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
+                    "ref": "cell"
+                },
+                {
+                    "ref": "row"
+                },
+                {
+                    "ref": "column"
+                },
+                {
+                    "ref": "col"
+                },
+                {
+                    "ref": "cellBlock"
+                },
+                {
+                    "ref": "tabular"
+                },
+                {
+                    "ref": "table"
+                },
+                {
+                    "ref": "figure"
+                },
+                {
+                    "ref": "repeat"
+                },
+                {
+                    "ref": "repeatForSequence"
+                },
+                {
+                    "ref": "pegboard"
+                },
+                {
+                    "ref": "intersection"
+                },
+                {
+                    "ref": "conditionalContent"
+                },
+                {
+                    "ref": "asList"
+                },
+                {
+                    "ref": "variantControl"
+                },
+                {
+                    "ref": "selectFromSequence"
+                },
+                {
+                    "ref": "select"
+                },
+                {
+                    "ref": "group"
+                },
+                {
+                    "ref": "animateFromSequence"
+                },
+                {
+                    "ref": "evaluate"
+                },
+                {
+                    "ref": "selectRandomNumbers"
+                },
+                {
+                    "ref": "sampleRandomNumbers"
+                },
+                {
+                    "ref": "sampleMultivariateRandomNumber"
+                },
+                {
+                    "ref": "selectPrimeNumbers"
+                },
+                {
+                    "ref": "samplePrimeNumbers"
+                },
+                {
+                    "ref": "substitute"
+                },
+                {
+                    "ref": "periodicSet"
+                },
+                {
+                    "ref": "image"
+                },
+                {
+                    "ref": "video"
+                },
+                {
+                    "ref": "hint"
+                },
+                {
+                    "ref": "intComma"
+                },
+                {
+                    "ref": "pluralize"
+                },
+                {
+                    "ref": "feedback"
+                },
+                {
+                    "ref": "lorem"
+                },
+                {
+                    "ref": "updateValue"
+                },
+                {
+                    "ref": "callAction"
+                },
+                {
+                    "ref": "triggerSet"
+                },
+                {
+                    "ref": "functionIterates"
+                },
+                {
+                    "ref": "module"
+                },
+                {
+                    "ref": "moduleAttributes"
+                },
+                {
+                    "ref": "setup"
+                },
+                {
+                    "ref": "footnote"
+                },
+                {
+                    "ref": "caption"
+                },
+                {
+                    "ref": "endpoint"
+                },
+                {
+                    "ref": "sort"
+                },
+                {
+                    "ref": "sortIndices"
+                },
+                {
+                    "ref": "shuffle"
+                },
+                {
+                    "ref": "solveEquations"
+                },
+                {
+                    "ref": "subsetOfRealsInput"
+                },
+                {
+                    "ref": "subsetOfReals"
+                },
+                {
+                    "ref": "split"
+                },
+                {
+                    "ref": "bestFitLine"
+                },
+                {
+                    "ref": "regionBetweenCurveXAxis"
+                },
+                {
+                    "ref": "regionBetweenCurves"
+                },
+                {
+                    "ref": "slopeField"
+                },
+                {
+                    "ref": "vectorField"
+                },
+                {
+                    "ref": "regionHalfPlane"
+                },
+                {
+                    "ref": "codeEditor"
+                },
+                {
+                    "ref": "hasSameFactoring"
+                },
+                {
+                    "ref": "summaryStatistics"
+                },
+                {
+                    "ref": "legend"
+                },
+                {
+                    "ref": "label"
+                },
+                {
+                    "ref": "matchesPattern"
+                },
+                {
+                    "ref": "matrix"
+                },
+                {
+                    "ref": "eigenDecomposition"
+                },
+                {
+                    "ref": "latex"
+                },
+                {
+                    "ref": "blockQuote"
+                },
+                {
+                    "ref": "stickyGroup"
+                },
+                {
+                    "ref": "pretzel"
+                },
+                {
+                    "ref": "cascade"
+                },
+                {
+                    "ref": "page"
+                },
+                {
+                    "ref": "pointList"
+                },
+                {
+                    "ref": "intervalList"
+                },
+                {
+                    "ref": "vectorList"
+                },
+                {
+                    "ref": "cascadeMessage"
+                },
+                {
+                    "ref": "else"
+                },
+                {
+                    "ref": "series"
+                },
+                {
+                    "ref": "li"
+                },
+                {
+                    "ref": "feedbackDefinition"
+                },
+                {
+                    "ref": "styleDefinition"
+                },
+                {
+                    "ref": "stylePalette"
+                },
+                {
+                    "ref": "controlVectors"
+                },
+                {
+                    "ref": "when"
+                },
+                {
+                    "ref": "option"
+                },
+                {
+                    "ref": "constrainToGrid"
+                },
+                {
+                    "ref": "constrainToGraph"
+                },
+                {
+                    "ref": "attractToGrid"
+                },
+                {
+                    "ref": "constrainTo"
+                },
+                {
+                    "ref": "attractTo"
+                },
+                {
+                    "ref": "constraintUnion"
+                },
+                {
+                    "ref": "attractToConstraint"
+                },
+                {
+                    "ref": "constrainToInterior"
+                },
+                {
+                    "ref": "considerAsResponses"
+                },
+                {
+                    "ref": "case"
+                },
+                {
+                    "ref": "description"
+                },
+                {
+                    "ref": "shortDescription"
+                }
+            ],
+            "textChildrenAllowed": true,
+            "properties": [
+                {
+                    "name": "hide",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether to hide this component from the rendered output.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "styleNumber",
+                    "type": "integer",
+                    "isArray": false,
+                    "description": "The style number used to select this component's visual styling from the available style definitions.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "rendered",
+                    "type": "boolean",
+                    "isArray": false,
+                    "description": "Whether the group's children are rendered.",
+                    "fromAttribute": true
+                },
+                {
+                    "name": "doenetML",
+                    "type": "text",
+                    "isArray": false,
+                    "description": "The DoenetML source code that produced this component."
+                }
+            ]
+        },
         "cell": {
             "type": "element",
             "name": "cell",
@@ -132257,6 +135341,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -132667,6 +135754,12 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
                     "ref": "row"
                 },
                 {
@@ -133058,6 +136151,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -133286,6 +136382,9 @@
             "children": [
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -133649,6 +136748,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -133891,6 +136993,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "col"
                 },
                 {
@@ -134125,6 +137230,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -134494,6 +137602,12 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -134919,6 +138033,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -135292,6 +138409,12 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -136246,6 +139369,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -137197,6 +140329,15 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -138540,6 +141681,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -138957,6 +142101,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -139181,6 +142328,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -139360,6 +142510,9 @@
             "children": [
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -139737,6 +142890,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -139968,6 +143124,9 @@
                     "ref": "line"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -140120,6 +143279,9 @@
             "children": [
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -140666,6 +143828,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -141371,6 +144539,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -142056,6 +145233,9 @@
                     "ref": "option"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -142736,6 +145916,15 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -145987,6 +149176,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -147227,6 +150425,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -147587,6 +150788,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -147827,6 +151031,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -148367,6 +151574,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -148939,6 +152152,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -149605,6 +152821,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -150556,6 +153775,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -151409,6 +154637,15 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -152280,6 +155517,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -152896,6 +156142,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -153177,6 +156426,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -153719,6 +156971,12 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -154132,6 +157390,9 @@
             "children": [
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -155141,6 +158402,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -156038,6 +159308,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -156361,6 +159640,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -156910,6 +160192,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -157609,6 +160897,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -158219,6 +161516,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -158820,6 +162126,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -160053,6 +163362,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -161006,6 +164324,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -161874,6 +165201,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -162491,6 +165827,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -163367,6 +166706,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -164512,6 +167854,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -164949,6 +168300,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -165399,6 +168753,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -165674,6 +169031,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -165980,6 +169340,9 @@
                 },
                 {
                     "ref": "piecewiseFunction"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -166542,6 +169905,9 @@
                     "ref": "piecewiseFunction"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -167076,6 +170442,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -167887,6 +171256,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -168639,6 +172017,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -169151,6 +172532,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -169602,6 +172986,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -170208,6 +173595,15 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -170885,6 +174281,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -171440,6 +174839,9 @@
             "children": [
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "row"
@@ -172158,6 +175560,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -172696,6 +176101,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "cell"
@@ -173699,6 +177107,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -174561,6 +177978,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -174957,6 +178383,9 @@
                 },
                 {
                     "ref": "collect"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -175851,6 +179280,9 @@
                     "ref": "collect"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -176392,6 +179824,12 @@
                 },
                 {
                     "ref": "spreadsheet"
+                },
+                {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
                 },
                 {
                     "ref": "cell"
@@ -177254,6 +180692,15 @@
                     "ref": "spreadsheet"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -177951,6 +181398,15 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "parsons"
+                },
+                {
+                    "ref": "block"
+                },
+                {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "cell"
                 },
                 {
@@ -178390,6 +181846,9 @@
                     "ref": "sequence"
                 },
                 {
+                    "ref": "anyOrder"
+                },
+                {
                     "ref": "repeat"
                 },
                 {
@@ -178737,6 +182196,9 @@
                 },
                 {
                     "ref": "interval"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
@@ -179326,6 +182788,9 @@
                 },
                 {
                     "ref": "sequence"
+                },
+                {
+                    "ref": "anyOrder"
                 },
                 {
                     "ref": "repeat"
